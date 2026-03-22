@@ -21,6 +21,24 @@ THEN inserts a new project row and returns "Created project '{name}' (id: {uuid}
 
 ---
 
+### Auto-created project via extractor
+
+GIVEN a note's `referenceId` matches the pattern `projects/{name}/...`
+AND no project with that name exists in the database
+WHEN the ProjectExtractor processes the note
+THEN a new project row SHALL be inserted with `name` from the folder, `type: null`, `description: null`
+AND the project SHALL be visible via `list_projects` and `get_project`
+
+---
+
+### Explicit creation via MCP tool still works
+
+GIVEN a client calls `create_project` with `name: "MyProject"`, `type: "client"`, `description: "A new client project"`
+WHEN the project is created
+THEN the project SHALL be created with all provided fields as before
+
+---
+
 ### list_projects
 
 GIVEN the MCP server is running

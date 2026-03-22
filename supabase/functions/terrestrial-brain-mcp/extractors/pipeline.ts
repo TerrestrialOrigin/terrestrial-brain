@@ -53,6 +53,22 @@ export async function runExtractionPipeline(
     .select("id, name")
     .is("archived_at", null);
 
+  // Fetch known tasks for this note's reference_id (for reconciliation)
+  let knownTasks: { id: string; content: string; reference_id: string | null }[] = [];
+  if (note.referenceId) {
+    const { data: existingTasks } = await supabase
+      .from("tasks")
+      .select("id, content, reference_id")
+      .eq("reference_id", note.referenceId);
+    knownTasks = (existingTasks || []).map(
+      (task: { id: string; content: string; reference_id: string | null }) => ({
+        id: task.id,
+        content: task.content,
+        reference_id: task.reference_id,
+      }),
+    );
+  }
+
   const context: ExtractionContext = {
     supabase,
     knownProjects: (activeProjects || []).map(
@@ -61,7 +77,7 @@ export async function runExtractionPipeline(
         name: project.name,
       }),
     ),
-    knownTasks: [],
+    knownTasks,
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
   };
