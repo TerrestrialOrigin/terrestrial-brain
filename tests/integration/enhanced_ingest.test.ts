@@ -341,6 +341,227 @@ Deno.test("ingest_note: thoughts have note_snapshot_id set", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// 7.1 — Option 4 round-trip: create_tasks_with_output → ingest → no duplicates
+// ---------------------------------------------------------------------------
+
+Deno.test("option4: create_tasks_with_output creates tasks and ai_output", async () => {
+  const filePath = `test/option4/sprint-tasks-${Date.now()}.md`;
+  testNoteIds.push(filePath);
+  testTaskReferenceIds.push(filePath);
+
+  const result = await callTool("create_tasks_with_output", {
+    title: "CarChief Sprint Plan",
+    file_path: filePath,
+    tasks: [
+      { content: "Implement dealer lookup caching", project_id: CARCHIEF_ID, status: "open" },
+      { content: "Write integration tests for caching", project_id: CARCHIEF_ID, status: "open" },
+      { content: "Deploy to staging", project_id: CARCHIEF_ID, status: "open" },
+    ],
+    source_context: "Option 4 integration test",
+  });
+
+  assertExists(result);
+  assertEquals(result.includes("3 task(s)"), true, "Should report 3 tasks created");
+  assertEquals(result.includes("CarChief Sprint Plan"), true, "Should include title");
+  assertEquals(result.includes(filePath), true, "Should include file_path");
+
+  // Verify tasks were created with correct reference_id
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("id, content, status, reference_id, project_id")
+    .eq("reference_id", filePath)
+    .order("created_at", { ascending: true });
+
+  assertExists(tasks);
+  assertEquals(tasks.length, 3, "Should have 3 tasks in DB");
+  assertEquals(tasks[0].content, "Implement dealer lookup caching");
+  assertEquals(tasks[0].reference_id, filePath);
+  assertEquals(tasks[0].project_id, CARCHIEF_ID);
+  assertEquals(tasks[0].status, "open");
+});
+
+Deno.test("option4: round-trip — ingest of delivered content creates no duplicate tasks", async () => {
+  // Find the file_path from the previous test (most recent option4 test)
+  const { data: existingTasks } = await supabase
+    .from("tasks")
+    .select("id, content, reference_id")
+    .like("reference_id", "test/option4/sprint-tasks-%")
+    .order("created_at", { ascending: true });
+
+  assertExists(existingTasks);
+  assertEquals(existingTasks.length >= 3, true, "Pre-created tasks should exist");
+
+  const filePath = existingTasks[0].reference_id!;
+  const taskCountBefore = existingTasks.filter(
+    (task: { reference_id: string | null }) => task.reference_id === filePath,
+  ).length;
+
+  // Get the ai_output content (the markdown that would be delivered to vault)
+  const pending = await callTool("get_pending_ai_output", {});
+  const outputs = JSON.parse(pending);
+  const matchingOutput = outputs.find(
+    (output: { file_path: string }) => output.file_path === filePath,
+  );
+  assertExists(matchingOutput, "AI output should exist for this file_path");
+
+  // Simulate what happens after plugin delivery: ingest_note with the same content and path
+  const ingestResult = await callTool("ingest_note", {
+    content: matchingOutput.content,
+    title: "CarChief Sprint Plan",
+    note_id: filePath,
+  });
+  assertExists(ingestResult);
+
+  // Verify NO duplicate tasks were created
+  const { data: tasksAfter } = await supabase
+    .from("tasks")
+    .select("id, content, reference_id")
+    .eq("reference_id", filePath);
+
+  assertExists(tasksAfter);
+  assertEquals(
+    tasksAfter.length,
+    taskCountBefore,
+    `Task count should remain ${taskCountBefore} (no duplicates), got ${tasksAfter.length}`,
+  );
+
+  // Verify thoughts reference the pre-existing task IDs
+  const { data: thoughts } = await supabase
+    .from("thoughts")
+    .select("metadata")
+    .eq("reference_id", filePath);
+
+  assertExists(thoughts);
+  assertEquals(thoughts.length > 0, true, "Ingest should create thoughts");
+
+  const taskRefs = (thoughts[0].metadata?.references as Record<string, unknown>)?.tasks;
+  assertEquals(Array.isArray(taskRefs), true, "Thoughts should have references.tasks array");
+
+  // The task IDs in references should match the pre-existing tasks
+  const preExistingIds = new Set(existingTasks.map((task: { id: string }) => task.id));
+  for (const refId of (taskRefs as string[])) {
+    assertEquals(
+      preExistingIds.has(refId),
+      true,
+      `Referenced task ID ${refId} should be a pre-existing task`,
+    );
+  }
+
+  // Clean up ai_output
+  await callTool("mark_ai_output_picked_up", { ids: [matchingOutput.id] });
+});
+
+Deno.test("option4: create_tasks_with_output with subtask hierarchy", async () => {
+  const filePath = `test/option4/subtasks-${Date.now()}.md`;
+  testNoteIds.push(filePath);
+  testTaskReferenceIds.push(filePath);
+
+  const result = await callTool("create_tasks_with_output", {
+    title: "Subtask Test",
+    file_path: filePath,
+    tasks: [
+      { content: "Parent task", status: "open" },
+      { content: "Child task A", parent_index: 0, status: "open" },
+      { content: "Child task B", parent_index: 0, status: "open" },
+      { content: "Grandchild task", parent_index: 1, status: "open" },
+    ],
+  });
+
+  assertExists(result);
+  assertEquals(result.includes("4 task(s)"), true);
+
+  // Verify hierarchy
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("id, content, parent_id, reference_id")
+    .eq("reference_id", filePath)
+    .order("created_at", { ascending: true });
+
+  assertExists(tasks);
+  assertEquals(tasks.length, 4);
+
+  // Parent task has no parent_id
+  assertEquals(tasks[0].parent_id, null);
+  // Children reference parent
+  assertEquals(tasks[1].parent_id, tasks[0].id);
+  assertEquals(tasks[2].parent_id, tasks[0].id);
+  // Grandchild references child A
+  assertEquals(tasks[3].parent_id, tasks[1].id);
+
+  // Clean up ai_output
+  const pendingResult = await callTool("get_pending_ai_output", {});
+  const pendingOutputs = JSON.parse(pendingResult);
+  const subtaskOutput = pendingOutputs.find(
+    (output: { file_path: string }) => output.file_path === filePath,
+  );
+  if (subtaskOutput) {
+    await callTool("mark_ai_output_picked_up", { ids: [subtaskOutput.id] });
+  }
+});
+
+Deno.test("option4: create_tasks_with_output with done tasks", async () => {
+  const filePath = `test/option4/done-tasks-${Date.now()}.md`;
+  testNoteIds.push(filePath);
+  testTaskReferenceIds.push(filePath);
+
+  const result = await callTool("create_tasks_with_output", {
+    title: "Mixed Status Tasks",
+    file_path: filePath,
+    tasks: [
+      { content: "Open task", status: "open" },
+      { content: "Completed task", status: "done" },
+    ],
+  });
+
+  assertExists(result);
+  assertEquals(result.includes("2 task(s)"), true);
+
+  // Verify statuses
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("id, content, status, archived_at")
+    .eq("reference_id", filePath)
+    .order("created_at", { ascending: true });
+
+  assertExists(tasks);
+  assertEquals(tasks[0].status, "open");
+  assertEquals(tasks[0].archived_at, null);
+  assertEquals(tasks[1].status, "done");
+  assertExists(tasks[1].archived_at, "Done task should have archived_at set");
+
+  // Verify markdown contains correct checkboxes
+  const pendingResult = await callTool("get_pending_ai_output", {});
+  const pendingOutputs = JSON.parse(pendingResult);
+  const output = pendingOutputs.find(
+    (o: { file_path: string }) => o.file_path === filePath,
+  );
+  assertExists(output);
+  assertEquals(output.content.includes("- [ ] Open task"), true, "Should have unchecked checkbox");
+  assertEquals(output.content.includes("- [x] Completed task"), true, "Should have checked checkbox");
+
+  // Clean up
+  await callTool("mark_ai_output_picked_up", { ids: [output.id] });
+});
+
+Deno.test("option4: create_tasks_with_output with empty tasks returns error", async () => {
+  try {
+    await callTool("create_tasks_with_output", {
+      title: "Empty Test",
+      file_path: "test/option4/empty.md",
+      tasks: [],
+    });
+    // Should have thrown
+    assertEquals(true, false, "Should have thrown an error for empty tasks");
+  } catch (error) {
+    assertEquals(
+      (error as Error).message.includes("At least one task is required"),
+      true,
+      "Error should mention empty tasks",
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
 
