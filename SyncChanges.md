@@ -10,7 +10,7 @@ This document describes the changes needed to enhance the ingest pipeline with s
 
 - [x] **Sprint 0** — Bug fixes (isExcluded, pollAINotes hash storage)
 - [x] **Sprint 1** — Database migrations (note_snapshots, ai_output, thoughts.note_snapshot_id)
-- [ ] **Sprint 2** — Structural parser (checkbox + heading extraction, pure functions)
+- [x] **Sprint 2** — Structural parser (checkbox + heading extraction, pure functions)
 - [ ] **Sprint 3** — Extractor pipeline framework + ProjectExtractor
 - [ ] **Sprint 4** — TaskExtractor (checkbox → tasks table, project association, reconciliation)
 - [ ] **Sprint 5** — Enhanced ingest_note + capture_thought (integrate pipeline, snapshots, references)
