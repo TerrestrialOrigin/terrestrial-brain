@@ -1,56 +1,4 @@
-# AI Output
-
-The reverse data path: AI-generated content delivered to the user's Obsidian vault. Replaces the previous `ai_notes` system with explicit file paths and picked-up tracking.
-
-## Data Model
-
-- **Table:** `ai_output`
-- **Fields:** id (uuid, PK, auto-generated), title (text, NOT NULL), content (text, NOT NULL), file_path (text, NOT NULL — full vault-relative path), source_context (text, nullable), created_at (timestamptz, NOT NULL, default now()), picked_up (boolean, NOT NULL, default false), picked_up_at (timestamptz, nullable)
-- **Indexes:** partial btree on picked_up WHERE picked_up = false (`ai_output_picked_up_idx`)
-
----
-
-## Scenarios
-
-### Requirement: AI output storage
-
-The system SHALL store AI-generated output destined for the user's Obsidian vault in the `ai_output` table with the following columns:
-- `id` (uuid, PK, auto-generated)
-- `title` (text, NOT NULL)
-- `content` (text, NOT NULL)
-- `file_path` (text, NOT NULL) — full vault-relative path including filename
-- `source_context` (text, nullable) — what prompted this output
-- `created_at` (timestamptz, NOT NULL, default `now()`)
-- `picked_up` (boolean, NOT NULL, default `false`)
-- `picked_up_at` (timestamptz, nullable)
-
-#### Scenario: Insert new AI output
-- **WHEN** a row is inserted into `ai_output` with `title`, `content`, and `file_path`
-- **THEN** the row SHALL be created with `picked_up` defaulting to `false`, `picked_up_at` defaulting to NULL, and `created_at` defaulting to now
-
-#### Scenario: Title is required
-- **WHEN** a row is inserted with `title` set to NULL
-- **THEN** the database SHALL reject the insert with a NOT NULL violation
-
-#### Scenario: File path is required
-- **WHEN** a row is inserted with `file_path` set to NULL
-- **THEN** the database SHALL reject the insert with a NOT NULL violation
-
----
-
-### Requirement: AI output picked-up tracking
-
-The system SHALL track whether each AI output has been picked up by the Obsidian plugin. A partial index on `picked_up` WHERE `picked_up = false` SHALL exist for efficient polling.
-
-#### Scenario: Poll for unpicked output
-- **WHEN** a query selects rows where `picked_up = false`
-- **THEN** the query plan SHALL use the `ai_output_picked_up_idx` partial index
-
-#### Scenario: Mark output as picked up
-- **WHEN** a row's `picked_up` is updated from `false` to `true` and `picked_up_at` is set
-- **THEN** the row SHALL no longer appear in queries filtered by `picked_up = false`
-
----
+## ADDED Requirements
 
 ### Requirement: create_ai_output MCP tool
 
@@ -64,10 +12,15 @@ The MCP server SHALL expose a `create_ai_output` tool that inserts a row into th
 #### Scenario: Create AI output without source_context
 - **WHEN** a client calls `create_ai_output` with `title`, `content`, and `file_path` but no `source_context`
 - **THEN** the system SHALL insert the row with `source_context = null`
+- **AND** return the same confirmation format
 
 #### Scenario: Content stored as-is (no frontmatter injection)
 - **WHEN** a client calls `create_ai_output` with any `content` value
 - **THEN** the system SHALL store the content exactly as provided — no YAML frontmatter, UUID, timestamp, or `terrestrialBrainExclude` tag SHALL be prepended
+
+#### Scenario: Missing required field
+- **WHEN** a client calls `create_ai_output` without `title`, `content`, or `file_path`
+- **THEN** the system SHALL return a validation error
 
 ---
 
@@ -84,6 +37,10 @@ The MCP server SHALL expose a `get_pending_ai_output` tool that returns all `ai_
 - **WHEN** a client calls `get_pending_ai_output` and no unpicked rows exist
 - **THEN** the system SHALL return an empty JSON array `[]`
 
+#### Scenario: Picked-up output excluded
+- **WHEN** a client calls `get_pending_ai_output` and some rows have `picked_up = true`
+- **THEN** those rows SHALL NOT appear in the result
+
 ---
 
 ### Requirement: mark_ai_output_picked_up MCP tool
@@ -94,6 +51,11 @@ The MCP server SHALL expose a `mark_ai_output_picked_up` tool that sets `picked_
 - **WHEN** a client calls `mark_ai_output_picked_up` with `ids: ["uuid1"]`
 - **THEN** the system SHALL set `picked_up = true` and `picked_up_at` to the current timestamp for that row
 - **AND** return `Marked 1 output(s) as picked up.`
+
+#### Scenario: Mark multiple outputs as picked up
+- **WHEN** a client calls `mark_ai_output_picked_up` with `ids: ["uuid1", "uuid2", "uuid3"]`
+- **THEN** the system SHALL update all three rows
+- **AND** return `Marked 3 output(s) as picked up.`
 
 #### Scenario: Picked-up output no longer appears in pending
 - **WHEN** `mark_ai_output_picked_up` is called for an output ID

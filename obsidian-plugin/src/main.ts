@@ -9,12 +9,12 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface AINote {
+interface AIOutput {
   id: string;
   title: string;
   content: string;
-  suggested_path: string | null;
-  created_at_utc: number;
+  file_path: string;
+  created_at: string;
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ interface TBPluginSettings {
   excludeTag: string;
   debounceMs: number;
   pollIntervalMs: number;
-  aiNotesFolderBase: string;
+  projectsFolderBase: string;
 }
 
 const DEFAULT_SETTINGS: TBPluginSettings = {
@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS: TBPluginSettings = {
   excludeTag: "terrestrialBrainExclude",
   debounceMs: 300000,
   pollIntervalMs: 600000,        // 10 minutes
-  aiNotesFolderBase: "AI Notes",
+  projectsFolderBase: "projects",
 };
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
@@ -110,23 +110,23 @@ export default class TerrestrialBrainPlugin extends Plugin {
       await this.processNote(file, { force: true });
     });
 
-    // Manual poll for AI notes
+    // Manual poll for AI output
     this.addCommand({
-      id: "poll-ai-notes",
-      name: "Pull AI notes from Terrestrial Brain",
+      id: "poll-ai-output",
+      name: "Pull AI output from Terrestrial Brain",
       callback: async () => {
-        await this.pollAINotes();
+        await this.pollAIOutput();
       },
     });
 
     this.addSettingTab(new TBSettingTab(this.app, this));
 
-    // Poll for AI notes on startup
-    await this.pollAINotes();
+    // Poll for AI output on startup
+    await this.pollAIOutput();
 
     // Then poll on interval
     this.registerInterval(
-      window.setInterval(() => this.pollAINotes(), this.settings.pollIntervalMs)
+      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMs)
     );
 
     console.log("Terrestrial Brain Sync loaded");
@@ -161,37 +161,36 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
   }
 
-  // ─── AI Notes Polling ──────────────────────────────────────────────────────
+  // ─── AI Output Polling ─────────────────────────────────────────────────────
 
-  async pollAINotes() {
+  async pollAIOutput() {
     if (!this.settings.tbEndpointUrl) return;
     try {
-      const raw = await this.callMCP("get_unsynced_ai_notes", {});
-      const notes: AINote[] = JSON.parse(raw);
-      if (!notes.length) return;
+      const raw = await this.callMCP("get_pending_ai_output", {});
+      const outputs: AIOutput[] = JSON.parse(raw);
+      if (!outputs.length) return;
 
       const ids: string[] = [];
-      for (const note of notes) {
-        const path = note.suggested_path
-          || `${this.settings.aiNotesFolderBase}/${note.title}.md`;
+      for (const output of outputs) {
+        const path = output.file_path;
 
         // Ensure parent folders exist
         const folder = path.substring(0, path.lastIndexOf("/"));
         if (folder) await this.app.vault.adapter.mkdir(folder);
 
-        // Write the file (overwrite if exists — AI notes are always authoritative)
-        await this.app.vault.adapter.write(path, note.content);
+        // Write the file (overwrite if exists — AI output is authoritative)
+        await this.app.vault.adapter.write(path, output.content);
 
         // Store hash so the modify event doesn't trigger re-ingestion
-        const contentHash = simpleHash(stripFrontmatter(note.content).trim());
+        const contentHash = simpleHash(stripFrontmatter(output.content).trim());
         this.syncedHashes[path] = contentHash;
 
-        ids.push(note.id);
+        ids.push(output.id);
       }
 
-      await this.callMCP("mark_notes_synced", { ids });
+      await this.callMCP("mark_ai_output_picked_up", { ids });
       await this.saveSettings();
-      new Notice(`🧠 ${notes.length} AI note${notes.length > 1 ? "s" : ""} synced to vault`);
+      new Notice(`🧠 ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} delivered to vault`);
     } catch (err) {
       console.error("TB Poll error:", err);
     }
@@ -406,9 +405,9 @@ class TBSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("AI notes poll interval (ms)")
+      .setName("AI output poll interval (ms)")
       .setDesc(
-        "How often to check for new AI-generated notes. Default 600000 (10 minutes). Minimum 60000 (1 minute)."
+        "How often to check for new AI-generated output. Default 600000 (10 minutes). Minimum 60000 (1 minute)."
       )
       .addText((text) =>
         text
@@ -424,14 +423,14 @@ class TBSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("AI notes folder")
-      .setDesc("Base folder for AI-generated notes. Default: AI Notes")
+      .setName("Projects folder base")
+      .setDesc("Base folder for project files in the vault. Default: projects")
       .addText((text) =>
         text
-          .setPlaceholder("AI Notes")
-          .setValue(this.plugin.settings.aiNotesFolderBase)
+          .setPlaceholder("projects")
+          .setValue(this.plugin.settings.projectsFolderBase)
           .onChange(async (value) => {
-            this.plugin.settings.aiNotesFolderBase = value.trim() || "AI Notes";
+            this.plugin.settings.projectsFolderBase = value.trim() || "projects";
             await this.plugin.saveSettings();
           })
       );
