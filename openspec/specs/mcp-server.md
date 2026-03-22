@@ -29,7 +29,7 @@ Tools are organized into modules, each exporting a `register(server, supabase)` 
 | `tools/thoughts.ts` | search_thoughts, list_thoughts, thought_stats, capture_thought, ingest_note |
 | `tools/projects.ts` | create_project, list_projects, get_project, update_project, archive_project |
 | `tools/tasks.ts` | create_task, list_tasks, update_task, archive_task |
-| `tools/ai_notes.ts` | create_ai_note, get_unsynced_ai_notes, mark_notes_synced |
+| `tools/ai_output.ts` | create_ai_output, get_pending_ai_output, mark_ai_output_picked_up |
 
 ---
 

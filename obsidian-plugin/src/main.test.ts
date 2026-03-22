@@ -47,7 +47,7 @@ function createTestPlugin(overrides: {
     excludeTag: overrides.excludeTag ?? "terrestrialBrainExclude",
     debounceMs: 300000,
     pollIntervalMs: 600000,
-    aiNotesFolderBase: "AI Notes",
+    projectsFolderBase: "projects",
   };
 
   plugin.syncedHashes = {};
@@ -156,57 +156,56 @@ describe("isExcluded", () => {
   });
 });
 
-// ─── pollAINotes tests ───────────────────────────────────────────────────────
+// ─── pollAIOutput tests ─────────────────────────────────────────────────────
 
-describe("pollAINotes", () => {
+describe("pollAIOutput", () => {
   it("stores content hash in syncedHashes after writing file", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    const noteContent = "# AI Generated Note\n\nSome content here.";
-    const aiNotes = [
-      { id: "note-1", title: "Test Note", content: noteContent, suggested_path: null, created_at_utc: 0 },
+    const outputContent = "# AI Generated Output\n\nSome content here.";
+    const aiOutputs = [
+      { id: "output-1", title: "Test Output", content: outputContent, file_path: "projects/Test/output.md", created_at: "2026-03-22T00:00:00Z" },
     ];
 
     plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify(aiNotes))  // get_unsynced_ai_notes
-      .mockResolvedValueOnce("ok");                     // mark_notes_synced
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))  // get_pending_ai_output
+      .mockResolvedValueOnce("ok");                       // mark_ai_output_picked_up
 
-    await plugin.pollAINotes();
+    await plugin.pollAIOutput();
 
-    const expectedPath = "AI Notes/Test Note.md";
-    expect(plugin.syncedHashes[expectedPath]).toBeDefined();
-    expect(typeof plugin.syncedHashes[expectedPath]).toBe("string");
+    expect(plugin.syncedHashes["projects/Test/output.md"]).toBeDefined();
+    expect(typeof plugin.syncedHashes["projects/Test/output.md"]).toBe("string");
   });
 
   it("hash matches what processNote would compute (preventing re-ingestion)", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    const noteContent = "---\ntitle: Test\n---\n# AI Note\n\nBody text.";
-    const aiNotes = [
-      { id: "note-1", title: "Test Note", content: noteContent, suggested_path: "AI Notes/Test Note.md", created_at_utc: 0 },
+    const outputContent = "---\ntitle: Test\n---\n# AI Output\n\nBody text.";
+    const aiOutputs = [
+      { id: "output-1", title: "Test Output", content: outputContent, file_path: "projects/Test/output.md", created_at: "2026-03-22T00:00:00Z" },
     ];
 
     plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify(aiNotes))
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
       .mockResolvedValueOnce("ok");
 
-    await plugin.pollAINotes();
+    await plugin.pollAIOutput();
 
-    const expectedHash = simpleHash(stripFrontmatter(noteContent).trim());
-    expect(plugin.syncedHashes["AI Notes/Test Note.md"]).toBe(expectedHash);
+    const expectedHash = simpleHash(stripFrontmatter(outputContent).trim());
+    expect(plugin.syncedHashes["projects/Test/output.md"]).toBe(expectedHash);
   });
 
   it("calls saveSettings once after the loop", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    const aiNotes = [
-      { id: "note-1", title: "Note 1", content: "Content 1", suggested_path: null, created_at_utc: 0 },
-      { id: "note-2", title: "Note 2", content: "Content 2", suggested_path: null, created_at_utc: 0 },
-      { id: "note-3", title: "Note 3", content: "Content 3", suggested_path: null, created_at_utc: 0 },
+    const aiOutputs = [
+      { id: "output-1", title: "Output 1", content: "Content 1", file_path: "test/one.md", created_at: "2026-03-22T00:00:00Z" },
+      { id: "output-2", title: "Output 2", content: "Content 2", file_path: "test/two.md", created_at: "2026-03-22T00:00:00Z" },
+      { id: "output-3", title: "Output 3", content: "Content 3", file_path: "test/three.md", created_at: "2026-03-22T00:00:00Z" },
     ];
 
     plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify(aiNotes))
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
       .mockResolvedValueOnce("ok");
 
-    await plugin.pollAINotes();
+    await plugin.pollAIOutput();
 
     // saveSettings should be called exactly once (not per file)
     expect(plugin.saveSettings).toHaveBeenCalledTimes(1);
@@ -215,18 +214,18 @@ describe("pollAINotes", () => {
     expect(Object.keys(plugin.syncedHashes)).toHaveLength(3);
   });
 
-  it("stores hashes for each file when using suggested_path", async () => {
+  it("stores hashes for each file using file_path", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    const aiNotes = [
-      { id: "note-1", title: "Note 1", content: "Content A", suggested_path: "projects/CarChief/plan.md", created_at_utc: 0 },
-      { id: "note-2", title: "Note 2", content: "Content B", suggested_path: "projects/TB/design.md", created_at_utc: 0 },
+    const aiOutputs = [
+      { id: "output-1", title: "Output 1", content: "Content A", file_path: "projects/CarChief/plan.md", created_at: "2026-03-22T00:00:00Z" },
+      { id: "output-2", title: "Output 2", content: "Content B", file_path: "projects/TB/design.md", created_at: "2026-03-22T00:00:00Z" },
     ];
 
     plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify(aiNotes))
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
       .mockResolvedValueOnce("ok");
 
-    await plugin.pollAINotes();
+    await plugin.pollAIOutput();
 
     expect(plugin.syncedHashes["projects/CarChief/plan.md"]).toBe(simpleHash("Content A"));
     expect(plugin.syncedHashes["projects/TB/design.md"]).toBe(simpleHash("Content B"));
@@ -235,9 +234,25 @@ describe("pollAINotes", () => {
   it("does nothing when no endpoint is configured", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "" });
 
-    await plugin.pollAINotes();
+    await plugin.pollAIOutput();
 
     expect(plugin.callMCP).not.toHaveBeenCalled();
+  });
+
+  it("calls correct MCP tools (get_pending_ai_output and mark_ai_output_picked_up)", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    const aiOutputs = [
+      { id: "output-1", title: "Output 1", content: "Content", file_path: "test/file.md", created_at: "2026-03-22T00:00:00Z" },
+    ];
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
+      .mockResolvedValueOnce("ok");
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.callMCP).toHaveBeenCalledWith("get_pending_ai_output", {});
+    expect(plugin.callMCP).toHaveBeenCalledWith("mark_ai_output_picked_up", { ids: ["output-1"] });
   });
 });
 

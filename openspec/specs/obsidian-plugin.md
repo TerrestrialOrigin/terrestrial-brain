@@ -1,6 +1,6 @@
 # Obsidian Plugin
 
-The Obsidian plugin (`terrestrial-brain-sync`) watches the vault for markdown file changes and syncs them to the Terrestrial Brain MCP endpoint. It also polls for AI-generated notes and writes them to the vault.
+The Obsidian plugin (`terrestrial-brain-sync`) watches the vault for markdown file changes and syncs them to the Terrestrial Brain MCP endpoint. It also polls for AI-generated output and writes it to the vault.
 
 ## Settings
 
@@ -9,8 +9,8 @@ The Obsidian plugin (`terrestrial-brain-sync`) watches the vault for markdown fi
 | `tbEndpointUrl` | `""` | Full MCP endpoint URL (including ?key= param) |
 | `excludeTag` | `"terrestrialBrainExclude"` | Notes with this tag (inline or frontmatter) are never synced |
 | `debounceMs` | `300000` (5 min) | Wait time after last edit before auto-syncing. Minimum: 60000 (1 min) |
-| `pollIntervalMs` | `600000` (10 min) | Interval for checking for new AI notes. Minimum: 60000 (1 min) |
-| `aiNotesFolderBase` | `"AI Notes"` | Default folder for AI-generated notes when no suggested_path is set |
+| `pollIntervalMs` | `600000` (10 min) | Interval for checking for new AI output. Minimum: 60000 (1 min) |
+| `projectsFolderBase` | `"projects"` | Base folder for project files in the vault |
 
 ## Persisted State
 
@@ -98,53 +98,58 @@ THEN the plugin SHALL check, in order:
 
 ---
 
-### AI notes polling
+### AI output polling
 
 GIVEN the plugin is loaded and `tbEndpointUrl` is configured
 WHEN the plugin starts
-THEN it immediately polls for unsynced AI notes
+THEN it immediately polls for pending AI output
 
 GIVEN the poll interval elapses
 WHEN the interval callback fires
-THEN the plugin polls for unsynced AI notes
+THEN the plugin polls for pending AI output
 
-GIVEN unsynced AI notes are returned
+GIVEN pending AI output is returned
 WHEN the plugin polls
-THEN for each note:
-  1. Determines the file path: `suggested_path` or `{aiNotesFolderBase}/{title}.md`
+THEN for each output:
+  1. Determines the file path from `output.file_path` (no fallback — path is always explicit)
   2. Creates parent folders if they don't exist
-  3. Writes the file content (overwrites if exists — AI notes are authoritative)
+  3. Writes the file content (overwrites if exists — AI output is authoritative)
   4. Computes the content hash using `simpleHash(stripFrontmatter(content).trim())` and stores it in `syncedHashes[filePath]`
-  5. Collects the note ID
-After all notes are written:
-  6. Calls `mark_notes_synced` with the collected IDs
+  5. Collects the output ID
+After all outputs are written:
+  6. Calls `mark_ai_output_picked_up` with the collected IDs
   7. Persists `syncedHashes` to disk via `saveSettings()`
-  8. Shows a Notice: "{N} AI note(s) synced to vault"
+  8. Shows a Notice: "{N} AI output(s) delivered to vault"
 
-#### Scenario: AI note write does not trigger re-ingestion
-- **WHEN** an AI note is written to the vault by `pollAINotes()`
+#### Scenario: AI output write does not trigger re-ingestion
+- **WHEN** an AI output file is written to the vault by `pollAIOutput()`
 - **AND** the subsequent modify event fires and `processNote()` runs for that file
 - **THEN** `processNote()` SHALL find a matching hash in `syncedHashes` and skip re-ingestion
 
-#### Scenario: AI note hash uses same transformation as processNote
-- **WHEN** `pollAINotes()` computes the hash for a written file
+#### Scenario: AI output hash uses same transformation as processNote
+- **WHEN** `pollAIOutput()` computes the hash for a written file
 - **THEN** it SHALL use `simpleHash(stripFrontmatter(content).trim())` — identical to the hash computation in `processNote()`
 
 #### Scenario: Hashes persisted after poll completes
-- **WHEN** `pollAINotes()` finishes writing all files
+- **WHEN** `pollAIOutput()` finishes writing all files
 - **THEN** it SHALL call `saveSettings()` once to persist all new hashes to disk
 
-GIVEN no unsynced AI notes exist
+#### Scenario: AI output content participates in normal ingest
+- **WHEN** an AI output file is written to the vault
+- **AND** the user later edits the file (changing the hash)
+- **THEN** the modified file SHALL be processed by `processNote()` normally — no exclusion tag prevents ingest
+
+GIVEN no pending AI output exists
 WHEN the plugin polls
 THEN nothing happens (silent)
 
 ---
 
-### Manual AI notes poll
+### Manual AI output poll
 
 GIVEN the plugin is loaded
-WHEN the user triggers "Pull AI notes from Terrestrial Brain"
-THEN the plugin runs `pollAINotes()` immediately
+WHEN the user triggers "Pull AI output from Terrestrial Brain"
+THEN the plugin SHALL run `pollAIOutput()` immediately
 
 ---
 
@@ -169,10 +174,10 @@ WHEN `onload()` runs
 THEN:
   1. Loads settings and syncedHashes from disk
   2. Registers file modify event handler
-  3. Registers commands: sync current note, sync vault, poll AI notes
+  3. Registers commands: sync current note, sync vault, poll AI output
   4. Adds ribbon icon (brain icon)
   5. Adds settings tab
-  6. Runs initial AI notes poll
+  6. Runs initial AI output poll
   7. Starts poll interval timer
 
 GIVEN Obsidian unloads the plugin

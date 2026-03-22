@@ -14,7 +14,7 @@ This document describes the changes needed to enhance the ingest pipeline with s
 - [x] **Sprint 3** — Extractor pipeline framework + ProjectExtractor
 - [x] **Sprint 4** — TaskExtractor (checkbox → tasks table, project association, reconciliation)
 - [x] **Sprint 5** — Enhanced ingest_note + capture_thought (integrate pipeline, snapshots, references)
-- [ ] **Sprint 6** — AI Output system (ai_output tools, plugin polling, ai_notes migration)
+- [x] **Sprint 6** — AI Output system (ai_output tools, plugin polling, ai_notes migration)
 - [ ] **Sprint 7** — Option 4 integration (AI creates tasks + ai_output, dedup on ingest)
 - [ ] **Sprint 8** — Composite query tools (get_project_summary, get_recent_activity)
 

@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 import { register as registerThoughts } from "./tools/thoughts.ts";
 import { register as registerProjects } from "./tools/projects.ts";
 import { register as registerTasks } from "./tools/tasks.ts";
-import { register as registerAINotes } from "./tools/ai_notes.ts";
+import { register as registerAIOutput } from "./tools/ai_output.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -26,7 +26,7 @@ const server = new McpServer({
 registerThoughts(server, supabase);
 registerProjects(server, supabase);
 registerTasks(server, supabase);
-registerAINotes(server, supabase);
+registerAIOutput(server, supabase);
 
 // ─── Hono App with Auth Check ─────────────────────────────────────────────────
 

@@ -23,9 +23,9 @@ insert into public.thoughts (content, metadata) values
   ('Terrestrial Brain should support 2-way sync with Obsidian so the AI can write notes back to the human.',
    '{"type": "idea", "topics": ["Terrestrial Brain", "Obsidian"], "references": {"project_id": "00000000-0000-0000-0000-000000000002"}}');
 
--- Test AI note (unsynced)
-insert into public.ai_notes (title, content, suggested_path, created_at_utc) values
+-- Test AI output (pending)
+insert into public.ai_output (title, content, file_path, source_context) values
   ('CarChief Redis Caching Proposal',
-   E'---\ntb_id: test-note-001\ncreated_utc: 1742558400000\nterrestrialBrainExclude: true\n---\n\n# Redis Caching Proposal\n\nBased on recent thoughts captured about CarChief Backend performance...',
-   'AI Notes/CarChief/redis-caching-proposal.md',
-   1742558400000);
+   E'# Redis Caching Proposal\n\nBased on recent thoughts captured about CarChief Backend performance...',
+   'projects/CarChief/redis-caching-proposal.md',
+   'Seed data for testing');
