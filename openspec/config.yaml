@@ -1,20 +1,27 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Terrestrial Brain is a personal knowledge management system that bridges
+  Obsidian (note-taking) with an AI-powered backend on Supabase.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Architecture:
+  - Obsidian Plugin (TypeScript/Node) — watches vault, syncs notes to brain DB
+  - Supabase Edge Function (TypeScript/Deno, Hono) — MCP server exposing tools
+  - PostgreSQL (Supabase) with pgvector — stores thoughts, projects, tasks, AI notes
+  - OpenRouter API — embeddings (text-embedding-3-small) and LLM (gpt-4o-mini)
+
+  Data flow: Obsidian -> Plugin -> MCP ingest_note -> thoughts table
+  Reverse path: AI -> create_ai_note -> ai_notes table -> Plugin polls -> Obsidian vault
+
+  Key principle: Obsidian is the human's workspace; the brain DB is the AI's workspace.
+  Data flows mostly one-way (Obsidian -> Brain) with an explicit narrow path back (AI Notes).
+
+  Auth: x-brain-key header or ?key= query param checked against MCP_ACCESS_KEY env var.
+
+rules:
+  proposal:
+    - Always include a "Non-goals" section
+    - Reference affected spec files by path
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Final group must be "Testing & Verification"

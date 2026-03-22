@@ -181,10 +181,16 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
         // Write the file (overwrite if exists — AI notes are always authoritative)
         await this.app.vault.adapter.write(path, note.content);
+
+        // Store hash so the modify event doesn't trigger re-ingestion
+        const contentHash = simpleHash(stripFrontmatter(note.content).trim());
+        this.syncedHashes[path] = contentHash;
+
         ids.push(note.id);
       }
 
       await this.callMCP("mark_notes_synced", { ids });
+      await this.saveSettings();
       new Notice(`🧠 ${notes.length} AI note${notes.length > 1 ? "s" : ""} synced to vault`);
     } catch (err) {
       console.error("TB Poll error:", err);
@@ -247,14 +253,19 @@ export default class TerrestrialBrainPlugin extends Plugin {
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache) return false;
 
-    const excludeTag = this.settings.excludeTag.replace(/^#/, "").toLowerCase();
+    const excludeTag = this.settings.excludeTag.replace(/^#/, "");
+
+    // Check standalone frontmatter boolean (e.g. terrestrialBrainExclude: true)
+    if (cache.frontmatter?.[excludeTag] === true) return true;
+
+    const excludeTagLower = excludeTag.toLowerCase();
     const inlineTags = cache.tags?.map((t) => t.tag.replace(/^#/, "").toLowerCase()) || [];
     const fmTags = cache.frontmatter?.tags || [];
     const fmTagList = (Array.isArray(fmTags) ? fmTags : [fmTags]).map((t: unknown) =>
       String(t).toLowerCase()
     );
 
-    return [...inlineTags, ...fmTagList].includes(excludeTag);
+    return [...inlineTags, ...fmTagList].includes(excludeTagLower);
   }
 
   // ─── MCP Call ──────────────────────────────────────────────────────────────
@@ -429,11 +440,11 @@ class TBSettingTab extends PluginSettingTab {
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
-function stripFrontmatter(content: string): string {
+export function stripFrontmatter(content: string): string {
   return content.replace(/^---[\s\S]*?---\n?/, "");
 }
 
-function simpleHash(str: string): string {
+export function simpleHash(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const chr = str.charCodeAt(i);

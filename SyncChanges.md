@@ -1,615 +1,543 @@
-# Terrestrial Brain — Two-Way Project & Task Sync
+# Terrestrial Brain — Phase 2: Enhanced Ingest Pipeline + AI Output
 
-This document describes the changes needed to add full two-way sync of projects and tasks between the Supabase database and the Obsidian vault. Build and test everything against the local dev environment before deploying.
+This document describes the changes needed to enhance the ingest pipeline with structured data extraction (projects, tasks, and future entity types) and add the AI Output delivery system. Build and test everything against the local dev environment before deploying.
 
-> **Loop prevention is the critical concern.** Every design decision here is made with the goal of preventing infinite sync loops between the plugin writing notes and the modify handler syncing changes back.
-
----
-
-## Overview
-
-Currently, the plugin syncs vault notes *to* Terrestrial Brain (one-way ingest). AI notes sync *from* the server to the vault (one-way pull). This change adds full two-way sync for projects and tasks:
-
-- **Server → Vault:** Plugin polls for projects and tasks, creates/updates markdown notes in the vault
-- **Vault → Server:** When the user edits a project or task note in Obsidian, the plugin detects the change and pushes updates back to the MCP
-
-All generated notes use `terrestrialBrainExclude: true` in frontmatter, so `ingest_note` never touches them. The existing hash-based dedup (`syncedHashes`) is extended to prevent modify-event loops.
+> **Core principle:** Obsidian is the human's workspace. The brain DB is the AI's workspace. Data flows mostly one-way (Obsidian → Brain) with a narrow, explicit path back (AI Output → Obsidian). No two-way sync. No magic file manipulation.
 
 ---
 
-## Part 1 — New MCP Tools
+## Sprint Tracker
 
-### 1.1 `get_all_projects` (`tools/projects.ts`)
-
-Returns a JSON array of all active (non-archived) projects with full details.
-
-- Input: `include_archived` (boolean, optional, default false)
-- Returns: JSON string of array, each element:
-  ```json
-  {
-    "id": "uuid",
-    "name": "CarChief",
-    "type": "client",
-    "parent_id": "uuid or null",
-    "parent_name": "Parent Name or null",
-    "description": "Project description or null",
-    "metadata": {},
-    "created_at": "ISO string",
-    "updated_at": "ISO string"
-  }
-  ```
-- The response must be a valid JSON string (not formatted text) so the plugin can `JSON.parse()` it
-- Include `parent_name` resolved from the parent record so the plugin doesn't need a second round trip
-
-### 1.2 `get_all_tasks` (`tools/tasks.ts`)
-
-Returns a JSON array of all non-archived tasks.
-
-- Input: `include_archived` (boolean, optional, default false)
-- Returns: JSON string of array, each element:
-  ```json
-  {
-    "id": "uuid",
-    "content": "Task description",
-    "status": "open",
-    "due_by": "ISO string or null",
-    "project_id": "uuid or null",
-    "project_name": "CarChief or null",
-    "parent_id": "uuid or null",
-    "metadata": {},
-    "created_at": "ISO string",
-    "updated_at": "ISO string"
-  }
-  ```
-- Include `project_name` resolved from the projects table
+- [x] **Sprint 0** — Bug fixes (isExcluded, pollAINotes hash storage)
+- [x] **Sprint 1** — Database migrations (note_snapshots, ai_output, thoughts.note_snapshot_id)
+- [ ] **Sprint 2** — Structural parser (checkbox + heading extraction, pure functions)
+- [ ] **Sprint 3** — Extractor pipeline framework + ProjectExtractor
+- [ ] **Sprint 4** — TaskExtractor (checkbox → tasks table, project association, reconciliation)
+- [ ] **Sprint 5** — Enhanced ingest_note + capture_thought (integrate pipeline, snapshots, references)
+- [ ] **Sprint 6** — AI Output system (ai_output tools, plugin polling, ai_notes migration)
+- [ ] **Sprint 7** — Option 4 integration (AI creates tasks + ai_output, dedup on ingest)
+- [ ] **Sprint 8** — Composite query tools (get_project_summary, get_recent_activity)
 
 ---
 
-## Part 2 — Note Format
+## Sprint 0 — Bug Fixes
 
-### 2.1 Task Notes
+**Goal:** Fix two pre-existing bugs before building on top of the current code.
 
-```markdown
+### 0.1 Fix `isExcluded()` (main.ts:246-258)
+
+**Bug:** `isExcluded()` checks `cache.frontmatter?.tags` and inline tags, but `terrestrialBrainExclude: true` is a standalone frontmatter boolean — Obsidian stores it as `cache.frontmatter.terrestrialBrainExclude === true`, NOT in the `tags` array. So `isExcluded()` returns `false` for AI notes and any notes with that frontmatter field.
+
+**Fix:** Add `if (cache.frontmatter?.[excludeTag]) return true;` before the tag-array check in `isExcluded()`.
+
+**File:** `obsidian-plugin/src/main.ts`
+
+### 0.2 Fix `pollAINotes()` hash storage
+
+**Bug:** `pollAINotes()` writes files to the vault but doesn't store their hash in `syncedHashes`. On the next modify event, `processNote()` may try to re-ingest the file unnecessarily.
+
+**Fix:** After writing each AI note file, compute `simpleHash(stripFrontmatter(content))` and store it in `syncedHashes[path]`.
+
+**File:** `obsidian-plugin/src/main.ts`
+
+### 0.3 Tests
+
+- Verify `isExcluded()` returns `true` for a file with `terrestrialBrainExclude: true` in frontmatter
+- Verify `pollAINotes()` file write doesn't trigger re-ingest
+
 ---
-terrestrialBrainExclude: true
-tb_type: task
-tb_id: 38439648-929e-4c15-a660-cf7f0cb8c120
-tb_status: open
-tb_due: 2026-03-25
-tb_project_id: 00000000-0000-0000-0000-000000000001
-tb_project_name: CarChief
-tb_synced_at: 1742558400000
----
 
-Set up local Supabase dev environment
+## Sprint 1 — Database Migrations
+
+**Goal:** Create new tables and add the note_snapshot_id column to thoughts.
+
+### 1.1 `note_snapshots` Table
+
+```sql
+create table public.note_snapshots (
+  id uuid not null default gen_random_uuid(),
+  reference_id text not null unique,
+  title text null,
+  content text not null,
+  source text not null default 'obsidian',
+  captured_at timestamptz not null default now(),
+  constraint note_snapshots_pkey primary key (id)
+);
+
+create index note_snapshots_reference_id_idx on public.note_snapshots using btree (reference_id);
+create index note_snapshots_source_idx on public.note_snapshots using btree (source);
 ```
 
-- The markdown body (everything after frontmatter) IS the task content. No special formatting required — the user just edits the text.
-- `tb_status` is editable: `open`, `in_progress`, `done`, `deferred`
-- `tb_due` is editable: ISO date string or remove the field to clear it
-- `tb_project_id` / `tb_project_name` are editable: change or remove to reassign
-- `tb_synced_at` is managed by the plugin — do not edit manually
+- One row per note, upserted on `reference_id` (always stores the latest version)
+- `reference_id` is the stable identifier — vault-relative path for Obsidian notes, a chat/session ID for chat-originated content, etc.
 
-**File path:** `{tasksFolder}/{project_name}/{sanitized_content}.md`
-- Tasks without a project go in `{tasksFolder}/Unassigned/`
-- Example: `Tasks/CarChief/Set up local Supabase dev environment.md`
-- If task content is too long for a filename, truncate to first 60 chars
+### 1.2 `ai_output` Table (replaces `ai_notes`)
 
-### 2.2 Project Notes
+```sql
+create table public.ai_output (
+  id uuid not null default gen_random_uuid(),
+  title text not null,
+  content text not null,
+  file_path text not null,
+  source_context text null,
+  created_at timestamptz not null default now(),
+  picked_up boolean not null default false,
+  picked_up_at timestamptz null,
+  constraint ai_output_pkey primary key (id)
+);
 
-```markdown
----
-terrestrialBrainExclude: true
-tb_type: project
-tb_id: 00000000-0000-0000-0000-000000000001
-tb_project_type: client
-tb_parent_id: null
-tb_archived: false
-tb_synced_at: 1742558400000
----
-
-# CarChief
-
-Main client project for dealer management platform.
+create index ai_output_picked_up_idx on public.ai_output using btree (picked_up) where picked_up = false;
 ```
 
-- The first `# heading` in the body is the project name
-- Everything after the heading is the project description
-- `tb_project_type` is editable: `client`, `personal`, `research`, `internal`
-- `tb_parent_id` is editable: set to a project UUID to reparent
-- `tb_archived` is editable: set to `true` to archive the project (triggers `archive_project` on sync-back)
-- If there is no `# heading`, the filename (without `.md`) is used as the project name
+- AI writes output here with a specific `file_path` (full vault-relative path including filename)
+- Plugin polls for `picked_up = false`, writes to vault, flips `picked_up = true` and sets `picked_up_at`
+- No `terrestrialBrainExclude` tag — the delivered file participates in normal ingest, so task checkboxes, project references, etc. all get picked up naturally
 
-**File path:** `{projectsFolder}/{sanitized_name}.md`
-- Child projects go in `{projectsFolder}/{parent_name}/{sanitized_name}.md`
-- Example: `Projects/CarChief.md`, `Projects/CarChief/CarChief Backend.md`
+### 1.3 `thoughts` Table — Add `note_snapshot_id`
+
+```sql
+alter table public.thoughts
+  add column note_snapshot_id uuid null references public.note_snapshots(id) on delete set null;
+
+create index thoughts_note_snapshot_id_idx on public.thoughts using btree (note_snapshot_id);
+```
+
+- Nullable FK — null for thoughts from direct capture, chat, or if snapshot was purged
+- `ON DELETE SET NULL` — purging old snapshots doesn't cascade-delete thoughts
+
+### 1.4 `thoughts.metadata.references` — Enhanced Structure
+
+The `references` field in thought metadata changes from:
+```json
+{ "project_id": "uuid" }
+```
+to:
+```json
+{
+  "projects": ["uuid1", "uuid2"],
+  "tasks": ["uuid1", "uuid2"]
+}
+```
+
+- Arrays, not single values — a thought can reference multiple projects or tasks
+- Future-proof: adding `"people": [...]` later requires no schema change
+- Old thoughts with `{ "project_id": "uuid" }` should still be readable (backwards-compatible reads)
+
+### 1.5 Tests
+
+**pgTAP tests (`supabase/tests/`):**
+- `note_snapshots`: upsert on `reference_id` works (insert then update, only one row)
+- `note_snapshots`: `ON DELETE SET NULL` on `thoughts.note_snapshot_id`
+- `ai_output`: `picked_up` partial index filters correctly
+- `thoughts.note_snapshot_id`: nullable FK works correctly
 
 ---
 
-## Part 3 — Plugin Settings
+## Sprint 2 — Structural Parser
 
-### 3.1 New Settings Fields
+**Goal:** Build a deterministic (no AI) parser that extracts checkboxes and headings from markdown text. Pure functions with zero dependencies — testable from Deno.
+
+### 2.1 Checkbox Parsing
+
+- Regex: lines matching `^\s*- \[([ xX])\] (.+)$`
+- Indentation depth: count leading tabs or groups of spaces (each tab or 2/4 spaces = one level)
+- Parent detection: a checkbox at depth N is a subtask of the nearest preceding checkbox at depth N-1
+- Section heading: the nearest `#` heading above the checkbox
+- **Skip** checkboxes inside fenced code blocks (``` or ~~~)
+
+### 2.2 Heading Parsing
+
+- Regex: lines matching `^(#{1,6})\s+(.+)$`
+- Track line ranges: each heading's content extends until the next heading of same or higher level, or EOF
+
+### 2.3 Types
+
+```typescript
+interface ParsedNote {
+  content: string;
+  title: string | null;
+  referenceId: string | null;
+  source: string;
+  checkboxes: ParsedCheckbox[];
+  headings: ParsedHeading[];
+}
+
+interface ParsedCheckbox {
+  text: string;
+  checked: boolean;
+  depth: number;
+  lineNumber: number;
+  parentIndex: number | null;
+  sectionHeading: string | null;
+}
+
+interface ParsedHeading {
+  text: string;
+  level: number;
+  lineStart: number;
+  lineEnd: number;
+}
+```
+
+### 2.4 File Location
+
+`supabase/functions/terrestrial-brain-mcp/parser.ts` — pure functions, no Supabase or AI dependencies. Exported: `parseNote(content, title, referenceId, source): ParsedNote`
+
+### 2.5 Tests (`tests/integration/parse.test.ts`)
+
+- Parse `- [ ] task text` → `{ text: "task text", checked: false, depth: 0 }`
+- Parse `- [x] done task` → `{ text: "done task", checked: true, depth: 0 }`
+- Parse indented checkboxes → correct depth and parent detection
+- Parse headings → correct line ranges
+- Mixed content (headings + checkboxes + prose) → correct structure
+- Edge cases: empty checkboxes, deeply nested (3+ levels), checkboxes inside code blocks (should be ignored)
+- Heading line ranges: heading at line 5 extends until next heading or EOF
+
+---
+
+## Sprint 3 — Extractor Pipeline Framework + ProjectExtractor
+
+**Goal:** Build the extractor interface, pipeline runner, and the first extractor (projects).
+
+### 3.1 Extractor Interface
+
+```typescript
+interface ExtractionContext {
+  supabase: SupabaseClient;
+  knownProjects: { id: string; name: string }[];
+  knownTasks: { id: string; content: string; reference_id: string | null }[];
+  // Enriched by earlier extractors:
+  newlyCreatedProjects: { id: string; name: string }[];
+  newlyCreatedTasks: { id: string; content: string }[];
+}
+
+interface ExtractionResult {
+  referenceKey: string;     // "projects", "tasks", "people", etc.
+  ids: string[];            // PKs of upserted/matched rows
+}
+
+interface Extractor {
+  readonly referenceKey: string;
+  extract(note: ParsedNote, context: ExtractionContext): Promise<ExtractionResult>;
+}
+```
+
+### 3.2 Pipeline Runner
+
+```typescript
+async function runExtractionPipeline(
+  note: ParsedNote,
+  extractors: Extractor[],
+  baseContext: ExtractionContext
+): Promise<Record<string, string[]>>
+```
+
+1. Initialize context from `baseContext` (fetch known projects, known tasks for this `reference_id`)
+2. For each extractor in order:
+   a. Call `extractor.extract(note, context)`
+   b. Collect returned PKs under `result.referenceKey`
+   c. Enrich context for subsequent extractors (e.g., ProjectExtractor adds to `context.newlyCreatedProjects` so TaskExtractor can see them)
+3. Return the composed references: `{ projects: [...], tasks: [...] }`
+
+Extractors run **in sequence**, not parallel, because later extractors depend on context enrichment from earlier ones.
+
+### 3.3 ProjectExtractor
+
+**What it detects:**
+- File path: if the note is under `/projects/{name}/`, that project is referenced
+- Section headings: a `# ProjectName` or `## ProjectName` heading where `ProjectName` matches a known project
+- Content mentions: the note text mentions a known project by name
+
+**How it works:**
+1. Check file path against `/projects/*/` pattern → if match, look up or create the project
+2. For remaining project associations (headings, content mentions), use a focused AI call:
+   - Input: note title, heading structure, first ~200 chars of each section, known projects list
+   - Output: `{ "project_ids": ["uuid1", "uuid2"] }`
+   - This call is cheap — it's just matching, not generation
+3. If a folder under `/projects/` exists but no matching project row: create the project (the human started a new project by creating a folder)
+4. Return all matched/created project IDs
+
+**Context enrichment:** Adds any newly created projects to `context.newlyCreatedProjects` and `context.knownProjects`.
+
+### 3.4 File Location
+
+`supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts`
+`supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts`
+
+### 3.5 Tests (`tests/integration/extractors.test.ts`)
+
+- ProjectExtractor: note in `/projects/CarChief/` → detects CarChief project
+- ProjectExtractor: note with `# TerrestrialCore` heading → detects project by heading
+- ProjectExtractor: new folder under `/projects/` → creates project row
+- ProjectExtractor: enriches context (newlyCreatedProjects populated)
+- Pipeline runner: single extractor → returns correct references structure
+
+---
+
+## Sprint 4 — TaskExtractor
+
+**Goal:** Extract tasks from checkboxes, associate with projects, reconcile with existing DB tasks.
+
+### 4.1 What It Detects
+
+- `- [ ]` lines = open tasks
+- `- [x]` lines = completed tasks
+- Indentation = subtask hierarchy
+- Section context = which project a task group belongs to
+
+### 4.2 How It Works
+
+1. Use the structurally parsed checkboxes from `ParsedNote.checkboxes`
+2. For project association, apply priority chain:
+   a. **File path** — if note is in `/projects/CarChief/`, all tasks default to CarChief
+   b. **Section heading** — if a task is under a `# TerrestrialCore` heading that matches a known project, it belongs to that project
+   c. **Content inference** — for remaining unassigned tasks, use an AI call:
+      - Input: task texts + known projects list (including `context.newlyCreatedProjects`)
+      - Output: `[{ "task_text": "...", "project_id": "uuid or null" }]`
+3. For each task, reconcile against existing tasks in DB:
+   - Match by `reference_id` (file path) + content similarity
+   - If match found: update content, status (checked/unchecked), project association
+   - If no match: insert new task row
+   - If existing DB task not found in note anymore: keep it (don't delete — it may have been moved to another note, or the user removed the checkbox but the task is still relevant in the DB)
+4. Handle subtask hierarchy: tasks with `parentIndex` get their `parent_id` set to the DB ID of the parent task
+5. Return all task IDs (matched + created)
+
+**Context enrichment:** Adds newly created tasks to `context.newlyCreatedTasks`.
+
+**Reconciliation detail:** Tasks are matched by `reference_id` (the note's vault path) so we only compare against tasks that came from the same note. Content matching uses simple string similarity (not embeddings — overkill for short checkbox text). The structural parse gives us line position, which helps disambiguate tasks with similar content.
+
+### 4.3 File Location
+
+`supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts`
+
+### 4.4 Tests (add to `tests/integration/extractors.test.ts`)
+
+- TaskExtractor: note with `- [ ]` lines → creates task rows
+- TaskExtractor: checked `- [x]` → task status = 'done'
+- TaskExtractor: indented checkboxes → subtask hierarchy (parent_id set)
+- TaskExtractor: tasks under project heading → associated with that project
+- TaskExtractor: content-based project detection ("CarChief tickets" → CarChief project)
+- TaskExtractor: re-ingest with checked box → task status updated to 'done'
+- TaskExtractor: re-ingest with new checkbox added → new task created, existing tasks kept
+- Pipeline: full run with both extractors → references composed correctly with both project and task IDs
+
+---
+
+## Sprint 5 — Enhanced Ingest
+
+**Goal:** Integrate the extractor pipeline into `ingest_note` and `capture_thought`. Add note snapshot storage and new references format.
+
+### 5.1 Updated `ingest_note` Flow
+
+```
+1. Receive: content, title, note_id (reference_id)
+
+2. Upsert note_snapshots:
+   INSERT INTO note_snapshots (reference_id, title, content, source)
+   VALUES (note_id, title, content, 'obsidian')
+   ON CONFLICT (reference_id) DO UPDATE SET content, title, captured_at = now()
+   → get note_snapshot_id
+
+3. Structural parse:
+   - Extract checkboxes (with depth, checked state, section headings)
+   - Extract heading structure
+   → produces ParsedNote
+
+4. Run extractor pipeline:
+   - ProjectExtractor → project IDs
+   - TaskExtractor → task IDs
+   → produces references = { projects: [...], tasks: [...] }
+
+5. Split into thoughts (existing AI call, mostly unchanged):
+   - Same GPT-4o-mini prompt for splitting
+   - Project detection prompt REMOVED from here (extractors handle it now)
+   - Each thought gets:
+     - reference_id = note_id
+     - note_snapshot_id = from step 2
+     - metadata.references = from step 4
+
+6. Reconcile thoughts (existing logic, unchanged):
+   - Same keep/update/add/delete reconciliation
+   - Updated/added thoughts get the new references and note_snapshot_id
+
+7. Return summary: "Synced 'note': 3 thoughts, 2 tasks detected, 1 project linked"
+```
+
+### 5.2 Updated `capture_thought` Flow
+
+```
+1. Receive: content (the thought text)
+
+2. Structural parse (lightweight — mostly checking for checkboxes in the text)
+
+3. Run extractor pipeline:
+   - ProjectExtractor → project IDs (from content mentions)
+   - TaskExtractor → task IDs (if the thought contains "- [ ]" lines)
+   → produces references
+
+4. Get embedding + extract metadata (existing)
+
+5. Insert thought with:
+   - reference_id = null (no source note)
+   - note_snapshot_id = null (no source note)
+   - metadata.references = from step 3
+
+6. Return confirmation
+```
+
+### 5.3 Backwards Compatibility for `references`
+
+Old thoughts have `metadata.references.project_id` (single string). New thoughts have `metadata.references.projects` (array). All code that reads references must handle both formats:
+
+```typescript
+function getProjectRefs(metadata: Record<string, unknown>): string[] {
+  const refs = metadata?.references as Record<string, unknown> | undefined;
+  if (!refs) return [];
+  if (Array.isArray(refs.projects)) return refs.projects;
+  if (typeof refs.project_id === "string") return [refs.project_id];
+  return [];
+}
+```
+
+### 5.4 Tests (`tests/integration/enhanced_ingest.test.ts`)
+
+- `ingest_note` with checkboxes → tasks table populated
+- `ingest_note` with checkboxes → thoughts have `references.tasks` array
+- `ingest_note` → `note_snapshots` table has the full note content
+- `ingest_note` re-sync → note snapshot updated (not duplicated)
+- `ingest_note` re-sync with checkbox state change → task status updated
+- `capture_thought` with task-like content → task extracted and linked
+- Backwards compat: existing tools that read `references.project_id` still work
+
+---
+
+## Sprint 6 — AI Output System
+
+**Goal:** Replace `ai_notes` with `ai_output`. New MCP tools, updated plugin polling, migration.
+
+### 6.1 MCP Tool: `create_ai_output`
+
+Replaces `create_ai_note`. The AI uses this when the user explicitly requests output to be delivered to Obsidian.
+
+- Input:
+  - `title` (string, required) — human-readable title
+  - `content` (string, required) — full markdown body
+  - `file_path` (string, required) — target vault path, e.g. `"projects/TerrestrialCore/PhaseTwoPlan.md"`
+  - `source_context` (string, optional) — what prompted this output
+- Inserts into `ai_output` with `picked_up = false`
+- Returns: confirmation with ID, title, and file path
+- The AI should tell the user: "I've put the plan at `projects/TerrestrialCore/PhaseTwoPlan.md` — it'll appear in your vault shortly."
+
+### 6.2 MCP Tools: `get_pending_ai_output` and `mark_ai_output_picked_up`
+
+**`get_pending_ai_output`:**
+- Input: none
+- Returns: JSON array of all rows where `picked_up = false`
+- Each element: `{ id, title, content, file_path, created_at }`
+
+**`mark_ai_output_picked_up`:**
+- Input: `ids` (array of uuid strings)
+- Sets `picked_up = true` and `picked_up_at = now()` for all matching IDs
+- Returns: confirmation of count
+
+### 6.3 Plugin: Replace `pollAINotes()` with `pollAIOutput()`
+
+```
+async pollAIOutput():
+  1. Call get_pending_ai_output → parse JSON array
+  2. For each output:
+     a. Ensure parent folders exist (create if needed)
+     b. Write file to vault at output.file_path
+     c. Store hash in syncedHashes
+     d. Collect the ID
+  3. Call mark_ai_output_picked_up with collected IDs
+  4. Show notice: "N AI output(s) delivered to vault"
+```
+
+The delivered file has no special tags. It's a normal markdown file that participates in normal ingest. When the plugin's debounce fires and `ingest_note` processes it, the extractor pipeline extracts tasks, projects, etc.
+
+### 6.4 Migration from `ai_notes`
+
+- Migrate any unsynced rows from `ai_notes` to `ai_output` (map `suggested_path` → `file_path`, `synced_at IS NULL` → `picked_up = false`)
+- Update MCP tools: remove `create_ai_note`, `get_unsynced_ai_notes`, `mark_notes_synced`; add new equivalents
+- Update plugin: replace `pollAINotes()` with `pollAIOutput()`
+- Drop `ai_notes` table after migration is verified
+
+### 6.5 Plugin Settings
 
 Add to `TBPluginSettings`:
-
 ```typescript
-projectsFolderBase: string;   // default: "Projects"
-tasksFolderBase: string;      // default: "Tasks"
-syncProjectsAndTasks: boolean; // default: true — master toggle for this feature
+projectsFolderBase: string;     // default: "projects"
 ```
 
-Add corresponding UI in `TBSettingTab.display()`.
+### 6.6 Tests (`tests/integration/ai_output.test.ts`)
 
-### 3.2 Default Settings Update
-
-```typescript
-const DEFAULT_SETTINGS: TBPluginSettings = {
-  // ... existing fields ...
-  projectsFolderBase: "Projects",
-  tasksFolderBase: "Tasks",
-  syncProjectsAndTasks: true,
-};
-```
+- `create_ai_output` → `get_pending_ai_output` → verify it appears
+- `mark_ai_output_picked_up` → `get_pending_ai_output` → verify it's gone
+- `create_ai_output` with nested path → verify `file_path` preserved correctly
 
 ---
 
-## Part 4 — Plugin: Server → Vault Sync
+## Sprint 7 — Option 4 Integration
 
-### 4.1 `syncProjectsAndTasks()` Method
+**Goal:** When the AI creates tasks for the user, it writes structured data to the tasks table AND markdown to ai_output. On ingest, the TaskExtractor deduplicates against pre-existing tasks.
 
-Add a new method to the plugin class. This runs alongside `pollAINotes()` on the same interval.
+### 7.1 AI Creating Tasks via AI Output
 
-```
-async syncProjectsAndTasks():
-  if !settings.syncProjectsAndTasks or !settings.tbEndpointUrl: return
+When the AI creates tasks for the user (e.g., "create a task list for the CarChief sprint"):
 
-  // ── Sync Projects ──
-  1. Call get_all_projects → parse JSON array
-  2. Build a map of existing vault notes: scan projectsFolderBase for files
-     with tb_type: "project" in frontmatter → map tb_id → file path
-  3. For each project from server:
-     a. Determine target path based on parent hierarchy
-     b. If no existing note with this tb_id:
-        - Generate markdown with frontmatter
-        - Write file, store hash in syncedHashes
-     c. If existing note found:
-        - Compare server updated_at against note's tb_synced_at
-        - If server is newer: regenerate note content, write file, update hash
-        - If server is same or older: skip (vault version is current)
-     d. If file exists at wrong path (project renamed/reparented):
-        - Delete old file, write at new path
-  4. For each vault note with tb_type: "project" whose tb_id is NOT in
-     the server response (project was archived/deleted server-side):
-     - Delete the vault note (or move to an archive folder)
+1. **Write structured data to tasks table directly** — correct project associations, proper status, hierarchy
+2. **Write the markdown version to `ai_output`** — with `- [ ]` checkboxes, organized under headings, placed at a specific file path
+3. **Tag each task row with `reference_id`** = the target file path from step 2
 
-  // ── Sync Tasks ──
-  5. Call get_all_tasks → parse JSON array
-  6. Same logic as projects: map tb_id → file path, create/update/remove
-  7. Task file paths depend on project_name, so build paths after
-     projects are synced
-```
+When the plugin delivers the file and it later gets ingested:
+- The TaskExtractor finds checkboxes in the note
+- It matches them against existing tasks by `reference_id` (same file path) + content similarity
+- Matches found → links them (no duplicates created)
+- The thoughts get references to the already-existing task IDs
 
-### 4.2 Generating Note Content
+### 7.2 Tests (`tests/integration/enhanced_ingest.test.ts` — add to existing)
 
-Helper functions to build the markdown string for each type:
-
-```typescript
-function buildTaskNote(task: ServerTask): string {
-  const fm = [
-    '---',
-    'terrestrialBrainExclude: true',
-    'tb_type: task',
-    `tb_id: ${task.id}`,
-    `tb_status: ${task.status}`,
-  ];
-  if (task.due_by) fm.push(`tb_due: ${task.due_by}`);
-  if (task.project_id) {
-    fm.push(`tb_project_id: ${task.project_id}`);
-    fm.push(`tb_project_name: ${task.project_name}`);
-  }
-  fm.push(`tb_synced_at: ${Date.now()}`);
-  fm.push('---');
-  fm.push('');
-  fm.push(task.content);
-  return fm.join('\n');
-}
-
-function buildProjectNote(project: ServerProject): string {
-  const fm = [
-    '---',
-    'terrestrialBrainExclude: true',
-    'tb_type: project',
-    `tb_id: ${project.id}`,
-    `tb_project_type: ${project.type || ''}`,
-    `tb_parent_id: ${project.parent_id || ''}`,
-    'tb_archived: false',
-    `tb_synced_at: ${Date.now()}`,
-    '---',
-    '',
-    `# ${project.name}`,
-  ];
-  if (project.description) {
-    fm.push('');
-    fm.push(project.description);
-  }
-  return fm.join('\n');
-}
-```
-
-### 4.3 Call from `onload()`
-
-Add to `onload()` after the existing polling setup:
-
-```typescript
-// Sync projects and tasks on startup
-await this.syncProjectsAndTasks();
-
-// Then sync on the same poll interval
-this.registerInterval(
-  window.setInterval(() => this.syncProjectsAndTasks(), this.settings.pollIntervalMs)
-);
-```
+- Option 4 round-trip: AI creates tasks + ai_output → simulate plugin delivery → ingest detects → no duplicate tasks created
+- Thoughts from ingested note reference the pre-existing task IDs
 
 ---
 
-## Part 5 — Plugin: Vault → Server Sync (Write-Back)
+## Sprint 8 — Composite Query Tools
 
-### 5.1 Modify Handler — New Branch for TB-Managed Notes
+**Goal:** Add MCP tools that join across tables for complete-picture queries.
 
-The existing `modify` event handler calls `scheduleSync(file)` for markdown files. Add a new check **before** `scheduleSync`:
+### 8.1 `get_project_summary`
 
-```typescript
-this.registerEvent(
-  this.app.vault.on("modify", (file: TFile) => {
-    if (file.extension !== "md") return;
+- Input: `id` (uuid string, required)
+- Returns: formatted text with:
+  - Project details (name, type, description, parent, children)
+  - Open tasks for this project (content, status, due date)
+  - Recent thoughts referencing this project (last 10)
+  - Source notes that mentioned this project (from note_snapshots via thoughts)
 
-    // Check if this is a TB-managed note (project or task)
-    const cache = this.app.metadataCache.getFileCache(file);
-    const tbType = cache?.frontmatter?.tb_type;
-    if (tbType === "task" || tbType === "project") {
-      this.scheduleWriteBack(file);
-      return; // do NOT schedule ingest — these are excluded anyway
-    }
+### 8.2 `get_recent_activity`
 
-    this.scheduleSync(file);
-  })
-);
-```
+- Input: `days` (number, optional, default 7)
+- Returns: formatted text with:
+  - New/updated thoughts in the last N days
+  - Tasks created or completed in the last N days
+  - Projects created or updated in the last N days
+  - AI outputs delivered in the last N days
 
-### 5.2 `scheduleWriteBack()` — Debounced Write-Back
+### 8.3 Tests
 
-Same pattern as `scheduleSync` but with a shorter debounce (e.g. 5 seconds — these are quick metadata updates, not full note ingests):
-
-```typescript
-private writeBackTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-
-scheduleWriteBack(file: TFile) {
-  const existing = this.writeBackTimers.get(file.path);
-  if (existing) clearTimeout(existing);
-
-  const timer = setTimeout(async () => {
-    this.writeBackTimers.delete(file.path);
-    await this.processWriteBack(file);
-  }, 5000); // 5 second debounce
-  this.writeBackTimers.set(file.path, timer);
-}
-```
-
-Clear these timers in `onunload()` alongside the existing debounce timers.
-
-### 5.3 `processWriteBack()` — Detect Changes and Push
-
-```
-async processWriteBack(file: TFile):
-  1. Read file content
-  2. Compute hash of full content
-  3. If hash matches syncedHashes[file.path]: return (no change, or we just wrote this)
-     ← THIS IS THE LOOP BREAKER
-  4. Parse frontmatter to get tb_type, tb_id, and editable fields
-  5. Based on tb_type:
-
-     If "task":
-       - Parse body (strip frontmatter) → this is the task content
-       - Read tb_status, tb_due, tb_project_id from frontmatter
-       - Call update_task with: id, content, status, due_by, project_id
-       - Update tb_synced_at in frontmatter, rewrite file, update hash
-
-     If "project":
-       - Parse body: first # heading = name, rest = description
-       - Read tb_project_type, tb_parent_id, tb_archived from frontmatter
-       - If tb_archived changed to true: call archive_project instead of update
-       - Otherwise: call update_project with: id, name, type, parent_id, description
-       - Update tb_synced_at in frontmatter, rewrite file, update hash
-```
-
-### 5.4 Loop Prevention — Detailed Walkthrough
-
-This is the critical path. Here's exactly how loops are prevented:
-
-```
-Scenario A: Server changes a task → plugin updates vault note
-  1. syncProjectsAndTasks() detects server updated_at > tb_synced_at
-  2. Plugin rewrites the note file with new content
-  3. Plugin stores hash of written content in syncedHashes[path]
-  4. Obsidian fires "modify" event
-  5. scheduleWriteBack fires after 5s debounce
-  6. processWriteBack reads file, computes hash
-  7. Hash MATCHES syncedHashes → return immediately. NO write-back.
-  ✅ No loop.
-
-Scenario B: User edits a task note in Obsidian
-  1. User changes task content or frontmatter status
-  2. Obsidian fires "modify" event
-  3. scheduleWriteBack fires after 5s debounce
-  4. processWriteBack reads file, computes hash
-  5. Hash DOES NOT match syncedHashes (user changed something)
-  6. Plugin calls update_task on MCP
-  7. Plugin updates tb_synced_at in frontmatter, rewrites file
-  8. Plugin stores NEW hash in syncedHashes
-  9. Obsidian fires "modify" event again (from step 7 rewrite)
-  10. processWriteBack reads file, computes hash
-  11. Hash MATCHES syncedHashes → return immediately. NO second write-back.
-  ✅ No loop.
-
-Scenario C: Next poll after user edit
-  1. syncProjectsAndTasks() fetches tasks from server
-  2. Server's updated_at reflects the update from Scenario B
-  3. Compare server updated_at against note's tb_synced_at
-  4. tb_synced_at was updated in step 7 of Scenario B → server is NOT newer
-  5. Skip this note.
-  ✅ No loop.
-```
+- `get_project_summary` returns tasks, thoughts, and source notes for a project
+- `get_recent_activity` returns cross-table activity within date range
 
 ---
 
-## Part 6 — Parsing Helpers
+## Edge Cases (All Sprints)
 
-### 6.1 `parseTaskNote(content: string)`
-
-```typescript
-interface ParsedTaskNote {
-  tb_id: string;
-  content: string;         // body text after frontmatter
-  status: string;
-  due_by: string | null;
-  project_id: string | null;
-  synced_at: number;
-}
-
-function parseTaskNote(raw: string): ParsedTaskNote | null {
-  // Extract frontmatter and body
-  // Return null if tb_type !== "task" or tb_id missing
-}
-```
-
-### 6.2 `parseProjectNote(content: string)`
-
-```typescript
-interface ParsedProjectNote {
-  tb_id: string;
-  name: string;            // from first # heading or filename
-  description: string;     // body after heading
-  type: string | null;
-  parent_id: string | null;
-  archived: boolean;
-  synced_at: number;
-}
-
-function parseProjectNote(raw: string, filename: string): ParsedProjectNote | null {
-  // Extract frontmatter and body
-  // Parse first # heading as name, rest as description
-  // Return null if tb_type !== "project" or tb_id missing
-}
-```
-
-### 6.3 `sanitizeFilename(name: string): string`
-
-Strip characters that are invalid in filenames (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`). Truncate to 60 characters. Trim whitespace.
-
----
-
-## Part 7 — File Path Management
-
-### 7.1 Path Resolution
-
-```typescript
-function getProjectPath(project: ServerProject, allProjects: ServerProject[]): string {
-  // If project has parent_id, nest under parent folder
-  // e.g. "Projects/CarChief/CarChief Backend.md"
-  // If no parent, e.g. "Projects/CarChief.md"
-  const parts = [settings.projectsFolderBase];
-  if (project.parent_id) {
-    const parent = allProjects.find(p => p.id === project.parent_id);
-    if (parent) parts.push(sanitizeFilename(parent.name));
-  }
-  parts.push(sanitizeFilename(project.name) + ".md");
-  return parts.join("/");
-}
-
-function getTaskPath(task: ServerTask): string {
-  // e.g. "Tasks/CarChief/Set up local Supabase dev.md"
-  // e.g. "Tasks/Unassigned/Some task.md"
-  const parts = [settings.tasksFolderBase];
-  parts.push(task.project_name ? sanitizeFilename(task.project_name) : "Unassigned");
-  parts.push(sanitizeFilename(task.content) + ".md");
-  return parts.join("/");
-}
-```
-
-### 7.2 Handling Renames and Moves
-
-When a task's content changes or a project is renamed, the target file path changes. The sync logic must:
-
-1. Detect that `tb_id` maps to a file at the OLD path
-2. Delete (or rename) the old file
-3. Write the new file at the new path
-4. Update `syncedHashes` — remove old path entry, add new path entry
-
-The `tb_id → file path` map is rebuilt on each poll by scanning the folder for files with `tb_type` frontmatter.
-
----
-
-## Part 8 — Tests
-
-### 8.1 Integration Tests (`tests/integration/sync.test.ts`)
-
-**New MCP tool tests:**
-- `get_all_projects` returns JSON array with all seed projects
-- `get_all_projects` includes parent_name for child projects
-- `get_all_tasks` returns JSON array with all seed tasks
-- `get_all_tasks` includes project_name
-- `get_all_tasks` with `include_archived: false` excludes archived tasks
-
-**Round-trip tests:**
-- Create a project via `create_project` → `get_all_projects` → verify it appears with correct fields
-- Create a task via `create_task` → `get_all_tasks` → verify it appears
-- Update a task via `update_task` → `get_all_tasks` → verify `updated_at` changed
-- Archive a project → `get_all_projects` (default) → verify it's gone
-- Archive a project → `get_all_projects` with `include_archived: true` → verify it's there
-
-### 8.2 Loop Prevention Tests (`tests/integration/loop.test.ts`)
-
-These tests verify that the hash-based loop prevention works correctly. Since we can't run the Obsidian plugin in a test, we simulate the logic:
-
-```typescript
-// Test the core loop-prevention invariant:
-// "If content hasn't changed since last write, no sync fires"
-
-Deno.test("hash match prevents write-back", () => {
-  const content = buildTaskNote(sampleTask);
-  const hash = simpleHash(stripFrontmatter(content));
-  const syncedHashes: Record<string, string> = { "Tasks/Test.md": hash };
-
-  // Simulate modify event — hash matches, should skip
-  const currentHash = simpleHash(stripFrontmatter(content));
-  assertEquals(currentHash, syncedHashes["Tasks/Test.md"]);
-  // processWriteBack would return here — no MCP call
-});
-
-Deno.test("content change triggers write-back", () => {
-  const content = buildTaskNote(sampleTask);
-  const hash = simpleHash(stripFrontmatter(content));
-  const syncedHashes: Record<string, string> = { "Tasks/Test.md": hash };
-
-  // User edits the note
-  const edited = content.replace("original content", "user edited this");
-  const newHash = simpleHash(stripFrontmatter(edited));
-  assertNotEquals(newHash, syncedHashes["Tasks/Test.md"]);
-  // processWriteBack would call update_task here
-});
-
-Deno.test("write-back rewrite doesn't trigger second write-back", () => {
-  // Simulate: processWriteBack updates tb_synced_at and rewrites
-  const rewritten = buildTaskNote({ ...sampleTask, content: "user edited this" });
-  const rewriteHash = simpleHash(stripFrontmatter(rewritten));
-  const syncedHashes: Record<string, string> = { "Tasks/Test.md": rewriteHash };
-
-  // Next modify event from the rewrite
-  const currentHash = simpleHash(stripFrontmatter(rewritten));
-  assertEquals(currentHash, syncedHashes["Tasks/Test.md"]);
-  // processWriteBack would return here — loop broken
-});
-
-Deno.test("server poll after user edit doesn't overwrite", () => {
-  // Simulate: user edited at time T1, server got the update
-  // Next poll: server updated_at = T1, note tb_synced_at = T1
-  // Server is NOT newer → skip
-  const serverUpdatedAt = 1742558400000;
-  const noteSyncedAt = 1742558400000;
-  assertEquals(serverUpdatedAt <= noteSyncedAt, true);
-  // syncProjectsAndTasks would skip this note
-});
-```
-
-### 8.3 Parse/Generate Round-Trip Tests (`tests/integration/note_format.test.ts`)
-
-```typescript
-Deno.test("buildTaskNote → parseTaskNote round-trips correctly", () => {
-  const task = { id: "abc-123", content: "Test task", status: "open",
-                 due_by: "2026-03-25", project_id: "def-456",
-                 project_name: "TestProject" };
-  const note = buildTaskNote(task);
-  const parsed = parseTaskNote(note);
-  assertEquals(parsed.tb_id, task.id);
-  assertEquals(parsed.content.trim(), task.content);
-  assertEquals(parsed.status, task.status);
-  assertEquals(parsed.due_by, task.due_by);
-  assertEquals(parsed.project_id, task.project_id);
-});
-
-Deno.test("buildProjectNote → parseProjectNote round-trips correctly", () => {
-  const project = { id: "abc-123", name: "TestProject", type: "client",
-                    parent_id: null, description: "A test project" };
-  const note = buildProjectNote(project);
-  const parsed = parseProjectNote(note, "TestProject.md");
-  assertEquals(parsed.tb_id, project.id);
-  assertEquals(parsed.name, project.name);
-  assertEquals(parsed.type, project.type);
-  assertEquals(parsed.description.trim(), project.description);
-});
-
-Deno.test("sanitizeFilename handles edge cases", () => {
-  assertEquals(sanitizeFilename("foo/bar:baz"), "foobarbaz");
-  assertEquals(sanitizeFilename("a".repeat(100)), "a".repeat(60));
-  assertEquals(sanitizeFilename("  spaces  "), "spaces");
-});
-```
-
-### 8.4 End-to-End Simulation Test (`tests/integration/e2e_sync.test.ts`)
-
-This test simulates the full cycle without Obsidian:
-
-```typescript
-Deno.test("full sync cycle: create → poll → edit → write-back → poll", async () => {
-  // 1. Create a task via MCP
-  const createResult = await callTool("create_task", {
-    content: "E2E test task",
-    project_id: SEED_PROJECT_ID,
-  });
-  const taskId = extractId(createResult);
-
-  // 2. Simulate plugin poll: get_all_tasks
-  const tasksJson = await callTool("get_all_tasks", {});
-  const tasks = JSON.parse(tasksJson);
-  const task = tasks.find(t => t.id === taskId);
-  assertExists(task);
-
-  // 3. Simulate plugin writing note
-  const noteContent = buildTaskNote(task);
-  const hash1 = simpleHash(stripFrontmatter(noteContent));
-
-  // 4. Simulate user edit: change status
-  const edited = noteContent.replace("tb_status: open", "tb_status: done");
-  const hash2 = simpleHash(stripFrontmatter(edited));
-  assertNotEquals(hash1, hash2); // Change detected
-
-  // 5. Simulate write-back: update_task
-  await callTool("update_task", { id: taskId, status: "done" });
-
-  // 6. Simulate next poll: task should show done
-  const tasksJson2 = await callTool("get_all_tasks", { include_archived: true });
-  const tasks2 = JSON.parse(tasksJson2);
-  const updated = tasks2.find(t => t.id === taskId);
-  assertEquals(updated.status, "done");
-});
-```
-
----
-
-## Part 9 — Implementation Order
-
-1. **MCP tools first:** Add `get_all_projects` and `get_all_tasks` to the edge function. Test with curl / integration tests.
-2. **Note generation helpers:** Write `buildTaskNote`, `buildProjectNote`, `sanitizeFilename` as pure functions. Test with round-trip unit tests.
-3. **Server → Vault sync:** Implement `syncProjectsAndTasks()` in the plugin. Test by running the plugin in the test vault — verify notes appear in `Projects/` and `Tasks/` folders.
-4. **Vault → Server write-back:** Implement `scheduleWriteBack` and `processWriteBack`. Test by editing notes in Obsidian and checking the DB via Studio.
-5. **Loop prevention tests:** Run the full test suite, especially the loop simulation tests.
-6. **Manual verification:** Edit a task in Obsidian, wait 5 seconds, check Studio. Edit the same task in Studio, wait for poll, check Obsidian. Repeat several times to confirm no loops.
-
----
-
-## Part 10 — Edge Cases to Handle
-
-- **Concurrent edits:** If the user edits in Obsidian while a poll is writing, the poll should not clobber user changes. The hash check handles this — if the file hash doesn't match what the poll would write, the user has unsaved changes. In this case, skip the server → vault update for this file and let the next write-back push the user's version.
-- **Deleted notes:** If the user deletes a task/project note from the vault, the plugin should NOT delete it from the server. The note will be recreated on next poll. To actually delete/archive, the user should set `tb_archived: true` in frontmatter.
-- **New tasks created in Obsidian:** Out of scope for this change. Tasks are created via Claude/MCP. The vault is a view + edit surface, not a creation surface. (Could be added later by watching for new files in the Tasks folder without `tb_id`.)
-- **Filename collisions:** If two tasks have the same content under the same project, append a short hash suffix to the filename: `Task name (a1b2).md`.
+- **Checkboxes inside code blocks:** The structural parser must skip fenced code blocks (``` or ~~~). A `- [ ]` inside a code block is not a task.
+- **Duplicate task text:** Two checkboxes with identical text in the same note. Disambiguate by line position during reconciliation.
+- **Task moved between notes:** User cuts a `- [ ]` from one note and pastes it in another. The old note's ingest won't find the task → it stays in the DB (we don't delete tasks from re-ingest). The new note's ingest creates a new task. Mitigation: semantic dedup during TaskExtractor — before creating a new task, check if an identical-content task already exists for the same project.
+- **Project folder renamed:** User renames `/projects/CarChief/` to `/projects/DealerPro/`. Next ingest creates a new project "DealerPro." Old "CarChief" project stays in DB. User would need to manually archive CarChief or the AI can detect the rename heuristically.
+- **Very long notes:** Notes with 100+ checkboxes. The AI call for project association should batch if needed. The structural parse is O(lines) and always fast.
+- **`capture_thought` with no tasks or projects:** The extractors run but return empty arrays. No harm — the thought is stored normally with empty references.
+- **AI Output file already exists in vault:** The plugin overwrites it. The AI should be aware of this and avoid clobbering user files — use paths under `/projects/` or a dedicated output folder.
