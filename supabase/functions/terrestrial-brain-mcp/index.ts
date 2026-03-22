@@ -9,6 +9,7 @@ import { register as registerThoughts } from "./tools/thoughts.ts";
 import { register as registerProjects } from "./tools/projects.ts";
 import { register as registerTasks } from "./tools/tasks.ts";
 import { register as registerAIOutput } from "./tools/ai_output.ts";
+import { register as registerQueries } from "./tools/queries.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -27,6 +28,7 @@ registerThoughts(server, supabase);
 registerProjects(server, supabase);
 registerTasks(server, supabase);
 registerAIOutput(server, supabase);
+registerQueries(server, supabase);
 
 // ─── Hono App with Auth Check ─────────────────────────────────────────────────
 
