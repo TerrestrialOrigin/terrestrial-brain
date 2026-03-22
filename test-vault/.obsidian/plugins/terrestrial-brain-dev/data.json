@@ -1,0 +1,11 @@
+{
+  "settings": {
+    "tbEndpointUrl": "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123",
+    "excludeTag": "terrestrialBrainExclude",
+    "debounceMs": 300000
+  },
+  "syncedHashes": {
+    "Test Notes/Anastasia test1.md": "-356175561",
+    "Test Notes/sample-note.md": "1159760066"
+  }
+}

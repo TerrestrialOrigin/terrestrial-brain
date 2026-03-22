@@ -1,0 +1,491 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { getEmbedding, extractMetadata, freshIngest } from "../helpers.ts";
+
+const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
+
+export function register(server: McpServer, supabase: SupabaseClient) {
+  // Tool 1: Semantic Search
+  server.registerTool(
+    "search_thoughts",
+    {
+      title: "Search Thoughts",
+      description:
+        "Search captured thoughts by meaning. Use this when the user asks about a topic, person, or idea they've previously captured.",
+      inputSchema: {
+        query: z.string().describe("What to search for"),
+        limit: z.number().optional().default(10),
+        threshold: z.number().optional().default(0.5),
+      },
+    },
+    async ({ query, limit, threshold }) => {
+      try {
+        const qEmb = await getEmbedding(query);
+        const { data, error } = await supabase.rpc("match_thoughts", {
+          query_embedding: qEmb,
+          match_threshold: threshold,
+          match_count: limit,
+          filter: {},
+        });
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Search error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        if (!data || data.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: `No thoughts found matching "${query}".` }],
+          };
+        }
+
+        const results = data.map(
+          (
+            t: {
+              content: string;
+              metadata: Record<string, unknown>;
+              similarity: number;
+              created_at: string;
+            },
+            i: number
+          ) => {
+            const m = t.metadata || {};
+            const parts = [
+              `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
+              `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
+              `Type: ${m.type || "unknown"}`,
+            ];
+            if (Array.isArray(m.topics) && m.topics.length)
+              parts.push(`Topics: ${(m.topics as string[]).join(", ")}`);
+            if (Array.isArray(m.people) && m.people.length)
+              parts.push(`People: ${(m.people as string[]).join(", ")}`);
+            if (Array.isArray(m.action_items) && m.action_items.length)
+              parts.push(`Actions: ${(m.action_items as string[]).join("; ")}`);
+            parts.push(`\n${t.content}`);
+            return parts.join("\n");
+          }
+        );
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Found ${data.length} thought(s):\n\n${results.join("\n\n")}`,
+          }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 2: List Recent
+  server.registerTool(
+    "list_thoughts",
+    {
+      title: "List Recent Thoughts",
+      description:
+        "List recently captured thoughts with optional filters by type, topic, person, or time range.",
+      inputSchema: {
+        limit: z.number().optional().default(10),
+        type: z.string().optional().describe("Filter by type: observation, task, idea, reference, person_note"),
+        topic: z.string().optional().describe("Filter by topic tag"),
+        person: z.string().optional().describe("Filter by person mentioned"),
+        days: z.number().optional().describe("Only thoughts from the last N days"),
+      },
+    },
+    async ({ limit, type, topic, person, days }) => {
+      try {
+        let q = supabase
+          .from("thoughts")
+          .select("content, metadata, created_at")
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (type) q = q.contains("metadata", { type });
+        if (topic) q = q.contains("metadata", { topics: [topic] });
+        if (person) q = q.contains("metadata", { people: [person] });
+        if (days) {
+          const since = new Date();
+          since.setDate(since.getDate() - days);
+          q = q.gte("created_at", since.toISOString());
+        }
+
+        const { data, error } = await q;
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        if (!data || !data.length) {
+          return { content: [{ type: "text" as const, text: "No thoughts found." }] };
+        }
+
+        const results = data.map(
+          (
+            t: { content: string; metadata: Record<string, unknown>; created_at: string },
+            i: number
+          ) => {
+            const m = t.metadata || {};
+            const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
+            return `${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
+          }
+        );
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `${data.length} recent thought(s):\n\n${results.join("\n\n")}`,
+          }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 3: Stats
+  server.registerTool(
+    "thought_stats",
+    {
+      title: "Thought Statistics",
+      description: "Get a summary of all captured thoughts: totals, types, top topics, and people.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const { count } = await supabase
+          .from("thoughts")
+          .select("*", { count: "exact", head: true });
+
+        const { data } = await supabase
+          .from("thoughts")
+          .select("metadata, created_at")
+          .order("created_at", { ascending: false });
+
+        const types: Record<string, number> = {};
+        const topics: Record<string, number> = {};
+        const people: Record<string, number> = {};
+
+        for (const r of data || []) {
+          const m = (r.metadata || {}) as Record<string, unknown>;
+          if (m.type) types[m.type as string] = (types[m.type as string] || 0) + 1;
+          if (Array.isArray(m.topics))
+            for (const t of m.topics) topics[t as string] = (topics[t as string] || 0) + 1;
+          if (Array.isArray(m.people))
+            for (const p of m.people) people[p as string] = (people[p as string] || 0) + 1;
+        }
+
+        const sort = (o: Record<string, number>): [string, number][] =>
+          Object.entries(o)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10);
+
+        const lines: string[] = [
+          `Total thoughts: ${count}`,
+          `Date range: ${
+            data?.length
+              ? new Date(data[data.length - 1].created_at).toLocaleDateString() +
+                " → " +
+                new Date(data[0].created_at).toLocaleDateString()
+              : "N/A"
+          }`,
+          "",
+          "Types:",
+          ...sort(types).map(([k, v]) => `  ${k}: ${v}`),
+        ];
+
+        if (Object.keys(topics).length) {
+          lines.push("", "Top topics:");
+          for (const [k, v] of sort(topics)) lines.push(`  ${k}: ${v}`);
+        }
+
+        if (Object.keys(people).length) {
+          lines.push("", "People mentioned:");
+          for (const [k, v] of sort(people)) lines.push(`  ${k}: ${v}`);
+        }
+
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 4: Capture Thought
+  server.registerTool(
+    "capture_thought",
+    {
+      title: "Capture Thought",
+      description:
+        "Save a new thought to the Open Brain. Generates an embedding and extracts metadata automatically. Use this when the user wants to save something to their brain directly from any AI client — notes, insights, decisions, or migrated content from other systems.",
+      inputSchema: {
+        content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
+      },
+    },
+    async ({ content }) => {
+      try {
+        const [embedding, metadata] = await Promise.all([
+          getEmbedding(content),
+          extractMetadata(content),
+        ]);
+
+        const { error } = await supabase.from("thoughts").insert({
+          content,
+          embedding,
+          metadata: { ...metadata, source: "mcp" },
+        });
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to capture: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        const meta = metadata as Record<string, unknown>;
+        let confirmation = `Captured as ${meta.type || "thought"}`;
+        if (Array.isArray(meta.topics) && meta.topics.length)
+          confirmation += ` — ${(meta.topics as string[]).join(", ")}`;
+        if (Array.isArray(meta.people) && meta.people.length)
+          confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
+        if (Array.isArray(meta.action_items) && meta.action_items.length)
+          confirmation += ` | Actions: ${(meta.action_items as string[]).join("; ")}`;
+
+        return {
+          content: [{ type: "text" as const, text: confirmation }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 5: Ingest Note (with reconciliation)
+  server.registerTool(
+    "ingest_note",
+    {
+      title: "Ingest Note",
+      description:
+        "Split a note into discrete standalone thoughts and sync them. If note_id is provided and thoughts from a previous version exist, reconciles the changes — updating modified thoughts, adding new ones, deleting removed ones, and leaving unchanged thoughts alone. Safe to call repeatedly on the same note.",
+      inputSchema: {
+        content: z.string().describe("The full note content to ingest"),
+        title: z.string().optional().describe("Note title or filename — used as context for splitting"),
+        note_id: z.string().optional().describe("Stable identifier for this note (vault-relative path e.g. 'Projects/sprint-notes.md'). Enables reconciliation on re-sync."),
+      },
+    },
+    async ({ content, title, note_id }) => {
+      try {
+        // Step 1: Fetch existing thoughts for this note
+        type ExistingThought = { id: string; content: string; created_at: string };
+        let existingThoughts: ExistingThought[] = [];
+
+        if (note_id) {
+          const { data, error } = await supabase
+            .from("thoughts")
+            .select("id, content, created_at")
+            .eq("reference_id", note_id)
+            .order("created_at", { ascending: true });
+
+          if (error) throw new Error(`Failed to fetch existing thoughts: ${error.message}`);
+          existingThoughts = data || [];
+        }
+
+        // Step 2: No existing thoughts → fresh split and insert
+        if (existingThoughts.length === 0) {
+          return await freshIngest(supabase, content, title, note_id);
+        }
+
+        // Step 3: Existing thoughts found → reconcile with updated note
+        const existingForPrompt = existingThoughts
+          .map((t) => `[ID:${t.id}] (captured ${new Date(t.created_at).toLocaleDateString()})\n${t.content}`)
+          .join("\n\n");
+
+        // Fetch active projects for project detection
+        const { data: projects } = await supabase
+          .from("projects")
+          .select("id, name")
+          .is("archived_at", null);
+
+        const projectList = (projects || [])
+          .map((p: { id: string; name: string }) => `- "${p.name}" (id: ${p.id})`)
+          .join("\n");
+
+        const projectInstruction = projectList
+          ? `\n\nKNOWN PROJECTS (tag thoughts that clearly relate to one of these):\n${projectList}\n\nFor "update" and "add" items, when a thought clearly relates to a known project, include a "project_id" field.\nFor "update": {"id": "...", "content": "...", "project_id": "the-uuid"}\nFor "add": {"thought": "...", "project_id": "the-uuid"} instead of a plain string.\nOnly tag if the connection is explicit, not tangential.`
+          : "";
+
+        const reconcileResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "openai/gpt-4o-mini",
+            response_format: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
+
+You will receive:
+- EXISTING THOUGHTS: previously captured thoughts, each tagged with [ID:uuid]
+- NEW NOTE CONTENT: the current version of the note
+
+Produce a reconciliation plan:
+- "keep": IDs of thoughts that are still accurate and essentially unchanged
+- "update": thoughts whose core idea is the same but details changed — provide revised content (1-3 sentences, self-contained)
+- "add": genuinely new topics or ideas not represented in any existing thought
+- "delete": IDs of thoughts whose topic no longer appears in the note
+
+Rules:
+- Do NOT duplicate. Same idea expressed differently = keep the existing one.
+- Do NOT add a thought for something you are already updating.
+- Every thought must be fully self-contained — readable without context.
+- Preserve specificity: names, dates, project names, decisions, dollar amounts.
+- Prefix decisions with "Decision:", tasks with "TODO:", preserve magical working framing naturally.
+
+Return ONLY valid JSON in this exact structure:
+{
+  "keep": ["id1", "id2"],
+  "update": [{"id": "id3", "content": "revised text"}],
+  "add": ["new thought 1", "new thought 2"],
+  "delete": ["id4"]
+}${projectInstruction}`,
+              },
+              {
+                role: "user",
+                content: `EXISTING THOUGHTS:\n${existingForPrompt}\n\n---\n\nNEW NOTE CONTENT (title: ${title || "untitled"}):\n${content}`,
+              },
+            ],
+          }),
+        });
+
+        if (!reconcileResponse.ok) {
+          const msg = await reconcileResponse.text().catch(() => "");
+          throw new Error(`OpenRouter reconcile failed: ${reconcileResponse.status} ${msg}`);
+        }
+
+        const reconcileData = await reconcileResponse.json();
+        let plan: {
+          keep: string[];
+          update: { id: string; content: string; project_id?: string }[];
+          add: (string | { thought: string; project_id?: string })[];
+          delete: string[];
+        } = { keep: [], update: [], add: [], delete: [] };
+
+        try {
+          plan = JSON.parse(reconcileData.choices[0].message.content);
+        } catch {
+          console.warn("Reconciliation parse failed, falling back to fresh ingest");
+          return await freshIngest(supabase, content, title, note_id);
+        }
+
+        // Step 4: Execute reconciliation plan
+        const ops: Promise<void>[] = [];
+        let updated = 0, added = 0, deleted = 0;
+
+        for (const updateItem of (plan.update || [])) {
+          ops.push((async () => {
+            const [embedding, metadata] = await Promise.all([
+              getEmbedding(updateItem.content),
+              extractMetadata(updateItem.content),
+            ]);
+            const { error } = await supabase
+              .from("thoughts")
+              .update({
+                content: updateItem.content,
+                embedding,
+                metadata: {
+                  ...metadata,
+                  source: "obsidian",
+                  note_title: title || null,
+                  updated_at: new Date().toISOString(),
+                  ...(updateItem.project_id ? { references: { project_id: updateItem.project_id } } : {}),
+                },
+              })
+              .eq("id", updateItem.id);
+            if (error) throw new Error(`Update failed for ${updateItem.id}: ${error.message}`);
+            updated++;
+          })());
+        }
+
+        for (const addItem of (plan.add || [])) {
+          const thoughtContent = typeof addItem === "string" ? addItem : addItem.thought;
+          const projectId = typeof addItem === "object" ? addItem.project_id || null : null;
+          ops.push((async () => {
+            const [embedding, metadata] = await Promise.all([
+              getEmbedding(thoughtContent),
+              extractMetadata(thoughtContent),
+            ]);
+            const { error } = await supabase.from("thoughts").insert({
+              content: thoughtContent,
+              embedding,
+              reference_id: note_id || null,
+              metadata: {
+                ...metadata,
+                source: "obsidian",
+                note_title: title || null,
+                ...(projectId ? { references: { project_id: projectId } } : {}),
+              },
+            });
+            if (error) throw new Error(`Insert failed: ${error.message}`);
+            added++;
+          })());
+        }
+
+        for (const id of (plan.delete || [])) {
+          ops.push((async () => {
+            const { error } = await supabase.from("thoughts").delete().eq("id", id);
+            if (error) throw new Error(`Delete failed for ${id}: ${error.message}`);
+            deleted++;
+          })());
+        }
+
+        const results = await Promise.allSettled(ops);
+        const failures = results.filter((r) => r.status === "rejected").length;
+
+        const kept = (plan.keep || []).length;
+        const parts: string[] = [];
+        if (kept > 0) parts.push(`${kept} unchanged`);
+        if (updated > 0) parts.push(`${updated} updated`);
+        if (added > 0) parts.push(`${added} added`);
+        if (deleted > 0) parts.push(`${deleted} removed`);
+        if (failures > 0) parts.push(`${failures} failed`);
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Synced "${title || note_id || "note"}": ${parts.join(", ") || "no changes"}`,
+          }],
+          isError: failures > 0 && failures === ops.length,
+        };
+
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+}
