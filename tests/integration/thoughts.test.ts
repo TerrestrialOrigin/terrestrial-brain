@@ -85,11 +85,17 @@ CarChief Backend API should expose a cache-invalidation webhook so the dealer da
     await response.json();
   assertEquals(thoughts.length > 0, true, "Should have ingested at least one thought");
 
-  // At least one thought should have the CarChief project_id in references
+  // At least one thought should have the CarChief project_id in references (new array format or old single-id format)
   const taggedThoughts = thoughts.filter(
-    (thought) =>
-      thought.metadata?.references &&
-      (thought.metadata.references as Record<string, string>).project_id === CARCHIEF_PROJECT_ID
+    (thought) => {
+      const refs = thought.metadata?.references as Record<string, unknown> | undefined;
+      if (!refs) return false;
+      // New format: references.projects is an array containing the ID
+      if (Array.isArray(refs.projects) && (refs.projects as string[]).includes(CARCHIEF_PROJECT_ID)) return true;
+      // Old format: references.project_id is the ID string
+      if (refs.project_id === CARCHIEF_PROJECT_ID) return true;
+      return false;
+    }
   );
   assertEquals(
     taggedThoughts.length > 0,

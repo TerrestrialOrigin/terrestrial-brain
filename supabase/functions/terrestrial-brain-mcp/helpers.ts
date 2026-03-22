@@ -3,6 +3,22 @@ import { SupabaseClient } from "@supabase/supabase-js";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
+// ---------------------------------------------------------------------------
+// Backwards-compatible references reader
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads project references from thought metadata, supporting both
+ * the old `{ project_id: "uuid" }` and new `{ projects: ["uuid"] }` formats.
+ */
+export function getProjectRefs(metadata: Record<string, unknown>): string[] {
+  const refs = metadata?.references as Record<string, unknown> | undefined;
+  if (!refs) return [];
+  if (Array.isArray(refs.projects)) return refs.projects as string[];
+  if (typeof refs.project_id === "string") return [refs.project_id];
+  return [];
+};
+
 export async function getEmbedding(text: string): Promise<number[]> {
   const r = await fetch(`${OPENROUTER_BASE}/embeddings`, {
     method: "POST",
@@ -60,22 +76,10 @@ export async function freshIngest(
   supabase: SupabaseClient,
   content: string,
   title: string | undefined,
-  note_id: string | undefined
+  note_id: string | undefined,
+  noteSnapshotId?: string | null,
+  references?: Record<string, string[]>,
 ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
-  // Fetch active projects for project detection
-  const { data: projects } = await supabase
-    .from("projects")
-    .select("id, name")
-    .is("archived_at", null);
-
-  const projectList = (projects || [])
-    .map((p: { id: string; name: string }) => `- "${p.name}" (id: ${p.id})`)
-    .join("\n");
-
-  const projectInstruction = projectList
-    ? `\n\nKNOWN PROJECTS (tag thoughts that clearly relate to one of these):\n${projectList}\n\nWhen a thought clearly relates to a known project, return it as an object instead of a plain string:\n{"thought": "the thought text", "project_id": "the-uuid"}\nThoughts with no clear project match should remain plain strings.\nOnly tag a thought if the connection is explicit, not just tangential.`
-    : "";
-
   const splitResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: "POST",
     headers: {
@@ -100,7 +104,7 @@ RULES:
 - Skip: bare headings, lone tags, empty sections
 - If the entire note is already a single coherent thought, return it as a single-item array
 
-Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}${projectInstruction}`,
+Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
         },
         {
           role: "user",
@@ -116,21 +120,21 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}${projectIn
   }
 
   const splitData = await splitResponse.json();
-  const thoughts: { content: string; project_id: string | null }[] = [];
+  const thoughts: string[] = [];
 
   try {
     const parsed = JSON.parse(splitData.choices[0].message.content);
     if (Array.isArray(parsed.thoughts)) {
       for (const item of parsed.thoughts) {
         if (typeof item === "string" && item.trim().length > 0) {
-          thoughts.push({ content: item, project_id: null });
+          thoughts.push(item);
         } else if (typeof item === "object" && item.thought && typeof item.thought === "string" && item.thought.trim().length > 0) {
-          thoughts.push({ content: item.thought, project_id: item.project_id || null });
+          thoughts.push(item.thought);
         }
       }
     }
   } catch {
-    thoughts.push({ content: content.trim(), project_id: null });
+    thoughts.push(content.trim());
   }
 
   if (thoughts.length === 0) {
@@ -139,21 +143,24 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}${projectIn
     };
   }
 
+  const pipelineRefs = references || {};
+
   const results = await Promise.allSettled(
-    thoughts.map(async (thought) => {
+    thoughts.map(async (thoughtContent) => {
       const [embedding, metadata] = await Promise.all([
-        getEmbedding(thought.content),
-        extractMetadata(thought.content),
+        getEmbedding(thoughtContent),
+        extractMetadata(thoughtContent),
       ]);
       const { error } = await supabase.from("thoughts").insert({
-        content: thought.content,
+        content: thoughtContent,
         embedding,
         reference_id: note_id || null,
+        note_snapshot_id: noteSnapshotId || null,
         metadata: {
           ...metadata,
           source: "obsidian",
           note_title: title || null,
-          ...(thought.project_id ? { references: { project_id: thought.project_id } } : {}),
+          references: pipelineRefs,
         },
       });
       if (error) throw new Error(error.message);
@@ -163,10 +170,17 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}${projectIn
   const succeeded = results.filter((r) => r.status === "fulfilled").length;
   const failed = results.filter((r) => r.status === "rejected").length;
 
+  const taskCount = pipelineRefs.tasks?.length || 0;
+  const projectCount = pipelineRefs.projects?.length || 0;
+  const extractionParts: string[] = [];
+  if (taskCount > 0) extractionParts.push(`${taskCount} task${taskCount !== 1 ? "s" : ""} detected`);
+  if (projectCount > 0) extractionParts.push(`${projectCount} project${projectCount !== 1 ? "s" : ""} linked`);
+  const extractionSuffix = extractionParts.length > 0 ? ` — ${extractionParts.join(", ")}` : "";
+
   return {
     content: [{
       type: "text" as const,
-      text: `Captured ${succeeded} thought${succeeded !== 1 ? "s" : ""} from "${title || "note"}"${failed > 0 ? ` — ${failed} failed` : ""}`,
+      text: `Captured ${succeeded} thought${succeeded !== 1 ? "s" : ""} from "${title || "note"}"${failed > 0 ? ` — ${failed} failed` : ""}${extractionSuffix}`,
     }],
     isError: failed === thoughts.length,
   };

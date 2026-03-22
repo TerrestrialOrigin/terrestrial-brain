@@ -2,6 +2,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getEmbedding, extractMetadata, freshIngest } from "../helpers.ts";
+import { parseNote } from "../parser.ts";
+import { runExtractionPipeline } from "../extractors/pipeline.ts";
+import { ProjectExtractor } from "../extractors/project-extractor.ts";
+import { TaskExtractor } from "../extractors/task-extractor.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
@@ -240,6 +244,19 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     },
     async ({ content }) => {
       try {
+        // Run structural parser + extractor pipeline
+        let references: Record<string, string[]> = {};
+        try {
+          const parsedNote = parseNote(content, null, null, "mcp");
+          references = await runExtractionPipeline(
+            parsedNote,
+            [new ProjectExtractor(), new TaskExtractor()],
+            supabase,
+          );
+        } catch (pipelineError) {
+          console.error(`capture_thought pipeline error: ${(pipelineError as Error).message}`);
+        }
+
         const [embedding, metadata] = await Promise.all([
           getEmbedding(content),
           extractMetadata(content),
@@ -248,7 +265,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         const { error } = await supabase.from("thoughts").insert({
           content,
           embedding,
-          metadata: { ...metadata, source: "mcp" },
+          metadata: { ...metadata, source: "mcp", references },
         });
 
         if (error) {
@@ -294,7 +311,41 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     },
     async ({ content, title, note_id }) => {
       try {
-        // Step 1: Fetch existing thoughts for this note
+        // Step 1: Upsert note snapshot
+        let noteSnapshotId: string | null = null;
+        if (note_id) {
+          const { data: snapshot, error: snapshotError } = await supabase
+            .from("note_snapshots")
+            .upsert(
+              { reference_id: note_id, title: title || null, content, source: "obsidian" },
+              { onConflict: "reference_id" },
+            )
+            .select("id")
+            .single();
+
+          if (snapshotError) {
+            console.error(`Note snapshot upsert failed: ${snapshotError.message}`);
+          } else {
+            noteSnapshotId = snapshot.id;
+          }
+        }
+
+        // Step 2: Structural parse
+        const parsedNote = parseNote(content, title || null, note_id || null, "obsidian");
+
+        // Step 3: Run extractor pipeline
+        let references: Record<string, string[]> = {};
+        try {
+          references = await runExtractionPipeline(
+            parsedNote,
+            [new ProjectExtractor(), new TaskExtractor()],
+            supabase,
+          );
+        } catch (pipelineError) {
+          console.error(`Extractor pipeline error: ${(pipelineError as Error).message}`);
+        }
+
+        // Step 4: Fetch existing thoughts for this note
         type ExistingThought = { id: string; content: string; created_at: string };
         let existingThoughts: ExistingThought[] = [];
 
@@ -309,29 +360,15 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           existingThoughts = data || [];
         }
 
-        // Step 2: No existing thoughts → fresh split and insert
+        // Step 5: No existing thoughts → fresh split and insert
         if (existingThoughts.length === 0) {
-          return await freshIngest(supabase, content, title, note_id);
+          return await freshIngest(supabase, content, title, note_id, noteSnapshotId, references);
         }
 
-        // Step 3: Existing thoughts found → reconcile with updated note
+        // Step 6: Existing thoughts found → reconcile with updated note
         const existingForPrompt = existingThoughts
           .map((t) => `[ID:${t.id}] (captured ${new Date(t.created_at).toLocaleDateString()})\n${t.content}`)
           .join("\n\n");
-
-        // Fetch active projects for project detection
-        const { data: projects } = await supabase
-          .from("projects")
-          .select("id, name")
-          .is("archived_at", null);
-
-        const projectList = (projects || [])
-          .map((p: { id: string; name: string }) => `- "${p.name}" (id: ${p.id})`)
-          .join("\n");
-
-        const projectInstruction = projectList
-          ? `\n\nKNOWN PROJECTS (tag thoughts that clearly relate to one of these):\n${projectList}\n\nFor "update" and "add" items, when a thought clearly relates to a known project, include a "project_id" field.\nFor "update": {"id": "...", "content": "...", "project_id": "the-uuid"}\nFor "add": {"thought": "...", "project_id": "the-uuid"} instead of a plain string.\nOnly tag if the connection is explicit, not tangential.`
-          : "";
 
         const reconcileResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
           method: "POST",
@@ -370,7 +407,7 @@ Return ONLY valid JSON in this exact structure:
   "update": [{"id": "id3", "content": "revised text"}],
   "add": ["new thought 1", "new thought 2"],
   "delete": ["id4"]
-}${projectInstruction}`,
+}`,
               },
               {
                 role: "user",
@@ -388,8 +425,8 @@ Return ONLY valid JSON in this exact structure:
         const reconcileData = await reconcileResponse.json();
         let plan: {
           keep: string[];
-          update: { id: string; content: string; project_id?: string }[];
-          add: (string | { thought: string; project_id?: string })[];
+          update: { id: string; content: string }[];
+          add: string[];
           delete: string[];
         } = { keep: [], update: [], add: [], delete: [] };
 
@@ -397,10 +434,10 @@ Return ONLY valid JSON in this exact structure:
           plan = JSON.parse(reconcileData.choices[0].message.content);
         } catch {
           console.warn("Reconciliation parse failed, falling back to fresh ingest");
-          return await freshIngest(supabase, content, title, note_id);
+          return await freshIngest(supabase, content, title, note_id, noteSnapshotId, references);
         }
 
-        // Step 4: Execute reconciliation plan
+        // Step 7: Execute reconciliation plan
         const ops: Promise<void>[] = [];
         let updated = 0, added = 0, deleted = 0;
 
@@ -415,12 +452,13 @@ Return ONLY valid JSON in this exact structure:
               .update({
                 content: updateItem.content,
                 embedding,
+                note_snapshot_id: noteSnapshotId,
                 metadata: {
                   ...metadata,
                   source: "obsidian",
                   note_title: title || null,
                   updated_at: new Date().toISOString(),
-                  ...(updateItem.project_id ? { references: { project_id: updateItem.project_id } } : {}),
+                  references,
                 },
               })
               .eq("id", updateItem.id);
@@ -430,22 +468,22 @@ Return ONLY valid JSON in this exact structure:
         }
 
         for (const addItem of (plan.add || [])) {
-          const thoughtContent = typeof addItem === "string" ? addItem : addItem.thought;
-          const projectId = typeof addItem === "object" ? addItem.project_id || null : null;
+          const thoughtContent = typeof addItem === "string" ? addItem : (addItem as unknown as { thought: string }).thought || addItem;
           ops.push((async () => {
             const [embedding, metadata] = await Promise.all([
-              getEmbedding(thoughtContent),
-              extractMetadata(thoughtContent),
+              getEmbedding(thoughtContent as string),
+              extractMetadata(thoughtContent as string),
             ]);
             const { error } = await supabase.from("thoughts").insert({
               content: thoughtContent,
               embedding,
               reference_id: note_id || null,
+              note_snapshot_id: noteSnapshotId,
               metadata: {
                 ...metadata,
                 source: "obsidian",
                 note_title: title || null,
-                ...(projectId ? { references: { project_id: projectId } } : {}),
+                references,
               },
             });
             if (error) throw new Error(`Insert failed: ${error.message}`);
@@ -472,10 +510,17 @@ Return ONLY valid JSON in this exact structure:
         if (deleted > 0) parts.push(`${deleted} removed`);
         if (failures > 0) parts.push(`${failures} failed`);
 
+        const taskCount = references.tasks?.length || 0;
+        const projectCount = references.projects?.length || 0;
+        const extractionParts: string[] = [];
+        if (taskCount > 0) extractionParts.push(`${taskCount} task${taskCount !== 1 ? "s" : ""} detected`);
+        if (projectCount > 0) extractionParts.push(`${projectCount} project${projectCount !== 1 ? "s" : ""} linked`);
+        const extractionSuffix = extractionParts.length > 0 ? ` | ${extractionParts.join(", ")}` : "";
+
         return {
           content: [{
             type: "text" as const,
-            text: `Synced "${title || note_id || "note"}": ${parts.join(", ") || "no changes"}`,
+            text: `Synced "${title || note_id || "note"}": ${parts.join(", ") || "no changes"}${extractionSuffix}`,
           }],
           isError: failures > 0 && failures === ops.length,
         };
