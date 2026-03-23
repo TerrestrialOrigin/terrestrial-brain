@@ -11,12 +11,17 @@ import {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface AIOutput {
+interface AIOutputMetadata {
   id: string;
   title: string;
-  content: string;
   file_path: string;
+  content_size: number;
   created_at: string;
+}
+
+interface AIOutputContent {
+  id: string;
+  content: string;
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -128,7 +133,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
           .setTitle("Pull AI Output from Terrestrial Brain")
           .setIcon("download")
           .onClick(async () => {
-            await this.pollAIOutput();
+            await this.pollAIOutput({ manual: true });
           });
       });
 
@@ -140,7 +145,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
       id: "poll-ai-output",
       name: "Pull AI output from Terrestrial Brain",
       callback: async () => {
-        await this.pollAIOutput();
+        await this.pollAIOutput({ manual: true });
       },
     });
 
@@ -188,22 +193,29 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   // ─── AI Output Polling ─────────────────────────────────────────────────────
 
-  async pollAIOutput() {
+  async pollAIOutput(options: { manual?: boolean } = {}) {
     if (!this.settings.tbEndpointUrl) return;
     if (this.pollInProgress) return;
 
     this.pollInProgress = true;
     try {
-      const raw = await this.callMCP("get_pending_ai_output", {});
-      const outputs: AIOutput[] = JSON.parse(raw);
-      if (!outputs.length) return;
+      // Phase 1: Fetch metadata only (no content body)
+      const raw = await this.callMCP("get_pending_ai_output_metadata", {});
+      const metadataList: AIOutputMetadata[] = JSON.parse(raw);
 
-      const accepted = await this.showConfirmationDialog(outputs);
+      if (!metadataList.length) {
+        if (options.manual) {
+          new Notice("No pending AI output to pull");
+        }
+        return;
+      }
+
+      const accepted = await this.showConfirmationDialog(metadataList);
 
       if (accepted) {
-        await this.deliverOutputs(outputs);
+        await this.fetchAndDeliverOutputs(metadataList);
       } else {
-        await this.rejectOutputs(outputs);
+        await this.rejectOutputs(metadataList);
       }
     } catch (err) {
       console.error("TB Poll error:", err);
@@ -212,41 +224,58 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
   }
 
-  private showConfirmationDialog(outputs: AIOutput[]): Promise<boolean> {
+  private showConfirmationDialog(metadataList: AIOutputMetadata[]): Promise<boolean> {
     return new Promise((resolve) => {
-      const modal = new AIOutputConfirmModal(this.app, outputs, resolve);
+      const modal = new AIOutputConfirmModal(this.app, metadataList, resolve);
       modal.open();
     });
   }
 
-  private async deliverOutputs(outputs: AIOutput[]) {
-    const ids: string[] = [];
-    for (const output of outputs) {
-      const path = output.file_path;
+  private async fetchAndDeliverOutputs(metadataList: AIOutputMetadata[]) {
+    const ids = metadataList.map((metadata) => metadata.id);
+
+    // Phase 2: Fetch full content only after user accepted
+    const contentRaw = await this.callMCP("fetch_ai_output_content", { ids });
+    const contentList: AIOutputContent[] = JSON.parse(contentRaw);
+
+    // Build a lookup map for content by ID
+    const contentById = new Map<string, string>();
+    for (const item of contentList) {
+      contentById.set(item.id, item.content);
+    }
+
+    const deliveredIds: string[] = [];
+    for (const metadata of metadataList) {
+      const content = contentById.get(metadata.id);
+      if (!content && content !== "") continue; // skip if content was not returned (already processed)
+
+      const path = metadata.file_path;
 
       // Ensure parent folders exist
       const folder = path.substring(0, path.lastIndexOf("/"));
       if (folder) await this.app.vault.adapter.mkdir(folder);
 
       // Write the file (overwrite if exists — AI output is authoritative)
-      await this.app.vault.adapter.write(path, output.content);
+      await this.app.vault.adapter.write(path, content);
 
       // Store hash so the modify event doesn't trigger re-ingestion
-      const contentHash = simpleHash(stripFrontmatter(output.content).trim());
+      const contentHash = simpleHash(stripFrontmatter(content).trim());
       this.syncedHashes[path] = contentHash;
 
-      ids.push(output.id);
+      deliveredIds.push(metadata.id);
     }
 
-    await this.callMCP("mark_ai_output_picked_up", { ids });
-    await this.saveSettings();
-    new Notice(`🧠 ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} delivered to vault`);
+    if (deliveredIds.length > 0) {
+      await this.callMCP("mark_ai_output_picked_up", { ids: deliveredIds });
+      await this.saveSettings();
+      new Notice(`🧠 ${deliveredIds.length} AI output${deliveredIds.length > 1 ? "s" : ""} delivered to vault`);
+    }
   }
 
-  private async rejectOutputs(outputs: AIOutput[]) {
-    const ids = outputs.map((output) => output.id);
+  private async rejectOutputs(metadataList: AIOutputMetadata[]) {
+    const ids = metadataList.map((metadata) => metadata.id);
     await this.callMCP("reject_ai_output", { ids });
-    new Notice(`🧠 ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} rejected`);
+    new Notice(`🧠 ${ids.length} AI output${ids.length > 1 ? "s" : ""} rejected`);
   }
 
   // ─── Core Logic ────────────────────────────────────────────────────────────
@@ -410,13 +439,13 @@ export default class TerrestrialBrainPlugin extends Plugin {
 // ─── AI Output Confirmation Modal ─────────────────────────────────────────────
 
 class AIOutputConfirmModal extends Modal {
-  private outputs: AIOutput[];
+  private metadataList: AIOutputMetadata[];
   private onDecision: (accepted: boolean) => void;
   private resolved = false;
 
-  constructor(app: App, outputs: AIOutput[], onDecision: (accepted: boolean) => void) {
+  constructor(app: App, metadataList: AIOutputMetadata[], onDecision: (accepted: boolean) => void) {
     super(app);
-    this.outputs = outputs;
+    this.metadataList = metadataList;
     this.onDecision = onDecision;
   }
 
@@ -425,7 +454,7 @@ class AIOutputConfirmModal extends Modal {
     contentEl.empty();
 
     contentEl.createEl("h2", {
-      text: `${this.outputs.length} pending AI output${this.outputs.length > 1 ? "s" : ""}`,
+      text: `${this.metadataList.length} pending AI output${this.metadataList.length > 1 ? "s" : ""}`,
     });
 
     const listContainer = contentEl.createDiv({ cls: "tb-ai-output-list" });
@@ -433,19 +462,19 @@ class AIOutputConfirmModal extends Modal {
     listContainer.style.overflowY = "auto";
     listContainer.style.marginBottom = "16px";
 
-    for (const output of this.outputs) {
-      const charCount = output.content.length.toLocaleString();
+    for (const metadata of this.metadataList) {
+      const sizeDisplay = formatFileSize(metadata.content_size);
       const item = listContainer.createDiv({ cls: "tb-ai-output-item" });
       item.style.padding = "6px 0";
       item.style.borderBottom = "1px solid var(--background-modifier-border)";
 
       item.createEl("div", {
-        text: output.file_path,
+        text: metadata.file_path,
         cls: "tb-ai-output-path",
       }).style.fontWeight = "600";
 
       item.createEl("div", {
-        text: `${charCount} chars`,
+        text: sizeDisplay,
         cls: "tb-ai-output-size",
       }).style.color = "var(--text-muted)";
     }
@@ -583,6 +612,13 @@ class TBSettingTab extends PluginSettingTab {
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 export function stripFrontmatter(content: string): string {
   return content.replace(/^---[\s\S]*?---\n?/, "");
