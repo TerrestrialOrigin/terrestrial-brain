@@ -2,9 +2,10 @@
  * ProjectExtractor — detects project associations from parsed notes.
  *
  * Detection signals (in priority order):
- * 1. File path: `projects/{name}/` pattern in referenceId
- * 2. Heading match: case-insensitive comparison against known projects
- * 3. LLM content matching: focused AI call for remaining associations
+ * 1a. Conventional path: `projects/{name}/` pattern (case-insensitive, any depth)
+ * 1b. LLM path analysis: path segments or filename containing "project"
+ * 2.  Heading match: case-insensitive comparison against known projects
+ * 3.  LLM content matching: focused AI call for remaining associations
  */
 
 import type { ParsedNote } from "../parser.ts";
@@ -18,24 +19,110 @@ const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
 // ---------------------------------------------------------------------------
-// File path detection
+// Signal 1a: Conventional path detection (case-insensitive, any depth)
 // ---------------------------------------------------------------------------
 
 /**
  * Extracts the project folder name from a referenceId matching
- * `projects/{name}/...`. Returns null if no match or empty name.
+ * `projects/{name}/...` at any depth, case-insensitive.
+ * Returns null if no match or empty name.
  */
-export function extractProjectFolderName(
+export function extractProjectFromConventionalPath(
   referenceId: string | null,
 ): string | null {
   if (!referenceId) return null;
 
-  // Match "projects/{name}/" where name is non-empty
-  const match = referenceId.match(/^projects\/([^/]+)\//);
+  // Match "projects/{name}/" at any depth, case-insensitive
+  const match = referenceId.match(/(?:^|\/)projects\/([^/]+)\//i);
   if (!match) return null;
 
   const folderName = match[1].trim();
   return folderName.length > 0 ? folderName : null;
+}
+
+// ---------------------------------------------------------------------------
+// Signal 1b: LLM-based project name extraction from path
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true if any path segment or filename (sans extension) contains
+ * the word "project" (case-insensitive).
+ */
+export function pathContainsProjectKeyword(
+  referenceId: string | null,
+): boolean {
+  if (!referenceId) return false;
+  // Remove .md extension from filename before checking
+  const pathWithoutExtension = referenceId.replace(/\.md$/i, "");
+  const segments = pathWithoutExtension.split("/");
+  return segments.some((segment) => /project/i.test(segment));
+}
+
+/**
+ * Uses LLM to determine if a path containing "project" represents
+ * an actual project name, and if so, extracts the clean project name.
+ *
+ * Returns { isProject: true, projectName: "..." } or { isProject: false }.
+ */
+export async function extractProjectNameFromPath(
+  referenceId: string,
+): Promise<{ isProject: boolean; projectName: string | null }> {
+  try {
+    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-4o-mini",
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
+
+RULES:
+- A path segment or filename like "Rabbit Hutch Project" IS a project named "Rabbit Hutch"
+- A path segment like "Project Planning notes" is NOT a project — "Project" is used descriptively
+- A filename like "CarChief Project.md" IS a project named "CarChief"
+- A folder like "My Garden Project" IS a project named "My Garden"
+- "Project updates" or "Project ideas" are NOT project names — they're generic labels
+- Strip the word "Project" from the name when extracting
+- If the path has a conventional "projects/{name}/" structure, use that name directly
+
+Return JSON: {"is_project": true/false, "project_name": "name" or null}`,
+          },
+          {
+            role: "user",
+            content: `Path: ${referenceId}`,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      console.error(
+        `ProjectExtractor LLM path analysis failed: ${response.status} ${errorText}`,
+      );
+      return { isProject: false, projectName: null };
+    }
+
+    const data = await response.json();
+    const parsed = JSON.parse(data.choices[0].message.content);
+
+    if (parsed.is_project && typeof parsed.project_name === "string" && parsed.project_name.trim()) {
+      return { isProject: true, projectName: parsed.project_name.trim() };
+    }
+
+    return { isProject: false, projectName: null };
+  } catch (error) {
+    console.error(
+      `ProjectExtractor LLM path analysis error: ${(error as Error).message}`,
+    );
+    return { isProject: false, projectName: null };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,38 +270,22 @@ export class ProjectExtractor implements Extractor {
   ): Promise<ExtractionResult> {
     const matchedIds: string[] = [];
 
-    // Signal 1: File path detection
-    const folderName = extractProjectFolderName(note.referenceId);
+    // Signal 1a: Conventional path detection (case-insensitive, any depth)
+    const folderName = extractProjectFromConventionalPath(note.referenceId);
+    let conventionalPathMatched = false;
+
     if (folderName) {
-      const existingProject = context.knownProjects.find(
-        (project) => project.name.toLowerCase() === folderName.toLowerCase(),
-      );
+      conventionalPathMatched = true;
+      const projectId = await this.matchOrCreateProject(folderName, context);
+      if (projectId) matchedIds.push(projectId);
+    }
 
-      if (existingProject) {
-        matchedIds.push(existingProject.id);
-      } else {
-        // Auto-create project from folder structure
-        const { data: newProject, error } = await context.supabase
-          .from("projects")
-          .insert({ name: folderName })
-          .select("id, name")
-          .single();
-
-        if (!error && newProject) {
-          matchedIds.push(newProject.id);
-          context.newlyCreatedProjects.push({
-            id: newProject.id,
-            name: newProject.name,
-          });
-          context.knownProjects.push({
-            id: newProject.id,
-            name: newProject.name,
-          });
-        } else {
-          console.error(
-            `ProjectExtractor auto-create failed for "${folderName}": ${error?.message}`,
-          );
-        }
+    // Signal 1b: LLM path analysis (only if Signal 1a didn't match and path contains "project")
+    if (!conventionalPathMatched && note.referenceId && pathContainsProjectKeyword(note.referenceId)) {
+      const pathResult = await extractProjectNameFromPath(note.referenceId);
+      if (pathResult.isProject && pathResult.projectName) {
+        const projectId = await this.matchOrCreateProject(pathResult.projectName, context);
+        if (projectId) matchedIds.push(projectId);
       }
     }
 
@@ -236,5 +307,47 @@ export class ProjectExtractor implements Extractor {
       referenceKey: this.referenceKey,
       ids: uniqueIds,
     };
+  }
+
+  /**
+   * Matches a project name against known projects (case-insensitive),
+   * or auto-creates a new project if not found.
+   * Returns the project ID, or null on failure.
+   */
+  private async matchOrCreateProject(
+    projectName: string,
+    context: ExtractionContext,
+  ): Promise<string | null> {
+    const existingProject = context.knownProjects.find(
+      (project) => project.name.toLowerCase() === projectName.toLowerCase(),
+    );
+
+    if (existingProject) {
+      return existingProject.id;
+    }
+
+    // Auto-create project
+    const { data: newProject, error } = await context.supabase
+      .from("projects")
+      .insert({ name: projectName })
+      .select("id, name")
+      .single();
+
+    if (!error && newProject) {
+      context.newlyCreatedProjects.push({
+        id: newProject.id,
+        name: newProject.name,
+      });
+      context.knownProjects.push({
+        id: newProject.id,
+        name: newProject.name,
+      });
+      return newProject.id;
+    }
+
+    console.error(
+      `ProjectExtractor auto-create failed for "${projectName}": ${error?.message}`,
+    );
+    return null;
   }
 }
