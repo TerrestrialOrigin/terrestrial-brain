@@ -38,8 +38,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Get Project Summary",
       description:
-        "Get a complete summary of a project: details, children, open tasks, recent thoughts, and source notes. " +
-        "Use this for a full picture of a project in a single call.",
+        "Get a comprehensive summary of a project in a single call: project details (name, type, description), child projects, " +
+        "all open tasks, recent thoughts referencing this project, and source notes from Obsidian. " +
+        "This is the best starting point when the user asks about a specific project — it gives you the full picture " +
+        "so you can answer follow-up questions without additional calls. Prefer this over get_project for richer context.",
       inputSchema: {
         id: z.string().describe("Project UUID"),
       },
@@ -230,8 +232,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Get Recent Activity",
       description:
-        "Get a cross-table summary of recent activity: thoughts, tasks, projects, and AI outputs. " +
-        "Use this to answer 'What happened recently?' or 'What's been going on?'",
+        "Get a cross-table summary of recent activity across the entire knowledge base: new thoughts captured, tasks created, " +
+        "tasks completed, project updates, and AI outputs delivered. " +
+        "Use this as a conversation opener when the user asks 'what's been going on?', 'catch me up', or 'what happened this week?'. " +
+        "Also useful for your own orientation at the start of a session to understand the user's recent context.",
       inputSchema: {
         days: z.number().optional().default(7).describe("Number of days to look back (default 7)"),
       },

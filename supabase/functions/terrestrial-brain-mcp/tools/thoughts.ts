@@ -17,9 +17,12 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Search Thoughts",
       description:
-        "Search captured thoughts by meaning. Use this when the user asks about a topic, person, or idea they've previously captured.",
+        "Semantic search across all captured thoughts using meaning, not keywords. " +
+        "Use this when the user asks about a topic, person, idea, or decision — even if they phrase it differently from how it was originally captured. " +
+        "Returns the most relevant thoughts ranked by similarity. " +
+        "Prefer this over list_thoughts when the user has a specific question; use list_thoughts for browsing or filtering by type/date.",
       inputSchema: {
-        query: z.string().describe("What to search for"),
+        query: z.string().describe("Natural language description of what to search for — works best as a phrase or sentence, not single keywords"),
         limit: z.number().optional().default(10),
         threshold: z.number().optional().default(0.5),
       },
@@ -95,7 +98,9 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "List Recent Thoughts",
       description:
-        "List recently captured thoughts with optional filters by type, topic, person, or time range.",
+        "Browse recent thoughts chronologically with optional filters. " +
+        "Use this when the user wants to see what's been captured lately, review thoughts by category, or check activity for a time period. " +
+        "Prefer search_thoughts when the user has a specific question; use this for open-ended browsing like 'what did I capture this week?' or 'show me all person_notes'.",
       inputSchema: {
         limit: z.number().optional().default(10),
         type: z.string().optional().describe("Filter by type: observation, task, idea, reference, person_note"),
@@ -165,7 +170,9 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "thought_stats",
     {
       title: "Thought Statistics",
-      description: "Get a summary of all captured thoughts: totals, types, top topics, and people.",
+      description:
+        "Get high-level statistics about the knowledge base: total thought count, breakdown by type, most frequent topics, and people mentioned. " +
+        "Use this to orient yourself when starting a conversation, to answer 'how much is in my brain?', or to discover which topics and people appear most often.",
       inputSchema: {},
     },
     async () => {
@@ -237,7 +244,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Capture Thought",
       description:
-        "Save a new thought to the Open Brain. Generates an embedding and extracts metadata automatically. Use this when the user wants to save something to their brain directly from any AI client — notes, insights, decisions, or migrated content from other systems.",
+        "Save a single thought directly to the knowledge base. Generates an embedding and extracts metadata (type, topics, people, action items) automatically. " +
+        "Use this when the user shares something worth remembering: a decision, insight, observation, preference, or piece of context about a person or project. " +
+        "Each thought should be a clear, self-contained statement that will make sense when retrieved later without any surrounding context. " +
+        "Do NOT use this for ingesting full notes from Obsidian — use ingest_note for that.",
       inputSchema: {
         content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
       },
@@ -302,7 +312,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Ingest Note",
       description:
-        "Split a note into discrete standalone thoughts and sync them. If note_id is provided and thoughts from a previous version exist, reconciles the changes — updating modified thoughts, adding new ones, deleting removed ones, and leaving unchanged thoughts alone. Safe to call repeatedly on the same note.",
+        "Ingest a full note by splitting it into discrete standalone thoughts, generating embeddings, and syncing them to the knowledge base. " +
+        "Also runs extraction pipelines that detect project references and task items in the note. " +
+        "If note_id is provided and thoughts from a previous version exist, reconciles the changes — updating modified thoughts, adding new ones, deleting removed ones, and leaving unchanged thoughts alone. " +
+        "Safe to call repeatedly on the same note. Primarily called by the Obsidian plugin on note save, but can also be called by any AI client with a block of text to ingest.",
       inputSchema: {
         content: z.string().describe("The full note content to ingest"),
         title: z.string().optional().describe("Note title or filename — used as context for splitting"),
