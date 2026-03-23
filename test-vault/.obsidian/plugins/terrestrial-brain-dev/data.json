@@ -2,8 +2,8 @@
   "settings": {
     "tbEndpointUrl": "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123",
     "excludeTag": "terrestrialBrainExclude",
-    "debounceMs": 300000,
-    "pollIntervalMs": 600000,
+    "syncDelayMinutes": 5,
+    "pollIntervalMinutes": 10,
     "projectsFolderBase": "projects",
     "aiNotesFolderBase": "AI Notes"
   },
@@ -16,12 +16,17 @@
     "projects/Build Cafeteria/Info.md": "56103246",
     "AI Notes/test-output-1.md": "1341711040",
     "AI Notes/test-output-2.md": "1387008514",
-    "AI Notes/test-output-3.md": "1432305988",
+    "AI Notes/test-output-3.md": "1498547484",
     "projects/Build Cafeteria/sprint-planning.md": "201147934",
     "Test Notes/meeting-march-22.md": "-1319350881",
     "projects/Build Cafeteria/architecture-review.md": "-1679099659",
     "Test Notes/quick-ideas.md": "842462682",
     "chicken/egg/Many Eggs.md": "-1451652432",
-    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs/journaling-entries/deep-nested-note.md": "1994494399"
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs/journaling-entries/deep-nested-note.md": "1994494399",
+    "AI Generated/weekly-reflection-knowledge-management.md": "-228461652",
+    "AI Generated/project-ideas-roadmap.md": "798221965",
+    "AI Generated/architecture-notes-embedding-pipeline.md": "-1937524138",
+    "March 23rd.md": "-503287918",
+    "AI Generated/sync-strategy-comparison.md": "-1064342910"
   }
 }

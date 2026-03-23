@@ -1,3 +1,0 @@
-- [ ] Use CAD to make a floor plan
-- [x] Pour concrete
-- [ ] Eat cheesecake

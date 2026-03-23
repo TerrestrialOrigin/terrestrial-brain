@@ -33,9 +33,8 @@ var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   tbEndpointUrl: "",
   excludeTag: "terrestrialBrainExclude",
-  debounceMs: 3e5,
-  pollIntervalMs: 6e5,
-  // 10 minutes
+  syncDelayMinutes: 5,
+  pollIntervalMinutes: 10,
   projectsFolderBase: "projects"
 };
 var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
@@ -99,14 +98,25 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
         );
       }
     });
-    this.addRibbonIcon("brain", "Sync to Terrestrial Brain", async () => {
-      const file = this.app.workspace.getActiveFile();
-      if (!file) {
-        new import_obsidian.Notice("No active file");
-        return;
-      }
-      this.cancelTimer(file.path);
-      await this.processNote(file, { force: true });
+    this.addRibbonIcon("brain", "Terrestrial Brain", (event) => {
+      const menu = new import_obsidian.Menu();
+      menu.addItem((item) => {
+        item.setTitle("Sync note to Terrestrial Brain").setIcon("upload").onClick(async () => {
+          const file = this.app.workspace.getActiveFile();
+          if (!file) {
+            new import_obsidian.Notice("No active file");
+            return;
+          }
+          this.cancelTimer(file.path);
+          await this.processNote(file, { force: true });
+        });
+      });
+      menu.addItem((item) => {
+        item.setTitle("Pull AI Output from Terrestrial Brain").setIcon("download").onClick(async () => {
+          await this.pollAIOutput();
+        });
+      });
+      menu.showAtMouseEvent(event);
     });
     this.addCommand({
       id: "poll-ai-output",
@@ -118,7 +128,7 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
     this.addSettingTab(new TBSettingTab(this.app, this));
     window.setTimeout(() => this.pollAIOutput(), 2e3);
     this.registerInterval(
-      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMs)
+      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMinutes * 6e4)
     );
     console.log("Terrestrial Brain Sync loaded");
   }
@@ -136,7 +146,7 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(file.path);
       await this.processNote(file);
-    }, this.settings.debounceMs);
+    }, this.settings.syncDelayMinutes * 6e4);
     this.debounceTimers.set(file.path, timer);
   }
   cancelTimer(filePath) {
@@ -308,10 +318,19 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
   }
   // ─── Settings Persistence ──────────────────────────────────────────────────
   async loadSettings() {
-    var _a, _b;
+    var _a, _b, _c;
     const data = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, (_a = data == null ? void 0 : data.settings) != null ? _a : data);
-    this.syncedHashes = (_b = data == null ? void 0 : data.syncedHashes) != null ? _b : {};
+    const raw = (_b = (_a = data == null ? void 0 : data.settings) != null ? _a : data) != null ? _b : {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
+    if ("debounceMs" in raw && !("syncDelayMinutes" in raw)) {
+      this.settings.syncDelayMinutes = Math.round(raw.debounceMs / 6e4) || DEFAULT_SETTINGS.syncDelayMinutes;
+    }
+    if ("pollIntervalMs" in raw && !("pollIntervalMinutes" in raw)) {
+      this.settings.pollIntervalMinutes = Math.round(raw.pollIntervalMs / 6e4) || DEFAULT_SETTINGS.pollIntervalMinutes;
+    }
+    delete this.settings["debounceMs"];
+    delete this.settings["pollIntervalMs"];
+    this.syncedHashes = (_c = data == null ? void 0 : data.syncedHashes) != null ? _c : {};
   }
   async saveSettings() {
     await this.saveData({
@@ -405,24 +424,24 @@ var TBSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Sync delay (ms)").setDesc(
-      "How long to wait after you stop editing before syncing. Default 300000 (5 minutes). Minimum 60000 (1 minute)."
+    new import_obsidian.Setting(containerEl).setName("Sync delay (minutes)").setDesc(
+      "How long to wait after you stop editing before syncing. Default: 5 minutes. Minimum: 1 minute."
     ).addText(
-      (text) => text.setPlaceholder("300000").setValue(String(this.plugin.settings.debounceMs)).onChange(async (value) => {
+      (text) => text.setPlaceholder("5").setValue(String(this.plugin.settings.syncDelayMinutes)).onChange(async (value) => {
         const parsed = parseInt(value);
-        if (!isNaN(parsed) && parsed >= 6e4) {
-          this.plugin.settings.debounceMs = parsed;
+        if (!isNaN(parsed) && parsed >= 1) {
+          this.plugin.settings.syncDelayMinutes = parsed;
           await this.plugin.saveSettings();
         }
       })
     );
-    new import_obsidian.Setting(containerEl).setName("AI output poll interval (ms)").setDesc(
-      "How often to check for new AI-generated output. Default 600000 (10 minutes). Minimum 60000 (1 minute)."
+    new import_obsidian.Setting(containerEl).setName("AI output poll interval (minutes)").setDesc(
+      "How often to check for new AI-generated output. Default: 10 minutes. Minimum: 1 minute."
     ).addText(
-      (text) => text.setPlaceholder("600000").setValue(String(this.plugin.settings.pollIntervalMs)).onChange(async (value) => {
+      (text) => text.setPlaceholder("10").setValue(String(this.plugin.settings.pollIntervalMinutes)).onChange(async (value) => {
         const parsed = parseInt(value);
-        if (!isNaN(parsed) && parsed >= 6e4) {
-          this.plugin.settings.pollIntervalMs = parsed;
+        if (!isNaN(parsed) && parsed >= 1) {
+          this.plugin.settings.pollIntervalMinutes = parsed;
           await this.plugin.saveSettings();
         }
       })
