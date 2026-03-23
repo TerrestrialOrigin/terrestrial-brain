@@ -15,7 +15,7 @@ import type {
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import {
   ProjectExtractor,
-  extractProjectFolderName,
+  extractProjectFromConventionalPath,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts";
 import {
   TaskExtractor,
@@ -182,37 +182,37 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3.1b — extractProjectFolderName unit tests
+// 3.1b — extractProjectFromConventionalPath unit tests
 // ---------------------------------------------------------------------------
 
-Deno.test("extractProjectFolderName: extracts name from projects path", () => {
+Deno.test("extractProjectFromConventionalPath: extracts name from projects path", () => {
   assertEquals(
-    extractProjectFolderName("projects/CarChief/sprint-notes.md"),
+    extractProjectFromConventionalPath("projects/CarChief/sprint-notes.md"),
     "CarChief",
   );
 });
 
-Deno.test("extractProjectFolderName: extracts from nested path", () => {
+Deno.test("extractProjectFromConventionalPath: extracts from nested path", () => {
   assertEquals(
-    extractProjectFolderName("projects/CarChief/sprints/week1.md"),
+    extractProjectFromConventionalPath("projects/CarChief/sprints/week1.md"),
     "CarChief",
   );
 });
 
-Deno.test("extractProjectFolderName: returns null for non-projects path", () => {
-  assertEquals(extractProjectFolderName("daily/2026-03-22.md"), null);
+Deno.test("extractProjectFromConventionalPath: returns null for non-projects path", () => {
+  assertEquals(extractProjectFromConventionalPath("daily/2026-03-22.md"), null);
 });
 
-Deno.test("extractProjectFolderName: returns null for empty folder name", () => {
-  assertEquals(extractProjectFolderName("projects//somefile.md"), null);
+Deno.test("extractProjectFromConventionalPath: returns null for empty folder name", () => {
+  assertEquals(extractProjectFromConventionalPath("projects//somefile.md"), null);
 });
 
-Deno.test("extractProjectFolderName: returns null for null referenceId", () => {
-  assertEquals(extractProjectFolderName(null), null);
+Deno.test("extractProjectFromConventionalPath: returns null for null referenceId", () => {
+  assertEquals(extractProjectFromConventionalPath(null), null);
 });
 
-Deno.test("extractProjectFolderName: returns null for projects without trailing slash", () => {
-  assertEquals(extractProjectFolderName("projects"), null);
+Deno.test("extractProjectFromConventionalPath: returns null for projects without trailing slash", () => {
+  assertEquals(extractProjectFromConventionalPath("projects"), null);
 });
 
 // ---------------------------------------------------------------------------

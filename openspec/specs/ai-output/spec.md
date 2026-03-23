@@ -99,9 +99,9 @@ A partial index SHALL exist on `(picked_up, rejected) WHERE picked_up = false AN
 
 ---
 
-### Requirement: get_pending_ai_output MCP tool
+### Requirement: get_pending_ai_output MCP tool (legacy)
 
-The MCP server SHALL expose a `get_pending_ai_output` tool that returns all `ai_output` rows where `picked_up = false` AND `rejected = false`, as a JSON array. The tool accepts no parameters.
+The MCP server SHALL expose a `get_pending_ai_output` tool that returns all `ai_output` rows where `picked_up = false` AND `rejected = false`, as a JSON array including full content. The tool accepts no parameters. This tool is retained for backward compatibility but is no longer used by the Obsidian plugin (which uses the two-phase metadata/content flow instead).
 
 #### Scenario: Pending output exists
 - **WHEN** a client calls `get_pending_ai_output` and unpicked, non-rejected rows exist
@@ -116,6 +116,48 @@ The MCP server SHALL expose a `get_pending_ai_output` tool that returns all `ai_
 - **WHEN** a client calls `get_pending_ai_output`
 - **AND** some rows have `rejected = true`
 - **THEN** those rows SHALL NOT appear in the result
+
+---
+
+### Requirement: get_pending_ai_output_metadata MCP tool
+
+The MCP server SHALL expose a `get_pending_ai_output_metadata` tool that returns metadata (without content body) for all `ai_output` rows where `picked_up = false` AND `rejected = false`. The tool accepts no parameters. It uses a PostgreSQL function that computes `octet_length(content)` as `content_size`.
+
+#### Scenario: Pending output metadata
+- **WHEN** a client calls `get_pending_ai_output_metadata` and unpicked, non-rejected rows exist
+- **THEN** the system SHALL return a JSON array of objects, each containing `id`, `title`, `file_path`, `content_size` (integer, bytes), `created_at`
+- **AND** the response SHALL NOT contain a `content` field
+- **AND** the results SHALL be ordered by `created_at` ascending
+
+#### Scenario: No pending output
+- **WHEN** a client calls `get_pending_ai_output_metadata` and no unpicked, non-rejected rows exist
+- **THEN** the system SHALL return an empty JSON array `[]`
+
+#### Scenario: content_size accuracy
+- **WHEN** a client calls `get_pending_ai_output_metadata`
+- **THEN** `content_size` SHALL equal the byte length (`octet_length`) of the stored content column
+
+---
+
+### Requirement: fetch_ai_output_content MCP tool
+
+The MCP server SHALL expose a `fetch_ai_output_content` tool that returns the full content body for specified AI output IDs. The tool accepts `ids` (array of UUID strings, required). Only outputs that are still pending (not picked up, not rejected) are returned.
+
+#### Scenario: Fetch content for pending outputs
+- **WHEN** a client calls `fetch_ai_output_content` with valid pending output IDs
+- **THEN** the system SHALL return a JSON array of objects, each containing `id` and `content`
+
+#### Scenario: Already-picked-up outputs excluded
+- **WHEN** a client calls `fetch_ai_output_content` with IDs of outputs that have been picked up
+- **THEN** those outputs SHALL NOT appear in the result (empty array if all were picked up)
+
+#### Scenario: Rejected outputs excluded
+- **WHEN** a client calls `fetch_ai_output_content` with IDs of rejected outputs
+- **THEN** those outputs SHALL NOT appear in the result
+
+#### Scenario: Non-existent IDs
+- **WHEN** a client calls `fetch_ai_output_content` with IDs that don't exist
+- **THEN** the system SHALL return an empty JSON array `[]`
 
 ---
 

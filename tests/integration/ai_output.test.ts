@@ -112,6 +112,105 @@ Deno.test("create_ai_output with nested path preserves file_path", async () => {
   await callTool("mark_ai_output_picked_up", { ids: [nested.id] });
 });
 
+// ─── get_pending_ai_output_metadata Tests ─────────────────────────────────────
+
+let metadataTestOutputId: string;
+
+Deno.test("get_pending_ai_output_metadata: create test output for metadata tests", async () => {
+  const result = await callTool("create_ai_output", {
+    title: "Metadata Test Output",
+    content: "Hello, world!",  // 13 bytes in UTF-8
+    file_path: "test/metadata-test.md",
+  });
+  const match = result.match(/id: ([0-9a-f-]+)/);
+  assertExists(match, "Should contain output id");
+  metadataTestOutputId = match![1];
+});
+
+Deno.test("get_pending_ai_output_metadata: returns metadata without content body", async () => {
+  const result = await callTool("get_pending_ai_output_metadata", {});
+  const outputs = JSON.parse(result);
+  assertEquals(Array.isArray(outputs), true);
+
+  const found = outputs.find((output: { id: string }) => output.id === metadataTestOutputId);
+  assertExists(found, "Should find test output in metadata list");
+  assertEquals(found.title, "Metadata Test Output");
+  assertEquals(found.file_path, "test/metadata-test.md");
+  assertEquals(typeof found.content_size, "number");
+  assertEquals(found.content_size, 13, "content_size should be byte length of 'Hello, world!'");
+  assertEquals(found.content, undefined, "content body should NOT be present in metadata response");
+  assertExists(found.created_at, "created_at should be present");
+});
+
+Deno.test("get_pending_ai_output_metadata: filters out picked-up outputs", async () => {
+  // Mark the test output as picked up
+  await callTool("mark_ai_output_picked_up", { ids: [metadataTestOutputId] });
+
+  const result = await callTool("get_pending_ai_output_metadata", {});
+  const outputs = JSON.parse(result);
+  const found = outputs.find((output: { id: string }) => output.id === metadataTestOutputId);
+  assertEquals(found, undefined, "Picked-up output should not appear in metadata list");
+});
+
+// ─── fetch_ai_output_content Tests ────────────────────────────────────────────
+
+let fetchTestOutputId: string;
+
+Deno.test("fetch_ai_output_content: create test output for fetch tests", async () => {
+  const result = await callTool("create_ai_output", {
+    title: "Fetch Test Output",
+    content: "# Fetch Content\n\nThis is the full body.",
+    file_path: "test/fetch-test.md",
+  });
+  const match = result.match(/id: ([0-9a-f-]+)/);
+  assertExists(match, "Should contain output id");
+  fetchTestOutputId = match![1];
+});
+
+Deno.test("fetch_ai_output_content: returns content for valid pending IDs", async () => {
+  const result = await callTool("fetch_ai_output_content", { ids: [fetchTestOutputId] });
+  const items = JSON.parse(result);
+  assertEquals(Array.isArray(items), true);
+  assertEquals(items.length, 1);
+  assertEquals(items[0].id, fetchTestOutputId);
+  assertEquals(items[0].content, "# Fetch Content\n\nThis is the full body.");
+});
+
+Deno.test("fetch_ai_output_content: returns empty for already-picked-up IDs", async () => {
+  // Mark as picked up
+  await callTool("mark_ai_output_picked_up", { ids: [fetchTestOutputId] });
+
+  const result = await callTool("fetch_ai_output_content", { ids: [fetchTestOutputId] });
+  const items = JSON.parse(result);
+  assertEquals(items.length, 0, "Should return empty array for picked-up output");
+});
+
+let rejectTestOutputId: string;
+
+Deno.test("fetch_ai_output_content: returns empty for rejected IDs", async () => {
+  // Create and then reject an output
+  const createResult = await callTool("create_ai_output", {
+    title: "Reject Test Output",
+    content: "Rejected content",
+    file_path: "test/reject-test.md",
+  });
+  const match = createResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(match);
+  rejectTestOutputId = match![1];
+
+  await callTool("reject_ai_output", { ids: [rejectTestOutputId] });
+
+  const result = await callTool("fetch_ai_output_content", { ids: [rejectTestOutputId] });
+  const items = JSON.parse(result);
+  assertEquals(items.length, 0, "Should return empty array for rejected output");
+});
+
+Deno.test("fetch_ai_output_content: returns empty for non-existent IDs", async () => {
+  const result = await callTool("fetch_ai_output_content", { ids: ["00000000-0000-0000-0000-000000000000"] });
+  const items = JSON.parse(result);
+  assertEquals(items.length, 0, "Should return empty array for non-existent IDs");
+});
+
 // ─── generateTaskMarkdown Unit Tests ─────────────────────────────────────────
 
 Deno.test("generateTaskMarkdown: basic tasks produce correct checkbox markdown", () => {

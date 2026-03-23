@@ -171,6 +171,79 @@ export function register(server: McpServer, supabase: SupabaseClient) {
   );
 
   server.registerTool(
+    "get_pending_ai_output_metadata",
+    {
+      title: "Get Pending AI Output Metadata",
+      description:
+        "Returns metadata (id, title, file_path, content_size in bytes, created_at) for all pending AI outputs WITHOUT the content body. " +
+        "Used by the Obsidian plugin to display pending outputs in the confirmation dialog without downloading potentially large content. " +
+        "After the user accepts, the plugin calls fetch_ai_output_content to retrieve the actual content.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const { data, error } = await supabase
+          .rpc("get_pending_ai_output_metadata");
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(data || []) }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "fetch_ai_output_content",
+    {
+      title: "Fetch AI Output Content",
+      description:
+        "Fetches the full content body for specific AI output IDs. Only returns content for outputs that are still pending (not picked up, not rejected). " +
+        "This is called by the Obsidian plugin after the user clicks 'Accept All' in the confirmation dialog — AI clients should not call this directly.",
+      inputSchema: {
+        ids: z.array(z.string()).describe("Array of AI output UUIDs to fetch content for"),
+      },
+    },
+    async ({ ids }) => {
+      try {
+        const { data, error } = await supabase
+          .from("ai_output")
+          .select("id, content")
+          .in("id", ids)
+          .eq("picked_up", false)
+          .eq("rejected", false);
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(data || []) }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
     "mark_ai_output_picked_up",
     {
       title: "Mark AI Output Picked Up",
