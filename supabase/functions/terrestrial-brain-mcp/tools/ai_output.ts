@@ -139,6 +139,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           .from("ai_output")
           .select("id, title, content, file_path, created_at")
           .eq("picked_up", false)
+          .eq("rejected", false)
           .order("created_at", { ascending: true });
 
         if (error) {
@@ -187,6 +188,43 @@ export function register(server: McpServer, supabase: SupabaseClient) {
 
         return {
           content: [{ type: "text" as const, text: `Marked ${ids.length} output${ids.length > 1 ? "s" : ""} as picked up.` }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.registerTool(
+    "reject_ai_output",
+    {
+      title: "Reject AI Output",
+      description:
+        "Mark AI output entries as rejected by the user. Rejected outputs are excluded from future pending polls but preserved for audit. " +
+        "This is an internal tool used by the Obsidian plugin when the user clicks 'Reject All' in the confirmation dialog — AI clients should not call this directly.",
+      inputSchema: {
+        ids: z.array(z.string()).describe("Array of AI output UUIDs to reject"),
+      },
+    },
+    async ({ ids }) => {
+      try {
+        const { error } = await supabase
+          .from("ai_output")
+          .update({ rejected: true, rejected_at: new Date().toISOString() })
+          .in("id", ids);
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to reject: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.` }],
         };
       } catch (err: unknown) {
         return {
