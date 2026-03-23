@@ -2,10 +2,16 @@
   "settings": {
     "tbEndpointUrl": "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123",
     "excludeTag": "terrestrialBrainExclude",
-    "debounceMs": 300000
+    "debounceMs": 300000,
+    "pollIntervalMs": 600000,
+    "aiNotesFolderBase": "AI Notes"
   },
   "syncedHashes": {
     "Test Notes/Anastasia test1.md": "-356175561",
-    "Test Notes/sample-note.md": "1159760066"
+    "Test Notes/sample-note.md": "1159760066",
+    "Dorks are cool.md": "-250176323",
+    "Projects/Build Cafeteria/Plans.md": "-1657367389",
+    "projects/Build Cafeteria/Plans.md": "-1758768679",
+    "projects/Build Cafeteria/Info.md": "56103246"
   }
 }

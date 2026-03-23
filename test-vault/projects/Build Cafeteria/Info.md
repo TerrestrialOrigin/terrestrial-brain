@@ -1,0 +1,1 @@
+This project is for client "Summer High". They are a good client. They are located in Denver, CO
