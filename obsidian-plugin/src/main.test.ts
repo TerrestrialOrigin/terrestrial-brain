@@ -3,6 +3,34 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock the obsidian module before importing main
 vi.mock("obsidian", () => ({
   App: class {},
+  Menu: class {
+    items: { title: string; icon: string; callback: () => void }[] = [];
+    addItem(callback: (item: any) => void) {
+      const item = {
+        title: "",
+        icon: "",
+        callback: () => {},
+        setTitle(title: string) { item.title = title; return item; },
+        setIcon(icon: string) { item.icon = icon; return item; },
+        onClick(cb: () => void) { item.callback = cb; return item; },
+      };
+      callback(item);
+      this.items.push(item);
+      return this;
+    }
+    showAtMouseEvent() {}
+  },
+  Modal: class {
+    app: any;
+    contentEl = {
+      empty() {},
+      createEl() { return { style: {} }; },
+      createDiv() { return { style: {}, createDiv() { return { style: {}, createEl() { return { style: {} }; } }; }, createEl() { return { style: {}, addEventListener() {} }; } }; },
+    };
+    constructor(app: any) { this.app = app; }
+    open() {}
+    close() {}
+  },
   Notice: class {
     constructor() {}
     setMessage() {}
@@ -45,12 +73,17 @@ function createTestPlugin(overrides: {
   plugin.settings = {
     tbEndpointUrl: overrides.tbEndpointUrl ?? "",
     excludeTag: overrides.excludeTag ?? "terrestrialBrainExclude",
-    debounceMs: 300000,
-    pollIntervalMs: 600000,
+    syncDelayMinutes: 5,
+    pollIntervalMinutes: 10,
     projectsFolderBase: "projects",
   };
 
   plugin.syncedHashes = {};
+  plugin.debounceTimers = new Map();
+  plugin.pollInProgress = false;
+
+  // Auto-accept confirmation dialog in tests (real modal blocks forever)
+  plugin.showConfirmationDialog = vi.fn().mockResolvedValue(true);
 
   const cache = overrides.frontmatter === undefined && overrides.inlineTags === undefined
     ? null
@@ -277,5 +310,147 @@ describe("simpleHash", () => {
 
   it("returns different hash for different input", () => {
     expect(simpleHash("hello")).not.toBe(simpleHash("world"));
+  });
+});
+
+// ─── Settings migration tests ────────────────────────────────────────────────
+
+describe("loadSettings — migration from ms to minutes", () => {
+  it("migrates debounceMs to syncDelayMinutes", async () => {
+    const plugin = createTestPlugin();
+    plugin.loadData = vi.fn().mockResolvedValue({
+      settings: { debounceMs: 300000, pollIntervalMs: 600000, tbEndpointUrl: "", excludeTag: "terrestrialBrainExclude", projectsFolderBase: "projects" },
+      syncedHashes: {},
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.syncDelayMinutes).toBe(5);
+    expect(plugin.settings.pollIntervalMinutes).toBe(10);
+    expect((plugin.settings as Record<string, unknown>)["debounceMs"]).toBeUndefined();
+    expect((plugin.settings as Record<string, unknown>)["pollIntervalMs"]).toBeUndefined();
+  });
+
+  it("preserves new minute settings if already present", async () => {
+    const plugin = createTestPlugin();
+    plugin.loadData = vi.fn().mockResolvedValue({
+      settings: { syncDelayMinutes: 3, pollIntervalMinutes: 15, tbEndpointUrl: "", excludeTag: "terrestrialBrainExclude", projectsFolderBase: "projects" },
+      syncedHashes: {},
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.syncDelayMinutes).toBe(3);
+    expect(plugin.settings.pollIntervalMinutes).toBe(15);
+  });
+
+  it("uses defaults when no persisted data exists", async () => {
+    const plugin = createTestPlugin();
+    plugin.loadData = vi.fn().mockResolvedValue(null);
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.syncDelayMinutes).toBe(5);
+    expect(plugin.settings.pollIntervalMinutes).toBe(10);
+  });
+});
+
+// ─── Minutes-to-ms conversion tests ──────────────────────────────────────────
+
+describe("timer scheduling uses minutes-to-ms conversion", () => {
+  it("scheduleSync uses syncDelayMinutes * 60000", () => {
+    const plugin = createTestPlugin();
+    plugin.settings.syncDelayMinutes = 3;
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const file = { path: "test.md", extension: "md" } as any;
+
+    plugin.scheduleSync(file);
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 180000);
+    setTimeoutSpy.mockRestore();
+  });
+});
+
+// ─── Context menu tests ──────────────────────────────────────────────────────
+
+describe("ribbon icon context menu", () => {
+  it("addRibbonIcon is called with brain icon and callback", async () => {
+    const plugin = createTestPlugin();
+    const addRibbonIconSpy = vi.fn();
+    plugin.addRibbonIcon = addRibbonIconSpy;
+    plugin.addCommand = vi.fn();
+    plugin.addSettingTab = vi.fn();
+    plugin.registerEvent = vi.fn();
+    plugin.registerInterval = vi.fn();
+    plugin.loadData = vi.fn().mockResolvedValue(null);
+    plugin.app.vault.on = vi.fn().mockReturnValue({ unload: vi.fn() });
+
+    // Obsidian provides window globally — stub it for Node
+    const originalWindow = globalThis.window;
+    (globalThis as any).window = { setTimeout: vi.fn(), setInterval: vi.fn().mockReturnValue(1) };
+
+    await plugin.onload();
+
+    expect(addRibbonIconSpy).toHaveBeenCalledWith("brain", "Terrestrial Brain", expect.any(Function));
+
+    // Restore
+    if (originalWindow !== undefined) {
+      (globalThis as any).window = originalWindow;
+    } else {
+      delete (globalThis as any).window;
+    }
+  });
+});
+
+// ─── AI output nested path tests ──────────────────────────────────────────────
+
+describe("AI output delivery to nested paths", () => {
+  it("creates parent directories for deeply nested paths", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    const aiOutputs = [
+      { id: "output-1", title: "Deep Output", content: "Content", file_path: "deeply/nested/folder/structure/document.md", created_at: "2026-03-22T00:00:00Z" },
+    ];
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
+      .mockResolvedValueOnce("ok");
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.app.vault.adapter.mkdir).toHaveBeenCalledWith("deeply/nested/folder/structure");
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("deeply/nested/folder/structure/document.md", "Content");
+  });
+
+  it("creates parent directory for single-level nested path", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    const aiOutputs = [
+      { id: "output-1", title: "Output", content: "Content", file_path: "projects/file.md", created_at: "2026-03-22T00:00:00Z" },
+    ];
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
+      .mockResolvedValueOnce("ok");
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.app.vault.adapter.mkdir).toHaveBeenCalledWith("projects");
+  });
+
+  it("handles root-level file (no parent directory needed)", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    const aiOutputs = [
+      { id: "output-1", title: "Root Output", content: "Content", file_path: "root-file.md", created_at: "2026-03-22T00:00:00Z" },
+    ];
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify(aiOutputs))
+      .mockResolvedValueOnce("ok");
+
+    await plugin.pollAIOutput();
+
+    // mkdir should not be called for root-level files (no folder prefix)
+    expect(plugin.app.vault.adapter.mkdir).not.toHaveBeenCalled();
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("root-file.md", "Content");
   });
 });

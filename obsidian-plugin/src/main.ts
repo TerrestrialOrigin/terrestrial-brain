@@ -1,5 +1,6 @@
 import {
   App,
+  Menu,
   Modal,
   Notice,
   Plugin,
@@ -23,16 +24,16 @@ interface AIOutput {
 interface TBPluginSettings {
   tbEndpointUrl: string;
   excludeTag: string;
-  debounceMs: number;
-  pollIntervalMs: number;
+  syncDelayMinutes: number;
+  pollIntervalMinutes: number;
   projectsFolderBase: string;
 }
 
 const DEFAULT_SETTINGS: TBPluginSettings = {
   tbEndpointUrl: "",
   excludeTag: "terrestrialBrainExclude",
-  debounceMs: 300000,
-  pollIntervalMs: 600000,        // 10 minutes
+  syncDelayMinutes: 5,
+  pollIntervalMinutes: 10,
   projectsFolderBase: "projects",
 };
 
@@ -106,12 +107,32 @@ export default class TerrestrialBrainPlugin extends Plugin {
       },
     });
 
-    // Ribbon icon — sync current note immediately
-    this.addRibbonIcon("brain", "Sync to Terrestrial Brain", async () => {
-      const file = this.app.workspace.getActiveFile();
-      if (!file) { new Notice("No active file"); return; }
-      this.cancelTimer(file.path);
-      await this.processNote(file, { force: true });
+    // Ribbon icon — context menu with sync and pull options
+    this.addRibbonIcon("brain", "Terrestrial Brain", (event: MouseEvent) => {
+      const menu = new Menu();
+
+      menu.addItem((item) => {
+        item
+          .setTitle("Sync note to Terrestrial Brain")
+          .setIcon("upload")
+          .onClick(async () => {
+            const file = this.app.workspace.getActiveFile();
+            if (!file) { new Notice("No active file"); return; }
+            this.cancelTimer(file.path);
+            await this.processNote(file, { force: true });
+          });
+      });
+
+      menu.addItem((item) => {
+        item
+          .setTitle("Pull AI Output from Terrestrial Brain")
+          .setIcon("download")
+          .onClick(async () => {
+            await this.pollAIOutput();
+          });
+      });
+
+      menu.showAtMouseEvent(event);
     });
 
     // Manual poll for AI output
@@ -130,7 +151,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
     // Then poll on interval
     this.registerInterval(
-      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMs)
+      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMinutes * 60000)
     );
 
     console.log("Terrestrial Brain Sync loaded");
@@ -153,7 +174,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(file.path);
       await this.processNote(file);
-    }, this.settings.debounceMs);
+    }, this.settings.syncDelayMinutes * 60000);
     this.debounceTimers.set(file.path, timer);
   }
 
@@ -360,7 +381,21 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   async loadSettings() {
     const data = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings ?? data);
+    const raw = data?.settings ?? data ?? {};
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
+
+    // Migrate old millisecond settings to minutes
+    if ("debounceMs" in raw && !("syncDelayMinutes" in raw)) {
+      this.settings.syncDelayMinutes = Math.round(raw.debounceMs / 60000) || DEFAULT_SETTINGS.syncDelayMinutes;
+    }
+    if ("pollIntervalMs" in raw && !("pollIntervalMinutes" in raw)) {
+      this.settings.pollIntervalMinutes = Math.round(raw.pollIntervalMs / 60000) || DEFAULT_SETTINGS.pollIntervalMinutes;
+    }
+
+    // Clean up legacy keys from the settings object
+    delete (this.settings as unknown as Record<string, unknown>)["debounceMs"];
+    delete (this.settings as unknown as Record<string, unknown>)["pollIntervalMs"];
+
     this.syncedHashes = data?.syncedHashes ?? {};
   }
 
@@ -497,36 +532,36 @@ class TBSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync delay (ms)")
+      .setName("Sync delay (minutes)")
       .setDesc(
-        "How long to wait after you stop editing before syncing. Default 300000 (5 minutes). Minimum 60000 (1 minute)."
+        "How long to wait after you stop editing before syncing. Default: 5 minutes. Minimum: 1 minute."
       )
       .addText((text) =>
         text
-          .setPlaceholder("300000")
-          .setValue(String(this.plugin.settings.debounceMs))
+          .setPlaceholder("5")
+          .setValue(String(this.plugin.settings.syncDelayMinutes))
           .onChange(async (value) => {
             const parsed = parseInt(value);
-            if (!isNaN(parsed) && parsed >= 60000) {
-              this.plugin.settings.debounceMs = parsed;
+            if (!isNaN(parsed) && parsed >= 1) {
+              this.plugin.settings.syncDelayMinutes = parsed;
               await this.plugin.saveSettings();
             }
           })
       );
 
     new Setting(containerEl)
-      .setName("AI output poll interval (ms)")
+      .setName("AI output poll interval (minutes)")
       .setDesc(
-        "How often to check for new AI-generated output. Default 600000 (10 minutes). Minimum 60000 (1 minute)."
+        "How often to check for new AI-generated output. Default: 10 minutes. Minimum: 1 minute."
       )
       .addText((text) =>
         text
-          .setPlaceholder("600000")
-          .setValue(String(this.plugin.settings.pollIntervalMs))
+          .setPlaceholder("10")
+          .setValue(String(this.plugin.settings.pollIntervalMinutes))
           .onChange(async (value) => {
             const parsed = parseInt(value);
-            if (!isNaN(parsed) && parsed >= 60000) {
-              this.plugin.settings.pollIntervalMs = parsed;
+            if (!isNaN(parsed) && parsed >= 1) {
+              this.plugin.settings.pollIntervalMinutes = parsed;
               await this.plugin.saveSettings();
             }
           })

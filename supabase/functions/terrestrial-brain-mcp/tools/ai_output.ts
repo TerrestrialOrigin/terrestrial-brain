@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { validateFilePath } from "../validators.ts";
 
 // ---------------------------------------------------------------------------
 // Task input type for create_tasks_with_output
@@ -93,6 +94,14 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     },
     async ({ title, content, file_path, source_context }) => {
       try {
+        const pathError = validateFilePath(file_path);
+        if (pathError) {
+          return {
+            content: [{ type: "text" as const, text: pathError }],
+            isError: true,
+          };
+        }
+
         const { data, error } = await supabase
           .from("ai_output")
           .insert({
@@ -284,6 +293,14 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     },
     async ({ title, file_path, tasks, source_context }) => {
       try {
+        const pathError = validateFilePath(file_path);
+        if (pathError) {
+          return {
+            content: [{ type: "text" as const, text: pathError }],
+            isError: true,
+          };
+        }
+
         if (!tasks || tasks.length === 0) {
           return {
             content: [
