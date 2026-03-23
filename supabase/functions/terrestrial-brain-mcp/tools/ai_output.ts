@@ -80,7 +80,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Create AI Output",
       description:
-        "Create markdown content that will be delivered to the user's Obsidian vault at the specified file path. The content is stored as-is (no frontmatter injection) and participates in normal ingest when delivered.",
+        "Create a markdown document that will be automatically delivered to the user's Obsidian vault at the specified file path. " +
+        "Use this whenever the user asks you to write something up, create a document, draft a proposal, or produce any structured output they'll want to reference later. " +
+        "The content is stored exactly as provided and will be ingested as thoughts when delivered, so it becomes searchable in the knowledge base. " +
+        "For task lists specifically, prefer create_tasks_with_output — it creates both structured task rows and a checklist document.",
       inputSchema: {
         title: z.string().describe("Human-readable title for this output"),
         content: z.string().describe("Full markdown body — stored exactly as provided"),
@@ -125,7 +128,9 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Get Pending AI Output",
       description:
-        "Returns all AI output that hasn't been picked up by the Obsidian plugin yet, as a JSON array.",
+        "Returns all AI output that hasn't been delivered to the Obsidian vault yet, as a JSON array. " +
+        "This is primarily used by the Obsidian plugin's polling loop. " +
+        "AI clients generally do not need to call this — use create_ai_output or create_tasks_with_output to produce content, and the plugin handles delivery.",
       inputSchema: {},
     },
     async () => {
@@ -160,7 +165,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Mark AI Output Picked Up",
       description:
-        "Mark AI output as picked up after the Obsidian plugin has delivered it to the vault.",
+        "Mark AI output entries as delivered after the Obsidian plugin has written them to the vault. " +
+        "This is an internal tool used by the Obsidian plugin — AI clients should not call this directly.",
       inputSchema: {
         ids: z.array(z.string()).describe("Array of AI output UUIDs to mark as picked up"),
       },
@@ -196,9 +202,11 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Create Tasks with AI Output",
       description:
-        "Atomically create structured task rows AND a markdown document with checkboxes delivered to the user's Obsidian vault. " +
-        "Tasks are tagged with reference_id = file_path so the TaskExtractor deduplicates on ingest. " +
-        "Use this when the user asks you to create a task list — it writes both structured data and human-readable output.",
+        "Create multiple tasks at once AND generate a markdown checklist document delivered to the user's Obsidian vault. " +
+        "This is the preferred way to create task lists — it writes structured task rows (queryable, filterable, trackable) " +
+        "AND a human-readable markdown document with checkboxes (visible in Obsidian). " +
+        "Tasks are tagged with reference_id = file_path so re-ingesting the delivered document won't create duplicates. " +
+        "Supports subtask hierarchy via parent_index. Always link tasks to a project_id when one exists.",
       inputSchema: {
         title: z.string().describe("Human-readable title for the output document"),
         file_path: z.string().describe(

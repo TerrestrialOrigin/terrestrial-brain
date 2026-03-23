@@ -7,7 +7,11 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "create_task",
     {
       title: "Create Task",
-      description: "Create a new task, optionally linked to a project.",
+      description:
+        "Create a single task, optionally linked to a project. " +
+        "Use this for ad-hoc tasks the user mentions in conversation. " +
+        "For creating multiple related tasks at once (e.g. a sprint plan or checklist), prefer create_tasks_with_output — " +
+        "it creates structured task rows AND delivers a markdown checklist to the user's Obsidian vault in one call.",
       inputSchema: {
         content: z.string().describe("Task description"),
         project_id: z.string().optional().describe("UUID of the project this task belongs to"),
@@ -53,7 +57,12 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "list_tasks",
     {
       title: "List Tasks",
-      description: "List tasks with optional filters by project, status, or overdue.",
+      description:
+        "List tasks with optional filters. Common uses: " +
+        "filter by project_id to see a project's task list, " +
+        "filter by status='open' to see what needs doing, " +
+        "set overdue_only=true to find tasks past their due date. " +
+        "Results include project names for context.",
       inputSchema: {
         project_id: z.string().optional().describe("Filter by project UUID"),
         status: z.string().optional().describe("Filter by status: open, in_progress, done, deferred"),
@@ -131,7 +140,11 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "update_task",
     {
       title: "Update Task",
-      description: "Update a task's content, status, due date, or project. Setting status to 'done' auto-archives.",
+      description:
+        "Update a task's content, status, due date, or project assignment. " +
+        "Setting status to 'done' automatically archives the task. " +
+        "When the user says they finished something, started working on something, or wants to defer a task, use this to update the status accordingly. " +
+        "Valid statuses: 'open' (not started), 'in_progress' (actively working), 'done' (completed, auto-archives), 'deferred' (postponed).",
       inputSchema: {
         id: z.string().describe("Task UUID"),
         content: z.string().optional().describe("New task description"),
@@ -185,7 +198,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "archive_task",
     {
       title: "Archive Task",
-      description: "Archive a task.",
+      description:
+        "Archive a task without changing its status. " +
+        "Use this to hide tasks that are no longer relevant but weren't completed (e.g. cancelled or superseded). " +
+        "For tasks the user actually finished, prefer update_task with status='done' — that both marks completion and archives in one step.",
       inputSchema: {
         id: z.string().describe("Task UUID to archive"),
       },

@@ -7,12 +7,16 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "create_project",
     {
       title: "Create Project",
-      description: "Create a new project to organize thoughts and tasks.",
+      description:
+        "Create a new project. Projects group related thoughts and tasks, and store context about the work " +
+        "(client name, purpose, location, key contacts) in the description and type fields. " +
+        "When creating a project, populate the description with any known context — this helps other AIs understand the project without searching through thoughts. " +
+        "Use type to categorize: 'client' for client work, 'personal' for personal projects, 'research' for research/learning, 'internal' for internal tooling.",
       inputSchema: {
         name: z.string().describe("Project name"),
         type: z.string().optional().describe("Project type: client, personal, research, internal"),
         parent_id: z.string().optional().describe("UUID of parent project for nesting"),
-        description: z.string().optional().describe("Project description"),
+        description: z.string().optional().describe("Project description — include client name, purpose, location, key contacts, or any context that helps understand this project at a glance"),
       },
     },
     async ({ name, type, parent_id, description }) => {
@@ -51,7 +55,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "list_projects",
     {
       title: "List Projects",
-      description: "List projects with optional filters.",
+      description:
+        "List all projects with optional filters by type, parent, or archive status. " +
+        "Use this to find a project by name before creating tasks or updating project details. " +
+        "Also useful for answering 'what projects are active?' or 'what client projects do I have?'",
       inputSchema: {
         include_archived: z.boolean().optional().default(false).describe("Include archived projects"),
         parent_id: z.string().optional().describe("List only children of this project"),
@@ -137,7 +144,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "get_project",
     {
       title: "Get Project",
-      description: "Get full details for a project including children and open task count.",
+      description:
+        "Get a project's details: name, type, description, parent, children, and open task count. " +
+        "Use this for quick lookups when you need project metadata. " +
+        "For a richer view that also includes recent thoughts and source notes, use get_project_summary instead.",
       inputSchema: {
         id: z.string().describe("Project UUID"),
       },
@@ -214,13 +224,18 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "update_project",
     {
       title: "Update Project",
-      description: "Update a project's name, type, parent, or description.",
+      description:
+        "Update a project's name, type, parent, or description. " +
+        "IMPORTANT: When the user mentions facts about a project — client name, location, purpose, key people, deadlines, or any contextual detail — " +
+        "proactively call this tool to store that information in the project's description. " +
+        "This makes the project self-documenting so that any AI querying it later has the full picture without needing to search through individual thoughts. " +
+        "Append to the existing description rather than replacing it, unless the user is correcting outdated information.",
       inputSchema: {
         id: z.string().describe("Project UUID"),
         name: z.string().optional().describe("New name"),
         type: z.string().optional().describe("New type"),
         parent_id: z.string().nullable().optional().describe("New parent UUID, or null to remove parent"),
-        description: z.string().optional().describe("New description"),
+        description: z.string().optional().describe("New or updated description — include client name, purpose, location, key contacts, or any context. Append to existing description unless correcting outdated info"),
       },
     },
     async ({ id, name, type, parent_id, description }) => {
@@ -263,7 +278,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     "archive_project",
     {
       title: "Archive Project",
-      description: "Archive a project and recursively archive its children and open tasks.",
+      description:
+        "Archive a project, recursively archiving all child projects and their open tasks. " +
+        "Archived projects are hidden from default list_projects results but not deleted — they can still be queried with include_archived. " +
+        "Use this when a project is complete, cancelled, or no longer relevant. This is a significant action — confirm with the user before archiving.",
       inputSchema: {
         id: z.string().describe("Project UUID to archive"),
       },
