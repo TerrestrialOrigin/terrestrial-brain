@@ -116,7 +116,7 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
       }
     });
     this.addSettingTab(new TBSettingTab(this.app, this));
-    await this.pollAIOutput();
+    window.setTimeout(() => this.pollAIOutput(), 2e3);
     this.registerInterval(
       window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMs)
     );

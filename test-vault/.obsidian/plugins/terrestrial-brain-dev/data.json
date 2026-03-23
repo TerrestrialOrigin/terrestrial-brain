@@ -4,14 +4,24 @@
     "excludeTag": "terrestrialBrainExclude",
     "debounceMs": 300000,
     "pollIntervalMs": 600000,
+    "projectsFolderBase": "projects",
     "aiNotesFolderBase": "AI Notes"
   },
   "syncedHashes": {
     "Test Notes/Anastasia test1.md": "-356175561",
-    "Test Notes/sample-note.md": "1159760066",
+    "Test Notes/sample-note.md": "1501446303",
     "Dorks are cool.md": "-250176323",
     "Projects/Build Cafeteria/Plans.md": "-1657367389",
     "projects/Build Cafeteria/Plans.md": "-1758768679",
-    "projects/Build Cafeteria/Info.md": "56103246"
+    "projects/Build Cafeteria/Info.md": "56103246",
+    "AI Notes/test-output-1.md": "1341711040",
+    "AI Notes/test-output-2.md": "1387008514",
+    "AI Notes/test-output-3.md": "1432305988",
+    "projects/Build Cafeteria/sprint-planning.md": "201147934",
+    "Test Notes/meeting-march-22.md": "-1319350881",
+    "projects/Build Cafeteria/architecture-review.md": "-1679099659",
+    "Test Notes/quick-ideas.md": "842462682",
+    "chicken/egg/Many Eggs.md": "-1451652432",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs/journaling-entries/deep-nested-note.md": "1994494399"
   }
 }

@@ -125,8 +125,8 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
     this.addSettingTab(new TBSettingTab(this.app, this));
 
-    // Poll for AI output on startup
-    await this.pollAIOutput();
+    // Poll for AI output shortly after startup (deferred so onload completes first)
+    window.setTimeout(() => this.pollAIOutput(), 2000);
 
     // Then poll on interval
     this.registerInterval(

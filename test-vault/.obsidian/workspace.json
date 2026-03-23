@@ -27,12 +27,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "projects/Build Cafeteria/Info.md",
+                "file": "Test Notes/sample-note.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Info"
+              "title": "sample-note"
             }
           }
         ],
@@ -68,7 +68,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "",
+                "query": "sample",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -199,13 +199,31 @@
       "terrestrial-brain-dev:Sync to Terrestrial Brain": false
     }
   },
-  "active": "65c44ae834414e77",
+  "active": "028ebc1216a3ee7e",
   "lastOpenFiles": [
+    "projects/Build Cafeteria/sprint-planning.md",
     "projects/Build Cafeteria/Plans.md",
     "projects/Build Cafeteria/Info.md",
+    "projects/Build Cafeteria/architecture-review.md",
+    "chicken/egg/Many Eggs.md",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs/journaling-entries/deep-nested-note.md",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs/journaling-entries",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process",
+    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files",
+    "alphabetical-folder/breakthroughs-here/conversations-daily",
+    "alphabetical-folder/breakthroughs-here",
+    "alphabetical-folder",
+    "Test Notes/sample-note.md",
+    "Test Notes/quick-ideas.md",
+    "Test Notes/meeting-march-22.md",
+    "AI Notes/test-output-3.md",
+    "AI Notes/test-output-2.md",
+    "AI Notes/test-output-1.md",
     "Dorks are cool.md",
-    "projects/Build Cafeteria",
-    "projects",
     "Test Notes/Anastasia test1.md"
   ]
 }
