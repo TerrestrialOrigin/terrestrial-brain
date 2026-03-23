@@ -1,5 +1,6 @@
 import {
   App,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -45,6 +46,9 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   // Per-file debounce timers — we manage these manually for the long 5-min delay
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+  // Guard to prevent overlapping poll cycles while a confirmation dialog is open
+  private pollInProgress = false;
 
   async onload() {
     await this.loadSettings();
@@ -165,35 +169,63 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   async pollAIOutput() {
     if (!this.settings.tbEndpointUrl) return;
+    if (this.pollInProgress) return;
+
+    this.pollInProgress = true;
     try {
       const raw = await this.callMCP("get_pending_ai_output", {});
       const outputs: AIOutput[] = JSON.parse(raw);
       if (!outputs.length) return;
 
-      const ids: string[] = [];
-      for (const output of outputs) {
-        const path = output.file_path;
+      const accepted = await this.showConfirmationDialog(outputs);
 
-        // Ensure parent folders exist
-        const folder = path.substring(0, path.lastIndexOf("/"));
-        if (folder) await this.app.vault.adapter.mkdir(folder);
-
-        // Write the file (overwrite if exists — AI output is authoritative)
-        await this.app.vault.adapter.write(path, output.content);
-
-        // Store hash so the modify event doesn't trigger re-ingestion
-        const contentHash = simpleHash(stripFrontmatter(output.content).trim());
-        this.syncedHashes[path] = contentHash;
-
-        ids.push(output.id);
+      if (accepted) {
+        await this.deliverOutputs(outputs);
+      } else {
+        await this.rejectOutputs(outputs);
       }
-
-      await this.callMCP("mark_ai_output_picked_up", { ids });
-      await this.saveSettings();
-      new Notice(`🧠 ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} delivered to vault`);
     } catch (err) {
       console.error("TB Poll error:", err);
+    } finally {
+      this.pollInProgress = false;
     }
+  }
+
+  private showConfirmationDialog(outputs: AIOutput[]): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new AIOutputConfirmModal(this.app, outputs, resolve);
+      modal.open();
+    });
+  }
+
+  private async deliverOutputs(outputs: AIOutput[]) {
+    const ids: string[] = [];
+    for (const output of outputs) {
+      const path = output.file_path;
+
+      // Ensure parent folders exist
+      const folder = path.substring(0, path.lastIndexOf("/"));
+      if (folder) await this.app.vault.adapter.mkdir(folder);
+
+      // Write the file (overwrite if exists — AI output is authoritative)
+      await this.app.vault.adapter.write(path, output.content);
+
+      // Store hash so the modify event doesn't trigger re-ingestion
+      const contentHash = simpleHash(stripFrontmatter(output.content).trim());
+      this.syncedHashes[path] = contentHash;
+
+      ids.push(output.id);
+    }
+
+    await this.callMCP("mark_ai_output_picked_up", { ids });
+    await this.saveSettings();
+    new Notice(`🧠 ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} delivered to vault`);
+  }
+
+  private async rejectOutputs(outputs: AIOutput[]) {
+    const ids = outputs.map((output) => output.id);
+    await this.callMCP("reject_ai_output", { ids });
+    new Notice(`🧠 ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} rejected`);
   }
 
   // ─── Core Logic ────────────────────────────────────────────────────────────
@@ -337,6 +369,84 @@ export default class TerrestrialBrainPlugin extends Plugin {
       settings: this.settings,
       syncedHashes: this.syncedHashes,
     });
+  }
+}
+
+// ─── AI Output Confirmation Modal ─────────────────────────────────────────────
+
+class AIOutputConfirmModal extends Modal {
+  private outputs: AIOutput[];
+  private onDecision: (accepted: boolean) => void;
+  private resolved = false;
+
+  constructor(app: App, outputs: AIOutput[], onDecision: (accepted: boolean) => void) {
+    super(app);
+    this.outputs = outputs;
+    this.onDecision = onDecision;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    contentEl.createEl("h2", {
+      text: `${this.outputs.length} pending AI output${this.outputs.length > 1 ? "s" : ""}`,
+    });
+
+    const listContainer = contentEl.createDiv({ cls: "tb-ai-output-list" });
+    listContainer.style.maxHeight = "300px";
+    listContainer.style.overflowY = "auto";
+    listContainer.style.marginBottom = "16px";
+
+    for (const output of this.outputs) {
+      const charCount = output.content.length.toLocaleString();
+      const item = listContainer.createDiv({ cls: "tb-ai-output-item" });
+      item.style.padding = "6px 0";
+      item.style.borderBottom = "1px solid var(--background-modifier-border)";
+
+      item.createEl("div", {
+        text: output.file_path,
+        cls: "tb-ai-output-path",
+      }).style.fontWeight = "600";
+
+      item.createEl("div", {
+        text: `${charCount} chars`,
+        cls: "tb-ai-output-size",
+      }).style.color = "var(--text-muted)";
+    }
+
+    const buttonContainer = contentEl.createDiv({ cls: "tb-ai-output-buttons" });
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.justifyContent = "flex-end";
+    buttonContainer.style.gap = "8px";
+    buttonContainer.style.marginTop = "16px";
+
+    const rejectButton = buttonContainer.createEl("button", { text: "Reject All" });
+    rejectButton.addEventListener("click", () => {
+      this.resolve(false);
+    });
+
+    const acceptButton = buttonContainer.createEl("button", {
+      text: "Accept All",
+      cls: "mod-cta",
+    });
+    acceptButton.addEventListener("click", () => {
+      this.resolve(true);
+    });
+  }
+
+  onClose() {
+    // If the user closed the modal without clicking a button, treat as rejection
+    if (!this.resolved) {
+      this.onDecision(false);
+    }
+    this.contentEl.empty();
+  }
+
+  private resolve(accepted: boolean) {
+    this.resolved = true;
+    this.onDecision(accepted);
+    this.close();
   }
 }
 

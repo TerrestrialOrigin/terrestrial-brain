@@ -24,7 +24,9 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/main.ts
 var main_exports = {};
 __export(main_exports, {
-  default: () => TerrestrialBrainPlugin
+  default: () => TerrestrialBrainPlugin,
+  simpleHash: () => simpleHash,
+  stripFrontmatter: () => stripFrontmatter
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
@@ -34,7 +36,7 @@ var DEFAULT_SETTINGS = {
   debounceMs: 3e5,
   pollIntervalMs: 6e5,
   // 10 minutes
-  aiNotesFolderBase: "AI Notes"
+  projectsFolderBase: "projects"
 };
 var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
   constructor() {
@@ -43,6 +45,8 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
     this.syncedHashes = {};
     // Per-file debounce timers — we manage these manually for the long 5-min delay
     this.debounceTimers = /* @__PURE__ */ new Map();
+    // Guard to prevent overlapping poll cycles while a confirmation dialog is open
+    this.pollInProgress = false;
   }
   async onload() {
     await this.loadSettings();
@@ -105,16 +109,16 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
       await this.processNote(file, { force: true });
     });
     this.addCommand({
-      id: "poll-ai-notes",
-      name: "Pull AI notes from Terrestrial Brain",
+      id: "poll-ai-output",
+      name: "Pull AI output from Terrestrial Brain",
       callback: async () => {
-        await this.pollAINotes();
+        await this.pollAIOutput();
       }
     });
     this.addSettingTab(new TBSettingTab(this.app, this));
-    await this.pollAINotes();
+    await this.pollAIOutput();
     this.registerInterval(
-      window.setInterval(() => this.pollAINotes(), this.settings.pollIntervalMs)
+      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMs)
     );
     console.log("Terrestrial Brain Sync loaded");
   }
@@ -142,29 +146,56 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
       this.debounceTimers.delete(filePath);
     }
   }
-  // ─── AI Notes Polling ──────────────────────────────────────────────────────
-  async pollAINotes() {
+  // ─── AI Output Polling ─────────────────────────────────────────────────────
+  async pollAIOutput() {
     if (!this.settings.tbEndpointUrl)
       return;
+    if (this.pollInProgress)
+      return;
+    this.pollInProgress = true;
     try {
-      const raw = await this.callMCP("get_unsynced_ai_notes", {});
-      const notes = JSON.parse(raw);
-      if (!notes.length)
+      const raw = await this.callMCP("get_pending_ai_output", {});
+      const outputs = JSON.parse(raw);
+      if (!outputs.length)
         return;
-      const ids = [];
-      for (const note of notes) {
-        const path = note.suggested_path || `${this.settings.aiNotesFolderBase}/${note.title}.md`;
-        const folder = path.substring(0, path.lastIndexOf("/"));
-        if (folder)
-          await this.app.vault.adapter.mkdir(folder);
-        await this.app.vault.adapter.write(path, note.content);
-        ids.push(note.id);
+      const accepted = await this.showConfirmationDialog(outputs);
+      if (accepted) {
+        await this.deliverOutputs(outputs);
+      } else {
+        await this.rejectOutputs(outputs);
       }
-      await this.callMCP("mark_notes_synced", { ids });
-      new import_obsidian.Notice(`\u{1F9E0} ${notes.length} AI note${notes.length > 1 ? "s" : ""} synced to vault`);
     } catch (err) {
       console.error("TB Poll error:", err);
+    } finally {
+      this.pollInProgress = false;
     }
+  }
+  showConfirmationDialog(outputs) {
+    return new Promise((resolve) => {
+      const modal = new AIOutputConfirmModal(this.app, outputs, resolve);
+      modal.open();
+    });
+  }
+  async deliverOutputs(outputs) {
+    const ids = [];
+    for (const output of outputs) {
+      const path = output.file_path;
+      const folder = path.substring(0, path.lastIndexOf("/"));
+      if (folder)
+        await this.app.vault.adapter.mkdir(folder);
+      await this.app.vault.adapter.write(path, output.content);
+      const contentHash = simpleHash(stripFrontmatter(output.content).trim());
+      this.syncedHashes[path] = contentHash;
+      ids.push(output.id);
+    }
+    await this.callMCP("mark_ai_output_picked_up", { ids });
+    await this.saveSettings();
+    new import_obsidian.Notice(`\u{1F9E0} ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} delivered to vault`);
+  }
+  async rejectOutputs(outputs) {
+    const ids = outputs.map((output) => output.id);
+    await this.callMCP("reject_ai_output", { ids });
+    new import_obsidian.Notice(`\u{1F9E0} ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} rejected`);
   }
   // ─── Core Logic ────────────────────────────────────────────────────────────
   async processNote(file, opts = {}) {
@@ -209,17 +240,20 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
   }
   // ─── Exclusion Check ───────────────────────────────────────────────────────
   isExcluded(file) {
-    var _a, _b;
+    var _a, _b, _c;
     const cache = this.app.metadataCache.getFileCache(file);
     if (!cache)
       return false;
-    const excludeTag = this.settings.excludeTag.replace(/^#/, "").toLowerCase();
-    const inlineTags = ((_a = cache.tags) == null ? void 0 : _a.map((t) => t.tag.replace(/^#/, "").toLowerCase())) || [];
-    const fmTags = ((_b = cache.frontmatter) == null ? void 0 : _b.tags) || [];
+    const excludeTag = this.settings.excludeTag.replace(/^#/, "");
+    if (((_a = cache.frontmatter) == null ? void 0 : _a[excludeTag]) === true)
+      return true;
+    const excludeTagLower = excludeTag.toLowerCase();
+    const inlineTags = ((_b = cache.tags) == null ? void 0 : _b.map((t) => t.tag.replace(/^#/, "").toLowerCase())) || [];
+    const fmTags = ((_c = cache.frontmatter) == null ? void 0 : _c.tags) || [];
     const fmTagList = (Array.isArray(fmTags) ? fmTags : [fmTags]).map(
       (t) => String(t).toLowerCase()
     );
-    return [...inlineTags, ...fmTagList].includes(excludeTag);
+    return [...inlineTags, ...fmTagList].includes(excludeTagLower);
   }
   // ─── MCP Call ──────────────────────────────────────────────────────────────
   async callMCP(toolName, args) {
@@ -286,6 +320,66 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
     });
   }
 };
+var AIOutputConfirmModal = class extends import_obsidian.Modal {
+  constructor(app, outputs, onDecision) {
+    super(app);
+    this.resolved = false;
+    this.outputs = outputs;
+    this.onDecision = onDecision;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", {
+      text: `${this.outputs.length} pending AI output${this.outputs.length > 1 ? "s" : ""}`
+    });
+    const listContainer = contentEl.createDiv({ cls: "tb-ai-output-list" });
+    listContainer.style.maxHeight = "300px";
+    listContainer.style.overflowY = "auto";
+    listContainer.style.marginBottom = "16px";
+    for (const output of this.outputs) {
+      const charCount = output.content.length.toLocaleString();
+      const item = listContainer.createDiv({ cls: "tb-ai-output-item" });
+      item.style.padding = "6px 0";
+      item.style.borderBottom = "1px solid var(--background-modifier-border)";
+      item.createEl("div", {
+        text: output.file_path,
+        cls: "tb-ai-output-path"
+      }).style.fontWeight = "600";
+      item.createEl("div", {
+        text: `${charCount} chars`,
+        cls: "tb-ai-output-size"
+      }).style.color = "var(--text-muted)";
+    }
+    const buttonContainer = contentEl.createDiv({ cls: "tb-ai-output-buttons" });
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.justifyContent = "flex-end";
+    buttonContainer.style.gap = "8px";
+    buttonContainer.style.marginTop = "16px";
+    const rejectButton = buttonContainer.createEl("button", { text: "Reject All" });
+    rejectButton.addEventListener("click", () => {
+      this.resolve(false);
+    });
+    const acceptButton = buttonContainer.createEl("button", {
+      text: "Accept All",
+      cls: "mod-cta"
+    });
+    acceptButton.addEventListener("click", () => {
+      this.resolve(true);
+    });
+  }
+  onClose() {
+    if (!this.resolved) {
+      this.onDecision(false);
+    }
+    this.contentEl.empty();
+  }
+  resolve(accepted) {
+    this.resolved = true;
+    this.onDecision(accepted);
+    this.close();
+  }
+};
 var TBSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -322,8 +416,8 @@ var TBSettingTab = class extends import_obsidian.PluginSettingTab {
         }
       })
     );
-    new import_obsidian.Setting(containerEl).setName("AI notes poll interval (ms)").setDesc(
-      "How often to check for new AI-generated notes. Default 600000 (10 minutes). Minimum 60000 (1 minute)."
+    new import_obsidian.Setting(containerEl).setName("AI output poll interval (ms)").setDesc(
+      "How often to check for new AI-generated output. Default 600000 (10 minutes). Minimum 60000 (1 minute)."
     ).addText(
       (text) => text.setPlaceholder("600000").setValue(String(this.plugin.settings.pollIntervalMs)).onChange(async (value) => {
         const parsed = parseInt(value);
@@ -333,9 +427,9 @@ var TBSettingTab = class extends import_obsidian.PluginSettingTab {
         }
       })
     );
-    new import_obsidian.Setting(containerEl).setName("AI notes folder").setDesc("Base folder for AI-generated notes. Default: AI Notes").addText(
-      (text) => text.setPlaceholder("AI Notes").setValue(this.plugin.settings.aiNotesFolderBase).onChange(async (value) => {
-        this.plugin.settings.aiNotesFolderBase = value.trim() || "AI Notes";
+    new import_obsidian.Setting(containerEl).setName("Projects folder base").setDesc("Base folder for project files in the vault. Default: projects").addText(
+      (text) => text.setPlaceholder("projects").setValue(this.plugin.settings.projectsFolderBase).onChange(async (value) => {
+        this.plugin.settings.projectsFolderBase = value.trim() || "projects";
         await this.plugin.saveSettings();
       })
     );
