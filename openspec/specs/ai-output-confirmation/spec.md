@@ -34,6 +34,20 @@ The Obsidian plugin SHALL display a confirmation dialog before writing any AI ou
 - **AND** the plugin SHALL call `reject_ai_output` with all output IDs
 - **AND** show a Notice confirming rejection (e.g., "3 AI output(s) rejected")
 
+#### Scenario: User closes dialog without explicit decision (postpone)
+- **WHEN** the user closes the confirmation dialog by pressing Escape, clicking X, or clicking "Postpone"
+- **THEN** the plugin SHALL NOT call `reject_ai_output`
+- **AND** the plugin SHALL NOT call `fetch_ai_output_content`
+- **AND** the plugin SHALL NOT show any Notice
+- **AND** the pending outputs SHALL remain in their current state (pending) in the database
+- **AND** the outputs SHALL reappear on the next poll cycle
+
+#### Scenario: Dialog includes Postpone button
+- **WHEN** the confirmation dialog is displayed
+- **THEN** the dialog SHALL show three buttons: "Reject All", "Postpone", and "Accept All"
+- **AND** "Accept All" SHALL be the primary call-to-action button
+- **AND** "Postpone" SHALL appear between "Reject All" and "Accept All"
+
 #### Scenario: Dialog is blocking
 - **WHEN** the confirmation dialog is displayed
 - **THEN** no other poll cycle SHALL proceed until the user dismisses the dialog

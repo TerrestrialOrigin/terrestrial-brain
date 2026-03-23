@@ -86,7 +86,7 @@ function createTestPlugin(overrides: {
   plugin.pollInProgress = false;
 
   // Auto-accept confirmation dialog in tests (real modal blocks forever)
-  plugin.showConfirmationDialog = vi.fn().mockResolvedValue(true);
+  plugin.showConfirmationDialog = vi.fn().mockResolvedValue("accepted");
 
   const cache = overrides.frontmatter === undefined && overrides.inlineTags === undefined
     ? null
@@ -317,7 +317,7 @@ describe("pollAIOutput", () => {
 
   it("does NOT call fetch_ai_output_content when user rejects", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    plugin.showConfirmationDialog = vi.fn().mockResolvedValue(false); // user rejects
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue("rejected");
 
     plugin.callMCP = vi.fn()
       .mockResolvedValueOnce(JSON.stringify([
@@ -330,6 +330,37 @@ describe("pollAIOutput", () => {
     expect(plugin.callMCP).toHaveBeenCalledWith("get_pending_ai_output_metadata", {});
     expect(plugin.callMCP).not.toHaveBeenCalledWith("fetch_ai_output_content", expect.anything());
     expect(plugin.callMCP).toHaveBeenCalledWith("reject_ai_output", { ids: ["output-1"] });
+  });
+
+  it("does NOT call fetch_ai_output_content or reject_ai_output when user postpones", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue("postponed");
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify([
+        { id: "output-1", title: "Output 1", file_path: "test/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
+      ]));
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.callMCP).toHaveBeenCalledWith("get_pending_ai_output_metadata", {});
+    expect(plugin.callMCP).not.toHaveBeenCalledWith("fetch_ai_output_content", expect.anything());
+    expect(plugin.callMCP).not.toHaveBeenCalledWith("reject_ai_output", expect.anything());
+  });
+
+  it("does not show any notice when user postpones", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue("postponed");
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify([
+        { id: "output-1", title: "Output 1", file_path: "test/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
+      ]));
+
+    noticeMessages.length = 0;
+    await plugin.pollAIOutput();
+
+    expect(noticeMessages).toHaveLength(0);
   });
 });
 

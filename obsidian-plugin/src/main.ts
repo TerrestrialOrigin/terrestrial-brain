@@ -24,6 +24,8 @@ interface AIOutputContent {
   content: string;
 }
 
+type AIOutputDecision = "accepted" | "rejected" | "postponed";
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 interface TBPluginSettings {
@@ -210,13 +212,14 @@ export default class TerrestrialBrainPlugin extends Plugin {
         return;
       }
 
-      const accepted = await this.showConfirmationDialog(metadataList);
+      const decision = await this.showConfirmationDialog(metadataList);
 
-      if (accepted) {
+      if (decision === "accepted") {
         await this.fetchAndDeliverOutputs(metadataList);
-      } else {
+      } else if (decision === "rejected") {
         await this.rejectOutputs(metadataList);
       }
+      // "postponed" — do nothing; outputs remain pending in DB
     } catch (err) {
       console.error("TB Poll error:", err);
     } finally {
@@ -224,7 +227,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
   }
 
-  private showConfirmationDialog(metadataList: AIOutputMetadata[]): Promise<boolean> {
+  private showConfirmationDialog(metadataList: AIOutputMetadata[]): Promise<AIOutputDecision> {
     return new Promise((resolve) => {
       const modal = new AIOutputConfirmModal(this.app, metadataList, resolve);
       modal.open();
@@ -440,10 +443,10 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
 class AIOutputConfirmModal extends Modal {
   private metadataList: AIOutputMetadata[];
-  private onDecision: (accepted: boolean) => void;
+  private onDecision: (decision: AIOutputDecision) => void;
   private resolved = false;
 
-  constructor(app: App, metadataList: AIOutputMetadata[], onDecision: (accepted: boolean) => void) {
+  constructor(app: App, metadataList: AIOutputMetadata[], onDecision: (decision: AIOutputDecision) => void) {
     super(app);
     this.metadataList = metadataList;
     this.onDecision = onDecision;
@@ -487,7 +490,12 @@ class AIOutputConfirmModal extends Modal {
 
     const rejectButton = buttonContainer.createEl("button", { text: "Reject All" });
     rejectButton.addEventListener("click", () => {
-      this.resolve(false);
+      this.resolve("rejected");
+    });
+
+    const postponeButton = buttonContainer.createEl("button", { text: "Postpone" });
+    postponeButton.addEventListener("click", () => {
+      this.resolve("postponed");
     });
 
     const acceptButton = buttonContainer.createEl("button", {
@@ -495,21 +503,21 @@ class AIOutputConfirmModal extends Modal {
       cls: "mod-cta",
     });
     acceptButton.addEventListener("click", () => {
-      this.resolve(true);
+      this.resolve("accepted");
     });
   }
 
   onClose() {
-    // If the user closed the modal without clicking a button, treat as rejection
+    // If the user closed the modal without clicking a button, treat as postpone (not rejection)
     if (!this.resolved) {
-      this.onDecision(false);
+      this.onDecision("postponed");
     }
     this.contentEl.empty();
   }
 
-  private resolve(accepted: boolean) {
+  private resolve(decision: AIOutputDecision) {
     this.resolved = true;
-    this.onDecision(accepted);
+    this.onDecision(decision);
     this.close();
   }
 }
