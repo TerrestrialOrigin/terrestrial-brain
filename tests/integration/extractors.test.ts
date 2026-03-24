@@ -20,10 +20,16 @@ import {
 import {
   TaskExtractor,
   computeSimilarity,
+  buildTaskMetadata,
+  matchPersonInText,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
 import {
   PeopleExtractor,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
+import {
+  extractDueDate,
+  containsDateLikeWords,
+} from "../../supabase/functions/terrestrial-brain-mcp/extractors/date-parser.ts";
 
 // ---------------------------------------------------------------------------
 // Supabase client for direct DB access in tests
@@ -243,6 +249,7 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -271,6 +278,7 @@ Deno.test("ProjectExtractor: detects project from heading match", async () => {
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -291,6 +299,7 @@ Deno.test("ProjectExtractor: heading match is case-insensitive", async () => {
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -311,6 +320,7 @@ Deno.test("ProjectExtractor: heading not matching any project returns no match f
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -343,6 +353,7 @@ Deno.test("ProjectExtractor: auto-creates project from new folder", async () => 
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -392,6 +403,7 @@ Deno.test("ProjectExtractor: empty folder name is skipped", async () => {
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -418,6 +430,7 @@ Deno.test("ProjectExtractor: note outside /projects/ returns no path match", asy
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -439,6 +452,7 @@ Deno.test("ProjectExtractor: note with no referenceId gets no path match", async
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -469,6 +483,7 @@ Deno.test("ProjectExtractor: deduplicates when same project matched by path and 
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -566,6 +581,7 @@ Deno.test("TaskExtractor: unchecked checkbox creates open task with reference_id
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -607,6 +623,7 @@ Deno.test("TaskExtractor: checked checkbox creates done task with archived_at", 
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -645,6 +662,7 @@ Deno.test("TaskExtractor: indented checkboxes create subtask hierarchy", async (
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -694,6 +712,7 @@ Deno.test("TaskExtractor: tasks under project heading get correct project_id", a
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -740,6 +759,7 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result1 = await extractor.extract(note, context1);
@@ -764,6 +784,7 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result2 = await extractor.extract(note, context2);
@@ -802,6 +823,7 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result1 = await extractor.extract(note1, context1);
@@ -837,6 +859,7 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result2 = await extractor.extract(note2, context2);
@@ -874,6 +897,7 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result1 = await extractor.extract(note1, context1);
@@ -909,6 +933,7 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result2 = await extractor.extract(note2, context2);
@@ -946,6 +971,7 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result1 = await extractor.extract(note1, context1);
@@ -973,6 +999,7 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result2 = await extractor.extract(note2, context2);
@@ -1010,6 +1037,7 @@ Deno.test("TaskExtractor: note with no checkboxes returns empty result", async (
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -1028,27 +1056,11 @@ Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed reference
   const content = "# CarChief\n\n- [ ] Fix dealer page\n- [ ] Update pricing API\n";
   const note = parseNote(content, "Pipeline", referenceId, "obsidian");
 
-  const taskExtractor = new TaskExtractor();
-
-  // Wire up: ProjectExtractor runs first, then TaskExtractor uses its results
-  const projectExtractor = new ProjectExtractor();
-
-  // Use a wrapper extractor that passes project results to TaskExtractor
-  const wrappedTaskExtractor: Extractor = {
-    referenceKey: "tasks",
-    extract: async (extractorNote: ParsedNote, extractorContext: ExtractionContext) => {
-      // Get the project references that would have been set by the pipeline
-      const projectIds = extractorContext.knownProjects
-        .filter((project) => project.name === "CarChief")
-        .map((project) => project.id);
-      taskExtractor.setFilePathProjectIds(projectIds);
-      return taskExtractor.extract(extractorNote, extractorContext);
-    },
-  };
-
+  // Run the real pipeline — ProjectExtractor sets accumulatedReferences.projects,
+  // TaskExtractor reads them via context.accumulatedReferences.projects
   const result = await runExtractionPipeline(
     note,
-    [projectExtractor, wrappedTaskExtractor],
+    [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
     supabase,
   );
 
@@ -1141,6 +1153,7 @@ Deno.test("PeopleExtractor: referenceKey is 'people'", async () => {
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -1159,6 +1172,7 @@ Deno.test("PeopleExtractor: empty knownPeople returns empty ids without LLM call
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -1177,6 +1191,7 @@ Deno.test("PeopleExtractor: empty note content returns empty ids", async () => {
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -1199,6 +1214,7 @@ Deno.test("PeopleExtractor: with known people and content returns valid result",
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -1227,6 +1243,7 @@ Deno.test("PeopleExtractor: does not return unknown people", async () => {
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   const result = await extractor.extract(note, context);
@@ -1258,6 +1275,601 @@ Deno.test("pipeline: knownPeople populated from DB", async () => {
   );
   assertEquals(peopleNames.includes("Alice"), true);
   assertEquals(peopleNames.includes("Claude"), true);
+});
+
+// ---------------------------------------------------------------------------
+// 9.0 — date-parser unit tests
+// ---------------------------------------------------------------------------
+
+const REFERENCE_DATE = new Date("2026-03-24T12:00:00Z");
+
+Deno.test("extractDueDate: ISO date with marker", () => {
+  const result = extractDueDate("Fix deployment by 2026-04-01", REFERENCE_DATE);
+  assertEquals(result.dueDate, "2026-04-01T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Fix deployment");
+});
+
+Deno.test("extractDueDate: bare ISO date", () => {
+  const result = extractDueDate("2026-04-01 Fix deployment", REFERENCE_DATE);
+  assertEquals(result.dueDate, "2026-04-01T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Fix deployment");
+});
+
+Deno.test("extractDueDate: ISO date with slashes", () => {
+  const result = extractDueDate("Fix bug by 2026/04/01", REFERENCE_DATE);
+  assertEquals(result.dueDate, "2026-04-01T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Fix bug");
+});
+
+Deno.test("extractDueDate: natural date with marker (Month Day)", () => {
+  const result = extractDueDate("Review PR due March 30", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2026-03-30T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Review PR");
+});
+
+Deno.test("extractDueDate: natural date with marker (Day Month)", () => {
+  const result = extractDueDate("Review PR due 30 March", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2026-03-30T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Review PR");
+});
+
+Deno.test("extractDueDate: natural date with year", () => {
+  const result = extractDueDate("Ship feature by March 30, 2027", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2027-03-30T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Ship feature");
+});
+
+Deno.test("extractDueDate: abbreviated month", () => {
+  const result = extractDueDate("Fix bug due Apr 15", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2026-04-15T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Fix bug");
+});
+
+Deno.test("extractDueDate: relative day (by Friday)", () => {
+  const result = extractDueDate("Deploy by Friday", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  // 2026-03-24 is Tuesday, so Friday is 2026-03-27
+  assertEquals(result.dueDate, "2026-03-27T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Deploy");
+});
+
+Deno.test("extractDueDate: relative day (due next Monday)", () => {
+  const result = extractDueDate("Write report due next Monday", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  // 2026-03-24 is Tuesday, so next Monday is 2026-03-30
+  assertEquals(result.dueDate, "2026-03-30T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Write report");
+});
+
+Deno.test("extractDueDate: tomorrow", () => {
+  const result = extractDueDate("Fix critical bug by tomorrow", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2026-03-25T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Fix critical bug");
+});
+
+Deno.test("extractDueDate: deadline marker", () => {
+  const result = extractDueDate("Submit report deadline: April 1", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2026-04-01T00:00:00.000Z");
+  assertEquals(result.cleanedText, "Submit report");
+});
+
+Deno.test("extractDueDate: no date returns null and original text", () => {
+  const result = extractDueDate("Just a regular task", REFERENCE_DATE);
+  assertEquals(result.dueDate, null);
+  assertEquals(result.cleanedText, "Just a regular task");
+});
+
+Deno.test("extractDueDate: past month infers next year", () => {
+  // Reference date is March 2026, January is past
+  const result = extractDueDate("Finish audit by January 15", REFERENCE_DATE);
+  assertExists(result.dueDate);
+  assertEquals(result.dueDate, "2027-01-15T00:00:00.000Z");
+});
+
+Deno.test("containsDateLikeWords: detects month names", () => {
+  assertEquals(containsDateLikeWords("Ship by March"), true);
+});
+
+Deno.test("containsDateLikeWords: detects day names", () => {
+  assertEquals(containsDateLikeWords("Deploy on Friday"), true);
+});
+
+Deno.test("containsDateLikeWords: detects tomorrow", () => {
+  assertEquals(containsDateLikeWords("Fix by tomorrow"), true);
+});
+
+Deno.test("containsDateLikeWords: returns false for plain text", () => {
+  assertEquals(containsDateLikeWords("Just a regular task"), false);
+});
+
+// ---------------------------------------------------------------------------
+// 9.1 — buildTaskMetadata unit tests
+// ---------------------------------------------------------------------------
+
+Deno.test("buildTaskMetadata: returns correct shape", () => {
+  const metadata = buildTaskMetadata("obsidian", "Sprint 12", "heading_match");
+  assertEquals(metadata.source, "obsidian");
+  assertEquals(metadata.section_heading, "Sprint 12");
+  assertEquals(metadata.extraction_method, "heading_match");
+});
+
+Deno.test("buildTaskMetadata: null section heading", () => {
+  const metadata = buildTaskMetadata("obsidian", null, "file_path");
+  assertEquals(metadata.section_heading, null);
+  assertEquals(metadata.extraction_method, "file_path");
+});
+
+Deno.test("buildTaskMetadata: none extraction method", () => {
+  const metadata = buildTaskMetadata("obsidian", null, "none");
+  assertEquals(metadata.extraction_method, "none");
+});
+
+// ---------------------------------------------------------------------------
+// 9.2 — matchPersonInText unit tests
+// ---------------------------------------------------------------------------
+
+const TEST_PEOPLE = [
+  { id: ALICE_ID, name: "Alice" },
+  { id: CLAUDE_ID, name: "Claude" },
+];
+
+Deno.test("matchPersonInText: exact match returns person UUID", () => {
+  const result = matchPersonInText("Ask Alice about the design", TEST_PEOPLE);
+  assertEquals(result, ALICE_ID);
+});
+
+Deno.test("matchPersonInText: case-insensitive match", () => {
+  const result = matchPersonInText("ask ALICE about the design", TEST_PEOPLE);
+  assertEquals(result, ALICE_ID);
+});
+
+Deno.test("matchPersonInText: no match returns null", () => {
+  const result = matchPersonInText("Fix the login page", TEST_PEOPLE);
+  assertEquals(result, null);
+});
+
+Deno.test("matchPersonInText: multiple people returns first by position", () => {
+  const result = matchPersonInText("Claude and Alice reviewed this", TEST_PEOPLE);
+  assertEquals(result, CLAUDE_ID);
+});
+
+Deno.test("matchPersonInText: empty text returns null", () => {
+  const result = matchPersonInText("", TEST_PEOPLE);
+  assertEquals(result, null);
+});
+
+Deno.test("matchPersonInText: empty people list returns null", () => {
+  const result = matchPersonInText("Ask Alice", []);
+  assertEquals(result, null);
+});
+
+Deno.test("matchPersonInText: skips very short names", () => {
+  const shortNamePeople = [{ id: "short-id", name: "X" }];
+  const result = matchPersonInText("Fix X component", shortNamePeople);
+  assertEquals(result, null);
+});
+
+// ---------------------------------------------------------------------------
+// 9.3 — TaskExtractor: metadata populated on new task
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: new task has populated metadata", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/metadata-new-${Date.now()}.md`;
+  const content = "# Sprint 12\n\n- [ ] Fix the navbar\n";
+  const note = parseNote(content, "Notes", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+  assertEquals(result.ids.length, 1);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, metadata")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertExists(task.metadata);
+  assertEquals(task.metadata.source, "obsidian");
+  assertEquals(task.metadata.section_heading, "Sprint 12");
+  assertEquals(task.metadata.extraction_method, "none");
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.4 — TaskExtractor: metadata refreshed on update
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: metadata refreshed on re-ingest", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/metadata-update-${Date.now()}.md`;
+
+  // First ingest: no heading
+  const content1 = "- [ ] Fix the login\n";
+  const note1 = parseNote(content1, "Notes", referenceId, "obsidian");
+
+  const context1: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result1 = await extractor.extract(note1, context1);
+  const taskId = result1.ids[0];
+
+  // Verify initial metadata
+  const { data: taskBefore } = await supabase
+    .from("tasks")
+    .select("metadata")
+    .eq("id", taskId)
+    .single();
+  assertEquals(taskBefore?.metadata.section_heading, null);
+
+  // Second ingest: now under a heading
+  const content2 = "# Auth Sprint\n\n- [ ] Fix the login\n";
+  const note2 = parseNote(content2, "Notes", referenceId, "obsidian");
+
+  const { data: existingTasks } = await supabase
+    .from("tasks")
+    .select("id, content, reference_id")
+    .eq("reference_id", referenceId);
+
+  const context2: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: (existingTasks || []).map((task: { id: string; content: string; reference_id: string | null }) => ({
+      id: task.id,
+      content: task.content,
+      reference_id: task.reference_id,
+    })),
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  await extractor.extract(note2, context2);
+
+  // Verify metadata was updated
+  const { data: taskAfter } = await supabase
+    .from("tasks")
+    .select("metadata")
+    .eq("id", taskId)
+    .single();
+  assertEquals(taskAfter?.metadata.section_heading, "Auth Sprint");
+  assertEquals(taskAfter?.metadata.source, "obsidian");
+
+  createdTaskIds.push(taskId);
+});
+
+// ---------------------------------------------------------------------------
+// 9.5 — TaskExtractor: due date extracted from checkbox text
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: extracts due date from checkbox text", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/due-date-${Date.now()}.md`;
+  const content = "- [ ] Ship feature by 2026-04-01\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+  assertEquals(result.ids.length, 1);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, content, due_by")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.content, "Ship feature");
+  assertExists(task.due_by);
+  assertEquals(new Date(task.due_by).toISOString(), "2026-04-01T00:00:00.000Z");
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.6 — TaskExtractor: no date leaves due_by null and content unchanged
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: no date leaves due_by null and content unchanged", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/no-due-date-${Date.now()}.md`;
+  const content = "- [ ] Regular task with no date\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, content, due_by")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.content, "Regular task with no date");
+  assertEquals(task.due_by, null);
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.7 — TaskExtractor: person in checkbox text sets assigned_to
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: person in checkbox text sets assigned_to", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/person-text-${Date.now()}.md`;
+  const content = "- [ ] Ask Alice about the API design\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [
+      { id: ALICE_ID, name: "Alice" },
+      { id: CLAUDE_ID, name: "Claude" },
+    ],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, content, assigned_to")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.assigned_to, ALICE_ID);
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.8 — TaskExtractor: person in section heading sets assigned_to
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: person in section heading sets assigned_to", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/person-heading-${Date.now()}.md`;
+  const content = "# Alice Tasks\n\n- [ ] Review the dashboard PR\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [
+      { id: ALICE_ID, name: "Alice" },
+    ],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, assigned_to")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.assigned_to, ALICE_ID);
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.9 — TaskExtractor: no person match leaves assigned_to null
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: no person match leaves assigned_to null", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/no-person-${Date.now()}.md`;
+  const content = "- [ ] Fix the deployment pipeline\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [
+      { id: ALICE_ID, name: "Alice" },
+    ],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, assigned_to")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.assigned_to, null);
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.10 — TaskExtractor: extraction_method tracks heading_match correctly
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: extraction_method is heading_match when project resolved by heading", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/method-heading-${Date.now()}.md`;
+  const content = "# CarChief\n\n- [ ] Fix dealer page\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, metadata, project_id")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.project_id, CARCHIEF_ID);
+  assertEquals(task.metadata.extraction_method, "heading_match");
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.11 — TaskExtractor: extraction_method is file_path when project from pipeline
+// ---------------------------------------------------------------------------
+
+Deno.test("TaskExtractor: extraction_method is file_path when project from pipeline", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/method-filepath-${Date.now()}.md`;
+  const content = "- [ ] Update the API\n";
+  const note = parseNote(content, "Tasks", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: { projects: [CARCHIEF_ID] },
+  };
+
+  const result = await extractor.extract(note, context);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, metadata, project_id")
+    .eq("id", result.ids[0])
+    .single();
+
+  assertExists(task);
+  assertEquals(task.project_id, CARCHIEF_ID);
+  assertEquals(task.metadata.extraction_method, "file_path");
+
+  createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.12 — Full pipeline integration: metadata, due_by, assigned_to all populated
+// ---------------------------------------------------------------------------
+
+Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to", async () => {
+  const referenceId = `projects/CarChief/full-pipeline-${Date.now()}.md`;
+  const content = "# CarChief\n\n- [ ] Alice should review the PR by 2026-05-01\n";
+  const note = parseNote(content, "Full Test", referenceId, "obsidian");
+
+  const result = await runExtractionPipeline(
+    note,
+    [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
+    supabase,
+  );
+
+  assertExists(result.tasks);
+  assertEquals(result.tasks.length, 1);
+
+  const { data: task } = await supabase
+    .from("tasks")
+    .select("id, content, project_id, due_by, assigned_to, metadata")
+    .eq("id", result.tasks[0])
+    .single();
+
+  assertExists(task);
+
+  // Content should have date stripped
+  assertEquals(task.content, "Alice should review the PR");
+
+  // Project should be CarChief (heading match)
+  assertEquals(task.project_id, CARCHIEF_ID);
+
+  // Due date should be extracted
+  assertExists(task.due_by);
+  assertEquals(new Date(task.due_by).toISOString(), "2026-05-01T00:00:00.000Z");
+
+  // Assigned to Alice (name in checkbox text)
+  assertEquals(task.assigned_to, ALICE_ID);
+
+  // Metadata populated
+  assertExists(task.metadata);
+  assertEquals(task.metadata.source, "obsidian");
+  assertEquals(task.metadata.section_heading, "CarChief");
+  assertEquals(task.metadata.extraction_method, "heading_match");
+
+  createdTaskIds.push(task.id);
 });
 
 // ---------------------------------------------------------------------------
