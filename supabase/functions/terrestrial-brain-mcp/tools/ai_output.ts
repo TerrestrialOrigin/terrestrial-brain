@@ -13,6 +13,7 @@ interface TaskInput {
   parent_index?: number;
   status?: string;
   due_by?: string;
+  assigned_to?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ export function generateTaskMarkdown(
   title: string,
   tasks: TaskInput[],
   projectNameMap: Record<string, string>,
+  personNameMap?: Record<string, string>,
 ): string {
   const lines: string[] = [`# ${title}`, ""];
 
@@ -68,7 +70,10 @@ export function generateTaskMarkdown(
 
     const indent = "  ".repeat(depth);
     const checkbox = task.status === "done" ? "[x]" : "[ ]";
-    lines.push(`${indent}- ${checkbox} ${task.content}`);
+    const assigneeSuffix = task.assigned_to && personNameMap?.[task.assigned_to]
+      ? ` @${personNameMap[task.assigned_to]}`
+      : "";
+    lines.push(`${indent}- ${checkbox} ${task.content}${assigneeSuffix}`);
   }
 
   lines.push("");
@@ -326,7 +331,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         "This is the preferred way to create task lists — it writes structured task rows (queryable, filterable, trackable) " +
         "AND a human-readable markdown document with checkboxes (visible in Obsidian). " +
         "Tasks are tagged with reference_id = file_path so re-ingesting the delivered document won't create duplicates. " +
-        "Supports subtask hierarchy via parent_index. Always link tasks to a project_id when one exists.",
+        "Supports subtask hierarchy via parent_index, person assignment via assigned_to, and project linking via project_id. " +
+        "Assigned person names appear as @Name suffixes in the generated markdown.",
       inputSchema: {
         title: z.string().describe("Human-readable title for the output document"),
         file_path: z.string().describe(
@@ -355,6 +361,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
                 .string()
                 .optional()
                 .describe("Due date as ISO 8601 string"),
+              assigned_to: z
+                .string()
+                .optional()
+                .describe("UUID of the person this task is assigned to"),
             }),
           )
           .describe("Array of tasks to create (at least one required)"),
@@ -406,6 +416,26 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           );
         }
 
+        // Fetch person names for markdown assignee labels
+        const personIds = [
+          ...new Set(
+            tasks.filter((task) => task.assigned_to).map((task) => task.assigned_to!),
+          ),
+        ];
+        let personNameMap: Record<string, string> = {};
+        if (personIds.length > 0) {
+          const { data: people } = await supabase
+            .from("people")
+            .select("id, name")
+            .in("id", personIds);
+          personNameMap = Object.fromEntries(
+            (people || []).map((person: { id: string; name: string }) => [
+              person.id,
+              person.name,
+            ]),
+          );
+        }
+
         // Insert task rows sequentially (parent_index → parent_id resolution)
         const taskIds: string[] = [];
         const dbIdByIndex = new Map<number, string>();
@@ -426,6 +456,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             project_id: task.project_id || null,
             parent_id: parentId,
             due_by: task.due_by || null,
+            assigned_to: task.assigned_to || null,
           };
 
           if (status === "done") {
@@ -455,7 +486,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         }
 
         // Generate markdown from structured task data
-        const markdown = generateTaskMarkdown(title, tasks, projectNameMap);
+        const markdown = generateTaskMarkdown(title, tasks, projectNameMap, personNameMap);
 
         // Create ai_output row
         const { data: outputData, error: outputError } = await supabase

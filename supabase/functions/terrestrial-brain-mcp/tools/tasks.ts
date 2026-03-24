@@ -8,8 +8,9 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Create Task",
       description:
-        "Create a single task, optionally linked to a project. " +
+        "Create a single task, optionally linked to a project and/or assigned to a person. " +
         "Use this for ad-hoc tasks the user mentions in conversation. " +
+        "Use assigned_to with a person UUID to assign the task (use list_people to find person IDs). " +
         "For creating multiple related tasks at once (e.g. a sprint plan or checklist), prefer create_tasks_with_output — " +
         "it creates structured task rows AND delivers a markdown checklist to the user's Obsidian vault in one call.",
       inputSchema: {
@@ -64,7 +65,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         "filter by project_id to see a project's task list, " +
         "filter by status='open' to see what needs doing, " +
         "set overdue_only=true to find tasks past their due date. " +
-        "Results include project names for context.",
+        "Results include project names and assigned person names for context.",
       inputSchema: {
         project_id: z.string().optional().describe("Filter by project UUID"),
         status: z.string().optional().describe("Filter by status: open, in_progress, done, deferred"),
@@ -156,7 +157,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Update Task",
       description:
-        "Update a task's content, status, due date, or project assignment. " +
+        "Update a task's content, status, due date, project assignment, or person assignment. " +
         "Setting status to 'done' automatically archives the task. " +
         "When the user says they finished something, started working on something, or wants to defer a task, use this to update the status accordingly. " +
         "Valid statuses: 'open' (not started), 'in_progress' (actively working), 'done' (completed, auto-archives), 'deferred' (postponed).",

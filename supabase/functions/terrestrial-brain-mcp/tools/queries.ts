@@ -39,7 +39,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       title: "Get Project Summary",
       description:
         "Get a comprehensive summary of a project in a single call: project details (name, type, description), child projects, " +
-        "all open tasks, recent thoughts referencing this project, and source notes from Obsidian. " +
+        "all open tasks (with assigned person names), recent thoughts referencing this project, and source notes from Obsidian. " +
         "This is the best starting point when the user asks about a specific project — it gives you the full picture " +
         "so you can answer follow-up questions without additional calls. Prefer this over get_project for richer context.",
       inputSchema: {
@@ -255,7 +255,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       title: "Get Recent Activity",
       description:
         "Get a cross-table summary of recent activity across the entire knowledge base: new thoughts captured, tasks created, " +
-        "tasks completed, project updates, and AI outputs delivered. " +
+        "tasks completed, project updates, people added or updated, and AI outputs delivered. " +
         "Use this as a conversation opener when the user asks 'what's been going on?', 'catch me up', or 'what happened this week?'. " +
         "Also useful for your own orientation at the start of a session to understand the user's recent context.",
       inputSchema: {
@@ -327,6 +327,34 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           .eq("picked_up", true)
           .gte("picked_up_at", sinceIso)
           .order("picked_up_at", { ascending: false });
+
+        // 6. People created or updated
+        const { data: peopleCreated } = await supabase
+          .from("people")
+          .select("name, type, created_at")
+          .gte("created_at", sinceIso)
+          .order("created_at", { ascending: false });
+
+        const { data: peopleUpdated } = await supabase
+          .from("people")
+          .select("name, type, updated_at")
+          .gte("updated_at", sinceIso)
+          .order("updated_at", { ascending: false });
+
+        // Deduplicate people (could appear in both created and updated)
+        const allPeopleNames = new Set<string>();
+        const peopleEntries: { name: string; type: string | null; action: string; date: string }[] = [];
+
+        for (const person of peopleCreated || []) {
+          allPeopleNames.add(person.name);
+          peopleEntries.push({ name: person.name, type: person.type, action: "created", date: person.created_at });
+        }
+        for (const person of peopleUpdated || []) {
+          if (!allPeopleNames.has(person.name)) {
+            allPeopleNames.add(person.name);
+            peopleEntries.push({ name: person.name, type: person.type, action: "updated", date: person.updated_at });
+          }
+        }
 
         // Collect project IDs for name resolution
         const projectIdSet = new Set<string>();
@@ -404,6 +432,17 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         } else {
           sections.push("");
           for (const entry of projectEntries) {
+            sections.push(`- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${formatDate(entry.date)}`);
+          }
+        }
+
+        // People
+        sections.push("", `## People (${peopleEntries.length})`);
+        if (peopleEntries.length === 0) {
+          sections.push("", "No people activity.");
+        } else {
+          sections.push("");
+          for (const entry of peopleEntries) {
             sections.push(`- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${formatDate(entry.date)}`);
           }
         }
