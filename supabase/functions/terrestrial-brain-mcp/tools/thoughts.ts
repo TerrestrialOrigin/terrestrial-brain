@@ -6,6 +6,7 @@ import { parseNote } from "../parser.ts";
 import { runExtractionPipeline } from "../extractors/pipeline.ts";
 import { ProjectExtractor } from "../extractors/project-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
+import { PeopleExtractor } from "../extractors/people-extractor.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
@@ -260,7 +261,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           const parsedNote = parseNote(content, null, null, "mcp");
           references = await runExtractionPipeline(
             parsedNote,
-            [new ProjectExtractor(), new TaskExtractor()],
+            [new ProjectExtractor(), new TaskExtractor(), new PeopleExtractor()],
             supabase,
           );
         } catch (pipelineError) {
@@ -351,7 +352,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         try {
           references = await runExtractionPipeline(
             parsedNote,
-            [new ProjectExtractor(), new TaskExtractor()],
+            [new ProjectExtractor(), new TaskExtractor(), new PeopleExtractor()],
             supabase,
           );
         } catch (pipelineError) {
@@ -525,9 +526,11 @@ Return ONLY valid JSON in this exact structure:
 
         const taskCount = references.tasks?.length || 0;
         const projectCount = references.projects?.length || 0;
+        const peopleCount = references.people?.length || 0;
         const extractionParts: string[] = [];
         if (taskCount > 0) extractionParts.push(`${taskCount} task${taskCount !== 1 ? "s" : ""} detected`);
         if (projectCount > 0) extractionParts.push(`${projectCount} project${projectCount !== 1 ? "s" : ""} linked`);
+        if (peopleCount > 0) extractionParts.push(`${peopleCount} ${peopleCount !== 1 ? "people" : "person"} referenced`);
         const extractionSuffix = extractionParts.length > 0 ? ` | ${extractionParts.join(", ")}` : "";
 
         return {

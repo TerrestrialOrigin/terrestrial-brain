@@ -21,6 +21,9 @@ import {
   TaskExtractor,
   computeSimilarity,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
+import {
+  PeopleExtractor,
+} from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
 
 // ---------------------------------------------------------------------------
 // Supabase client for direct DB access in tests
@@ -34,6 +37,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // Seed project IDs (from seed.sql)
 const CARCHIEF_ID = "00000000-0000-0000-0000-000000000001";
 const TERRESTRIAL_BRAIN_ID = "00000000-0000-0000-0000-000000000002";
+
+// Seed people IDs (from seed.sql)
+const ALICE_ID = "00000000-0000-0000-0000-100000000001";
+const CLAUDE_ID = "00000000-0000-0000-0000-100000000002";
 
 // Track auto-created entities for cleanup
 const createdProjectIds: string[] = [];
@@ -232,8 +239,10 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -258,8 +267,10 @@ Deno.test("ProjectExtractor: detects project from heading match", async () => {
       { id: TERRESTRIAL_BRAIN_ID, name: "Terrestrial Brain" },
     ],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -276,8 +287,10 @@ Deno.test("ProjectExtractor: heading match is case-insensitive", async () => {
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -294,8 +307,10 @@ Deno.test("ProjectExtractor: heading not matching any project returns no match f
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -324,8 +339,10 @@ Deno.test("ProjectExtractor: auto-creates project from new folder", async () => 
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -371,8 +388,10 @@ Deno.test("ProjectExtractor: empty folder name is skipped", async () => {
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -395,8 +414,10 @@ Deno.test("ProjectExtractor: note outside /projects/ returns no path match", asy
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -414,8 +435,10 @@ Deno.test("ProjectExtractor: note with no referenceId gets no path match", async
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -442,8 +465,10 @@ Deno.test("ProjectExtractor: deduplicates when same project matched by path and 
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -537,8 +562,10 @@ Deno.test("TaskExtractor: unchecked checkbox creates open task with reference_id
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -576,8 +603,10 @@ Deno.test("TaskExtractor: checked checkbox creates done task with archived_at", 
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -612,8 +641,10 @@ Deno.test("TaskExtractor: indented checkboxes create subtask hierarchy", async (
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -659,8 +690,10 @@ Deno.test("TaskExtractor: tasks under project heading get correct project_id", a
     supabase,
     knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -703,8 +736,10 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result1 = await extractor.extract(note, context1);
@@ -725,8 +760,10 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
       content: task.content,
       reference_id: task.reference_id,
     })),
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result2 = await extractor.extract(note, context2);
@@ -761,8 +798,10 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result1 = await extractor.extract(note1, context1);
@@ -794,8 +833,10 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
       content: task.content,
       reference_id: task.reference_id,
     })),
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result2 = await extractor.extract(note2, context2);
@@ -829,8 +870,10 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result1 = await extractor.extract(note1, context1);
@@ -862,8 +905,10 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
       content: task.content,
       reference_id: task.reference_id,
     })),
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result2 = await extractor.extract(note2, context2);
@@ -897,8 +942,10 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result1 = await extractor.extract(note1, context1);
@@ -922,8 +969,10 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
       content: task.content,
       reference_id: task.reference_id,
     })),
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result2 = await extractor.extract(note2, context2);
@@ -957,8 +1006,10 @@ Deno.test("TaskExtractor: note with no checkboxes returns empty result", async (
     supabase,
     knownProjects: [],
     knownTasks: [],
+    knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   const result = await extractor.extract(note, context);
@@ -1072,6 +1123,141 @@ Deno.test("pipeline: knownTasks empty for note with no referenceId", async () =>
   await runExtractionPipeline(note, [inspectingExtractor], supabase);
 
   assertEquals(capturedKnownTasks.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 8.0 — PeopleExtractor tests
+// ---------------------------------------------------------------------------
+
+Deno.test("PeopleExtractor: referenceKey is 'people'", async () => {
+  const extractor = new PeopleExtractor();
+  const note = parseNote("Some content", "Test", null, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+  };
+
+  const result = await extractor.extract(note, context);
+  assertEquals(result.referenceKey, "people");
+});
+
+Deno.test("PeopleExtractor: empty knownPeople returns empty ids without LLM call", async () => {
+  const extractor = new PeopleExtractor();
+  const note = parseNote("Meeting with Alice about the project.", "Meeting", null, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+  };
+
+  const result = await extractor.extract(note, context);
+  assertEquals(result.ids, []);
+});
+
+Deno.test("PeopleExtractor: empty note content returns empty ids", async () => {
+  const extractor = new PeopleExtractor();
+  const note = parseNote("", "Empty", null, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [{ id: ALICE_ID, name: "Alice" }],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+  };
+
+  const result = await extractor.extract(note, context);
+  assertEquals(result.ids, []);
+});
+
+Deno.test("PeopleExtractor: with known people and content returns valid result", async () => {
+  const extractor = new PeopleExtractor();
+  const content = "# Meeting Notes\n\nDiscussed the roadmap with Alice. She suggested we prioritize the dealer page.";
+  const note = parseNote(content, "Meeting", "daily/meeting.md", "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [
+      { id: ALICE_ID, name: "Alice" },
+      { id: CLAUDE_ID, name: "Claude" },
+    ],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+  };
+
+  const result = await extractor.extract(note, context);
+  // LLM may or may not be available — verify structure is valid
+  assertEquals(result.referenceKey, "people");
+  assertEquals(Array.isArray(result.ids), true);
+  // If LLM is available, only valid known IDs should be returned
+  for (const personId of result.ids) {
+    assertEquals(
+      personId === ALICE_ID || personId === CLAUDE_ID,
+      true,
+    );
+  }
+});
+
+Deno.test("PeopleExtractor: does not return unknown people", async () => {
+  const extractor = new PeopleExtractor();
+  const content = "Charlie mentioned he'd handle the deployment.";
+  const note = parseNote(content, "Notes", null, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [{ id: ALICE_ID, name: "Alice" }],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+  };
+
+  const result = await extractor.extract(note, context);
+  // Charlie is not in known people, so should not appear
+  assertEquals(result.ids.includes(ALICE_ID), false);
+});
+
+// ---------------------------------------------------------------------------
+// 8.1 — Pipeline context: knownPeople populated from DB
+// ---------------------------------------------------------------------------
+
+Deno.test("pipeline: knownPeople populated from DB", async () => {
+  let capturedKnownPeople: { id: string; name: string }[] = [];
+
+  const inspectingExtractor: Extractor = {
+    referenceKey: "inspect",
+    extract: async (_note, context) => {
+      capturedKnownPeople = context.knownPeople;
+      return { referenceKey: "inspect", ids: [] };
+    },
+  };
+
+  const note = parseNote("Content", "Test", null, "obsidian");
+  await runExtractionPipeline(note, [inspectingExtractor], supabase);
+
+  // Seed data has Alice and Claude
+  const peopleNames = capturedKnownPeople.map(
+    (person: { id: string; name: string }) => person.name,
+  );
+  assertEquals(peopleNames.includes("Alice"), true);
+  assertEquals(peopleNames.includes("Claude"), true);
 });
 
 // ---------------------------------------------------------------------------

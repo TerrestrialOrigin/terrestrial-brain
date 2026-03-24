@@ -16,8 +16,10 @@ export interface ExtractionContext {
   supabase: SupabaseClient;
   knownProjects: { id: string; name: string }[];
   knownTasks: { id: string; content: string; reference_id: string | null }[];
+  knownPeople: { id: string; name: string }[];
   newlyCreatedProjects: { id: string; name: string }[];
   newlyCreatedTasks: { id: string; content: string }[];
+  newlyCreatedPeople: { id: string; name: string }[];
 }
 
 export interface ExtractionResult {
@@ -47,11 +49,11 @@ export async function runExtractionPipeline(
   extractors: Extractor[],
   supabase: SupabaseClient,
 ): Promise<Record<string, string[]>> {
-  // Initialize context — fetch known projects from DB
-  const { data: activeProjects } = await supabase
-    .from("projects")
-    .select("id, name")
-    .is("archived_at", null);
+  // Initialize context — fetch known projects and people from DB
+  const [{ data: activeProjects }, { data: activePeople }] = await Promise.all([
+    supabase.from("projects").select("id, name").is("archived_at", null),
+    supabase.from("people").select("id, name").is("archived_at", null),
+  ]);
 
   // Fetch known tasks for this note's reference_id (for reconciliation)
   let knownTasks: { id: string; content: string; reference_id: string | null }[] = [];
@@ -78,8 +80,15 @@ export async function runExtractionPipeline(
       }),
     ),
     knownTasks,
+    knownPeople: (activePeople || []).map(
+      (person: { id: string; name: string }) => ({
+        id: person.id,
+        name: person.name,
+      }),
+    ),
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
   };
 
   // Run each extractor sequentially, collecting results

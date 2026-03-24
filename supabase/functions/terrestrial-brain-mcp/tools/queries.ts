@@ -84,7 +84,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         // 4. Fetch open tasks
         const { data: tasks } = await supabase
           .from("tasks")
-          .select("id, content, status, due_by, created_at")
+          .select("id, content, status, due_by, assigned_to, created_at")
           .eq("project_id", id)
           .is("archived_at", null)
           .in("status", ["open", "in_progress"])
@@ -126,6 +126,25 @@ export function register(server: McpServer, supabase: SupabaseClient) {
               snapshot.id,
               { title: snapshot.title, reference_id: snapshot.reference_id },
             ])
+          );
+        }
+
+        // 6b. Resolve assigned person names for tasks
+        const taskPersonIds = [
+          ...new Set(
+            (tasks || [])
+              .filter((task: { assigned_to: string | null }) => task.assigned_to)
+              .map((task: { assigned_to: string }) => task.assigned_to)
+          ),
+        ];
+        let personMap: Record<string, string> = {};
+        if (taskPersonIds.length > 0) {
+          const { data: people } = await supabase
+            .from("people")
+            .select("id, name")
+            .in("id", taskPersonIds);
+          personMap = Object.fromEntries(
+            (people || []).map((person: { id: string; name: string }) => [person.id, person.name])
           );
         }
 
@@ -178,7 +197,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             const duePart = task.due_by
               ? ` — due ${formatDate(task.due_by)}${new Date(task.due_by) < new Date() ? " (OVERDUE)" : ""}`
               : "";
-            taskLines.push(`- ${statusIcon} ${task.content}${duePart}`);
+            const assigneePart = task.assigned_to && personMap[task.assigned_to]
+              ? ` (${personMap[task.assigned_to]})`
+              : "";
+            taskLines.push(`- ${statusIcon} ${task.content}${assigneePart}${duePart}`);
           }
         }
         sections.push(taskLines.join("\n"));
