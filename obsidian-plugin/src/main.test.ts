@@ -44,7 +44,7 @@ vi.mock("obsidian", () => ({
     loadData = vi.fn();
     saveData = vi.fn();
     registerEvent() {}
-    registerInterval() {}
+    registerInterval(id: number) { return id; }
     addCommand() {}
     addRibbonIcon() {}
     addSettingTab() {}
@@ -517,7 +517,7 @@ describe("ribbon icon context menu", () => {
 
     // Obsidian provides window globally — stub it for Node
     const originalWindow = globalThis.window;
-    (globalThis as any).window = { setTimeout: vi.fn(), setInterval: vi.fn().mockReturnValue(1) };
+    (globalThis as any).window = { setTimeout: vi.fn(), setInterval: vi.fn().mockReturnValue(1), clearInterval: vi.fn() };
 
     await plugin.onload();
 

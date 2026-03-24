@@ -7,18 +7,6 @@ import { SupabaseClient } from "@supabase/supabase-js";
 // ---------------------------------------------------------------------------
 
 /**
- * Extract project IDs from a thought's metadata.references, handling both
- * old format ({ project_id: "uuid" }) and new format ({ projects: ["uuid"] }).
- */
-function getProjectRefsFromMetadata(metadata: Record<string, unknown>): string[] {
-  const refs = metadata?.references as Record<string, unknown> | undefined;
-  if (!refs) return [];
-  if (Array.isArray(refs.projects)) return refs.projects as string[];
-  if (typeof refs.project_id === "string") return [refs.project_id];
-  return [];
-}
-
-/**
  * Format a date for display. Returns locale date string or "—" if null.
  */
 function formatDate(dateStr: string | null | undefined): string {
@@ -90,19 +78,33 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           .in("status", ["open", "in_progress"])
           .order("created_at", { ascending: false });
 
-        // 5. Fetch recent thoughts that reference this project
-        // Query a broader set and filter in-app for backwards compatibility
-        const { data: allRecentThoughts } = await supabase
-          .from("thoughts")
-          .select("id, content, metadata, note_snapshot_id, created_at")
-          .order("created_at", { ascending: false })
-          .limit(200);
+        // 5. Fetch recent thoughts that reference this project (DB-side filtering)
+        // Query both metadata formats in parallel: new (projects array) and old (project_id string)
+        const [{ data: newFormatThoughts }, { data: oldFormatThoughts }] = await Promise.all([
+          supabase
+            .from("thoughts")
+            .select("id, content, metadata, note_snapshot_id, created_at")
+            .contains("metadata", { references: { projects: [id] } })
+            .order("created_at", { ascending: false })
+            .limit(10),
+          supabase
+            .from("thoughts")
+            .select("id, content, metadata, note_snapshot_id, created_at")
+            .contains("metadata", { references: { project_id: id } })
+            .order("created_at", { ascending: false })
+            .limit(10),
+        ]);
 
-        const matchingThoughts = (allRecentThoughts || [])
-          .filter((thought: { metadata: Record<string, unknown> }) => {
-            const projectRefs = getProjectRefsFromMetadata(thought.metadata);
-            return projectRefs.includes(id);
+        // Merge and deduplicate by ID, then take top 10 by date
+        const allProjectThoughts = [...(newFormatThoughts || []), ...(oldFormatThoughts || [])];
+        const seenThoughtIds = new Set<string>();
+        const matchingThoughts = allProjectThoughts
+          .filter((thought) => {
+            if (seenThoughtIds.has(thought.id)) return false;
+            seenThoughtIds.add(thought.id);
+            return true;
           })
+          .sort((thoughtA, thoughtB) => new Date(thoughtB.created_at).getTime() - new Date(thoughtA.created_at).getTime())
           .slice(0, 10);
 
         // 6. Fetch source note snapshots for matching thoughts

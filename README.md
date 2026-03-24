@@ -2,6 +2,9 @@
 
 The project is inspired by and is an extension of "Open Brain" by Nate B Johnes (Seriously, subscribe to his youtube channel. He makes AWESOME content!)
 
+>[!DANGER]
+> The supabase connection string with the key gets stored in your plugin data uncencrypted!!! This means that if you install a malicous plugin and it scans your obsidian folder to steal data it will be able to connect to the supabase database and read all data. There will be an enhancement later to take care of this, but for now that's a known vulnerability.
+
 An AI-powered second brain that bridges [Obsidian](https://obsidian.md) with a cloud backend on [Supabase](https://supabase.com). Notes you write in Obsidian are automatically ingested, split into atomic thoughts, enriched with AI-extracted metadata (people, projects, tasks, topics), and embedded as vectors for semantic search. AI agents interact with your knowledge base through an [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server and can deliver insights, summaries, and analyses back into your vault for review.
 
 ## How It Works

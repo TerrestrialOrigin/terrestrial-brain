@@ -20,6 +20,8 @@ export interface ExtractionContext {
   newlyCreatedProjects: { id: string; name: string }[];
   newlyCreatedTasks: { id: string; content: string }[];
   newlyCreatedPeople: { id: string; name: string }[];
+  /** References accumulated by previously-run extractors in the pipeline. */
+  accumulatedReferences: Record<string, string[]>;
 }
 
 export interface ExtractionResult {
@@ -89,6 +91,7 @@ export async function runExtractionPipeline(
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
+    accumulatedReferences: {},
   };
 
   // Run each extractor sequentially, collecting results
@@ -97,6 +100,7 @@ export async function runExtractionPipeline(
   for (const extractor of extractors) {
     const result = await extractor.extract(note, context);
     references[result.referenceKey] = result.ids;
+    context.accumulatedReferences = { ...references };
   }
 
   return references;

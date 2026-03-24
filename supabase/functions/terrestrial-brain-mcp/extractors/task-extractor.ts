@@ -277,20 +277,6 @@ ${projectList}`,
 export class TaskExtractor implements Extractor {
   readonly referenceKey = "tasks";
 
-  /**
-   * Optional: project IDs detected by ProjectExtractor (from pipeline references).
-   * Used as default project for tasks with no heading or AI match.
-   */
-  private filePathProjectIds: string[] = [];
-
-  /**
-   * Set the project IDs from the pipeline's ProjectExtractor result.
-   * Called before extract() when both extractors run in the pipeline.
-   */
-  setFilePathProjectIds(projectIds: string[]): void {
-    this.filePathProjectIds = projectIds;
-  }
-
   async extract(
     note: ParsedNote,
     context: ExtractionContext,
@@ -332,9 +318,10 @@ export class TaskExtractor implements Extractor {
         continue;
       }
 
-      // Priority 2: File path project (from ProjectExtractor)
-      if (this.filePathProjectIds.length > 0) {
-        projectByCheckboxIndex.set(index, this.filePathProjectIds[0]);
+      // Priority 2: File path project (from ProjectExtractor via pipeline)
+      const pipelineProjectIds = context.accumulatedReferences.projects || [];
+      if (pipelineProjectIds.length > 0) {
+        projectByCheckboxIndex.set(index, pipelineProjectIds[0]);
         continue;
       }
 

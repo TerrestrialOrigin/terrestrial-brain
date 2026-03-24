@@ -58,6 +58,9 @@ export default class TerrestrialBrainPlugin extends Plugin {
   // Guard to prevent overlapping poll cycles while a confirmation dialog is open
   private pollInProgress = false;
 
+  // Tracked poll interval so it can be cleared and re-registered when settings change
+  private pollIntervalId: number | null = null;
+
   async onload() {
     await this.loadSettings();
 
@@ -156,20 +159,33 @@ export default class TerrestrialBrainPlugin extends Plugin {
     // Poll for AI output shortly after startup (deferred so onload completes first)
     window.setTimeout(() => this.pollAIOutput(), 2000);
 
-    // Then poll on interval
-    this.registerInterval(
-      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMinutes * 60000)
-    );
+    // Then poll on interval (tracked so it can be re-registered when settings change)
+    this.startPollInterval();
 
     console.log("Terrestrial Brain Sync loaded");
   }
 
   onunload() {
+    // Clear the poll interval
+    if (this.pollIntervalId !== null) {
+      window.clearInterval(this.pollIntervalId);
+    }
+
     // Clear all pending timers on plugin unload
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+  }
+
+  /** Start (or restart) the AI output poll interval using current settings. */
+  private startPollInterval() {
+    if (this.pollIntervalId !== null) {
+      window.clearInterval(this.pollIntervalId);
+    }
+    this.pollIntervalId = this.registerInterval(
+      window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMinutes * 60000)
+    );
   }
 
   // ─── Per-file debounce timer ───────────────────────────────────────────────
@@ -384,6 +400,9 @@ export default class TerrestrialBrainPlugin extends Plugin {
         .map((l) => l.slice(5).trim())
         .filter((l) => l && l !== "[DONE]");
 
+      // Collect all valid results and return the last one — intermediate SSE
+      // events may contain progress data; the final event has the real result.
+      let lastResult = "Done";
       for (const line of dataLines) {
         try {
           const parsed = JSON.parse(line);
@@ -392,13 +411,13 @@ export default class TerrestrialBrainPlugin extends Plugin {
           if (toolResult?.isError) {
             throw new Error(toolResult?.content?.[0]?.text || "Unknown error");
           }
-          return toolResult?.content?.[0]?.text || "Done";
-        } catch (e) {
-          if (e instanceof SyntaxError) continue;
-          throw e;
+          lastResult = toolResult?.content?.[0]?.text || "Done";
+        } catch (parseError) {
+          if (parseError instanceof SyntaxError) continue;
+          throw parseError;
         }
       }
-      return "Done";
+      return lastResult;
     } else {
       const result = await response.json();
       if (result.error) throw new Error(JSON.stringify(result.error));
@@ -434,6 +453,21 @@ export default class TerrestrialBrainPlugin extends Plugin {
     delete (this.settings as unknown as Record<string, unknown>)["pollIntervalMs"];
 
     this.syncedHashes = data?.syncedHashes ?? {};
+
+    // Prune hashes for files that no longer exist in the vault
+    this.pruneStaleHashes();
+  }
+
+  /** Remove syncedHashes entries for files that no longer exist in the vault. */
+  private pruneStaleHashes() {
+    const existingPaths = new Set(
+      this.app.vault.getMarkdownFiles().map((file) => file.path)
+    );
+    for (const path of Object.keys(this.syncedHashes)) {
+      if (!existingPaths.has(path)) {
+        delete this.syncedHashes[path];
+      }
+    }
   }
 
   async saveSettings() {
@@ -441,6 +475,9 @@ export default class TerrestrialBrainPlugin extends Plugin {
       settings: this.settings,
       syncedHashes: this.syncedHashes,
     });
+
+    // Re-register the poll interval in case pollIntervalMinutes changed
+    this.startPollInterval();
   }
 }
 
@@ -477,13 +514,14 @@ class AIOutputConfirmModal extends Modal {
       item.style.borderBottom = "1px solid var(--background-modifier-border)";
 
       item.createEl("div", {
-        text: metadata.file_path,
-        cls: "tb-ai-output-path",
+        text: metadata.title || metadata.file_path,
+        cls: "tb-ai-output-title",
       }).style.fontWeight = "600";
 
+      const detailParts = [metadata.file_path, sizeDisplay];
       item.createEl("div", {
-        text: sizeDisplay,
-        cls: "tb-ai-output-size",
+        text: detailParts.join(" · "),
+        cls: "tb-ai-output-details",
       }).style.color = "var(--text-muted)";
     }
 

@@ -239,7 +239,76 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     }
   );
 
-  // Tool 4: Capture Thought
+  // Tool 4: Get Thought by ID
+  server.registerTool(
+    "get_thought_by_id",
+    {
+      title: "Get Thought by ID",
+      description:
+        "Retrieve a single thought by its UUID. " +
+        "Use this when you have a specific thought ID (e.g. from search results, task references, or a previous conversation) and need its full content and metadata.",
+      inputSchema: {
+        id: z.string().uuid().describe("The UUID of the thought to retrieve"),
+      },
+    },
+    async ({ id }) => {
+      try {
+        const { data, error } = await supabase
+          .from("thoughts")
+          .select("id, content, metadata, reference_id, created_at, updated_at")
+          .eq("id", id)
+          .single();
+
+        if (error) {
+          const message = error.code === "PGRST116"
+            ? `No thought found with ID "${id}".`
+            : `Error: ${error.message}`;
+          return {
+            content: [{ type: "text" as const, text: message }],
+            isError: error.code !== "PGRST116",
+          };
+        }
+
+        const metadata = (data.metadata || {}) as Record<string, unknown>;
+        const lines: string[] = [
+          `ID: ${data.id}`,
+          `Captured: ${new Date(data.created_at).toLocaleDateString()}`,
+        ];
+        if (data.updated_at) {
+          lines.push(`Updated: ${new Date(data.updated_at).toLocaleDateString()}`);
+        }
+        lines.push(`Type: ${metadata.type || "unknown"}`);
+        if (data.reference_id) lines.push(`Source: ${data.reference_id}`);
+        if (Array.isArray(metadata.topics) && metadata.topics.length) {
+          lines.push(`Topics: ${(metadata.topics as string[]).join(", ")}`);
+        }
+        if (Array.isArray(metadata.people) && metadata.people.length) {
+          lines.push(`People: ${(metadata.people as string[]).join(", ")}`);
+        }
+        if (Array.isArray(metadata.action_items) && metadata.action_items.length) {
+          lines.push(`Actions: ${(metadata.action_items as string[]).join("; ")}`);
+        }
+        const references = metadata.references as Record<string, string[]> | undefined;
+        if (references) {
+          if (references.projects?.length) lines.push(`Projects: ${references.projects.join(", ")}`);
+          if (references.tasks?.length) lines.push(`Tasks: ${references.tasks.join(", ")}`);
+          if (references.people?.length) lines.push(`People refs: ${references.people.join(", ")}`);
+        }
+        lines.push(`\n${data.content}`);
+
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // Tool 5: Capture Thought
   server.registerTool(
     "capture_thought",
     {
@@ -307,7 +376,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     }
   );
 
-  // Tool 5: Ingest Note (with reconciliation)
+  // Tool 6: Ingest Note (with reconciliation)
   server.registerTool(
     "ingest_note",
     {

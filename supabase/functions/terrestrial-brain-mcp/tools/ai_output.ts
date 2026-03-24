@@ -501,11 +501,15 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           .single();
 
         if (outputError) {
+          // Roll back orphaned task rows
+          if (taskIds.length > 0) {
+            await supabase.from("tasks").delete().in("id", taskIds);
+          }
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Tasks created but failed to create AI output: ${outputError.message}`,
+                text: `Failed to create AI output (tasks rolled back): ${outputError.message}`,
               },
             ],
             isError: true,
