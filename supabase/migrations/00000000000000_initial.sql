@@ -43,7 +43,9 @@ returns table (
   created_at timestamptz,
   similarity float
 )
-language sql stable as $$
+language sql stable
+set search_path = public, extensions
+as $$
   select
     id, content, metadata, created_at,
     1 - (embedding <=> query_embedding) as similarity

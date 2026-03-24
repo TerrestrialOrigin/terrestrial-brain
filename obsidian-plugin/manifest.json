@@ -1,6 +1,6 @@
 {
-  "id": "terrestrial-brain-dev",
-  "name": "Terrestrial Brain (Dev)",
+  "id": "terrestrial-brain",
+  "name": "Terrestrial Brain",
   "version": "0.2.0",
   "minAppVersion": "1.0.0",
   "description": "Dev build — points at local Supabase",
