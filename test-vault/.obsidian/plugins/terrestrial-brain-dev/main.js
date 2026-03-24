@@ -25,6 +25,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var main_exports = {};
 __export(main_exports, {
   default: () => TerrestrialBrainPlugin,
+  formatFileSize: () => formatFileSize,
   simpleHash: () => simpleHash,
   stripFrontmatter: () => stripFrontmatter
 });
@@ -113,7 +114,7 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
       });
       menu.addItem((item) => {
         item.setTitle("Pull AI Output from Terrestrial Brain").setIcon("download").onClick(async () => {
-          await this.pollAIOutput();
+          await this.pollAIOutput({ manual: true });
         });
       });
       menu.showAtMouseEvent(event);
@@ -122,7 +123,7 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
       id: "poll-ai-output",
       name: "Pull AI output from Terrestrial Brain",
       callback: async () => {
-        await this.pollAIOutput();
+        await this.pollAIOutput({ manual: true });
       }
     });
     this.addSettingTab(new TBSettingTab(this.app, this));
@@ -157,22 +158,26 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
     }
   }
   // ─── AI Output Polling ─────────────────────────────────────────────────────
-  async pollAIOutput() {
+  async pollAIOutput(options = {}) {
     if (!this.settings.tbEndpointUrl)
       return;
     if (this.pollInProgress)
       return;
     this.pollInProgress = true;
     try {
-      const raw = await this.callMCP("get_pending_ai_output", {});
-      const outputs = JSON.parse(raw);
-      if (!outputs.length)
+      const raw = await this.callMCP("get_pending_ai_output_metadata", {});
+      const metadataList = JSON.parse(raw);
+      if (!metadataList.length) {
+        if (options.manual) {
+          new import_obsidian.Notice("No pending AI output to pull");
+        }
         return;
-      const accepted = await this.showConfirmationDialog(outputs);
-      if (accepted) {
-        await this.deliverOutputs(outputs);
-      } else {
-        await this.rejectOutputs(outputs);
+      }
+      const decision = await this.showConfirmationDialog(metadataList);
+      if (decision === "accepted") {
+        await this.fetchAndDeliverOutputs(metadataList);
+      } else if (decision === "rejected") {
+        await this.rejectOutputs(metadataList);
       }
     } catch (err) {
       console.error("TB Poll error:", err);
@@ -180,32 +185,44 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
       this.pollInProgress = false;
     }
   }
-  showConfirmationDialog(outputs) {
+  showConfirmationDialog(metadataList) {
     return new Promise((resolve) => {
-      const modal = new AIOutputConfirmModal(this.app, outputs, resolve);
+      const modal = new AIOutputConfirmModal(this.app, metadataList, resolve);
       modal.open();
     });
   }
-  async deliverOutputs(outputs) {
-    const ids = [];
-    for (const output of outputs) {
-      const path = output.file_path;
+  async fetchAndDeliverOutputs(metadataList) {
+    const ids = metadataList.map((metadata) => metadata.id);
+    const contentRaw = await this.callMCP("fetch_ai_output_content", { ids });
+    const contentList = JSON.parse(contentRaw);
+    const contentById = /* @__PURE__ */ new Map();
+    for (const item of contentList) {
+      contentById.set(item.id, item.content);
+    }
+    const deliveredIds = [];
+    for (const metadata of metadataList) {
+      const content = contentById.get(metadata.id);
+      if (!content && content !== "")
+        continue;
+      const path = metadata.file_path;
       const folder = path.substring(0, path.lastIndexOf("/"));
       if (folder)
         await this.app.vault.adapter.mkdir(folder);
-      await this.app.vault.adapter.write(path, output.content);
-      const contentHash = simpleHash(stripFrontmatter(output.content).trim());
+      await this.app.vault.adapter.write(path, content);
+      const contentHash = simpleHash(stripFrontmatter(content).trim());
       this.syncedHashes[path] = contentHash;
-      ids.push(output.id);
+      deliveredIds.push(metadata.id);
     }
-    await this.callMCP("mark_ai_output_picked_up", { ids });
-    await this.saveSettings();
-    new import_obsidian.Notice(`\u{1F9E0} ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} delivered to vault`);
+    if (deliveredIds.length > 0) {
+      await this.callMCP("mark_ai_output_picked_up", { ids: deliveredIds });
+      await this.saveSettings();
+      new import_obsidian.Notice(`\u{1F9E0} ${deliveredIds.length} AI output${deliveredIds.length > 1 ? "s" : ""} delivered to vault`);
+    }
   }
-  async rejectOutputs(outputs) {
-    const ids = outputs.map((output) => output.id);
+  async rejectOutputs(metadataList) {
+    const ids = metadataList.map((metadata) => metadata.id);
     await this.callMCP("reject_ai_output", { ids });
-    new import_obsidian.Notice(`\u{1F9E0} ${outputs.length} AI output${outputs.length > 1 ? "s" : ""} rejected`);
+    new import_obsidian.Notice(`\u{1F9E0} ${ids.length} AI output${ids.length > 1 ? "s" : ""} rejected`);
   }
   // ─── Core Logic ────────────────────────────────────────────────────────────
   async processNote(file, opts = {}) {
@@ -340,33 +357,33 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
   }
 };
 var AIOutputConfirmModal = class extends import_obsidian.Modal {
-  constructor(app, outputs, onDecision) {
+  constructor(app, metadataList, onDecision) {
     super(app);
     this.resolved = false;
-    this.outputs = outputs;
+    this.metadataList = metadataList;
     this.onDecision = onDecision;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", {
-      text: `${this.outputs.length} pending AI output${this.outputs.length > 1 ? "s" : ""}`
+      text: `${this.metadataList.length} pending AI output${this.metadataList.length > 1 ? "s" : ""}`
     });
     const listContainer = contentEl.createDiv({ cls: "tb-ai-output-list" });
     listContainer.style.maxHeight = "300px";
     listContainer.style.overflowY = "auto";
     listContainer.style.marginBottom = "16px";
-    for (const output of this.outputs) {
-      const charCount = output.content.length.toLocaleString();
+    for (const metadata of this.metadataList) {
+      const sizeDisplay = formatFileSize(metadata.content_size);
       const item = listContainer.createDiv({ cls: "tb-ai-output-item" });
       item.style.padding = "6px 0";
       item.style.borderBottom = "1px solid var(--background-modifier-border)";
       item.createEl("div", {
-        text: output.file_path,
+        text: metadata.file_path,
         cls: "tb-ai-output-path"
       }).style.fontWeight = "600";
       item.createEl("div", {
-        text: `${charCount} chars`,
+        text: sizeDisplay,
         cls: "tb-ai-output-size"
       }).style.color = "var(--text-muted)";
     }
@@ -377,25 +394,29 @@ var AIOutputConfirmModal = class extends import_obsidian.Modal {
     buttonContainer.style.marginTop = "16px";
     const rejectButton = buttonContainer.createEl("button", { text: "Reject All" });
     rejectButton.addEventListener("click", () => {
-      this.resolve(false);
+      this.resolve("rejected");
+    });
+    const postponeButton = buttonContainer.createEl("button", { text: "Postpone" });
+    postponeButton.addEventListener("click", () => {
+      this.resolve("postponed");
     });
     const acceptButton = buttonContainer.createEl("button", {
       text: "Accept All",
       cls: "mod-cta"
     });
     acceptButton.addEventListener("click", () => {
-      this.resolve(true);
+      this.resolve("accepted");
     });
   }
   onClose() {
     if (!this.resolved) {
-      this.onDecision(false);
+      this.onDecision("postponed");
     }
     this.contentEl.empty();
   }
-  resolve(accepted) {
+  resolve(decision) {
     this.resolved = true;
-    this.onDecision(accepted);
+    this.onDecision(decision);
     this.close();
   }
 };
@@ -454,6 +475,15 @@ var TBSettingTab = class extends import_obsidian.PluginSettingTab {
     );
   }
 };
+function formatFileSize(bytes) {
+  if (bytes < 1024)
+    return `${bytes} bytes`;
+  if (bytes < 1024 * 1024)
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 function stripFrontmatter(content) {
   return content.replace(/^---[\s\S]*?---\n?/, "");
 }

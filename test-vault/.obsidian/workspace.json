@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "669e421d25c6d059",
+        "id": "acca18b72de7c418",
         "type": "tabs",
         "children": [
           {
-            "id": "10d1c9714eebdc1f",
+            "id": "e78c69acbbaa2ff3",
             "type": "leaf",
             "state": {
               "type": "empty",
@@ -180,8 +180,10 @@
       "bases:Create new base": false
     }
   },
-  "active": "028ebc1216a3ee7e",
+  "active": "e78c69acbbaa2ff3",
   "lastOpenFiles": [
+    "test/ai-output-postpone-test.md",
+    "test",
     "AI Generated/sync-strategy-comparison.md",
     "March 23rd.md",
     "Test Notes/sample-note.md",
@@ -203,7 +205,6 @@
     "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process",
     "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files",
     "alphabetical-folder/breakthroughs-here/conversations-daily",
-    "alphabetical-folder/breakthroughs-here",
     "Test Notes/quick-ideas.md",
     "Test Notes/meeting-march-22.md",
     "AI Notes/test-output-3.md",
