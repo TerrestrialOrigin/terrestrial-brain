@@ -38,7 +38,7 @@ interface TBPluginSettings {
 
 const DEFAULT_SETTINGS: TBPluginSettings = {
   tbEndpointUrl: "",
-  excludeTag: "terrestrialBrainExclude",
+  excludeTag: "tbExclude",
   syncDelayMinutes: 5,
   pollIntervalMinutes: 10,
   projectsFolderBase: "projects",
@@ -416,6 +416,11 @@ export default class TerrestrialBrainPlugin extends Plugin {
     const raw = data?.settings ?? data ?? {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw);
 
+    // Normalize exclude tag — strip leading # if user entered it that way
+    if (this.settings.excludeTag) {
+      this.settings.excludeTag = this.settings.excludeTag.replace(/^#/, "");
+    }
+
     // Migrate old millisecond settings to minutes
     if ("debounceMs" in raw && !("syncDelayMinutes" in raw)) {
       this.settings.syncDelayMinutes = Math.round(raw.debounceMs / 60000) || DEFAULT_SETTINGS.syncDelayMinutes;
@@ -557,10 +562,10 @@ class TBSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Exclude tag")
-      .setDesc("Notes with this tag are never synced. Default: terrestrialBrainExclude")
+      .setDesc("Notes with this tag are never synced. Enter with or without the # prefix. Default: tbExclude")
       .addText((text) =>
         text
-          .setPlaceholder("terrestrialBrainExclude")
+          .setPlaceholder("tbExclude")
           .setValue(this.plugin.settings.excludeTag)
           .onChange(async (value) => {
             this.plugin.settings.excludeTag = value.trim().replace(/^#/, "");

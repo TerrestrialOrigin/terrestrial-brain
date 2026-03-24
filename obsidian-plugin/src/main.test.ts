@@ -75,7 +75,7 @@ function createTestPlugin(overrides: {
 
   plugin.settings = {
     tbEndpointUrl: overrides.tbEndpointUrl ?? "",
-    excludeTag: overrides.excludeTag ?? "terrestrialBrainExclude",
+    excludeTag: overrides.excludeTag ?? "tbExclude",
     syncDelayMinutes: 5,
     pollIntervalMinutes: 10,
     projectsFolderBase: "projects",
@@ -140,18 +140,18 @@ function setupTwoPhaseCallMCP(
 // ─── isExcluded tests ────────────────────────────────────────────────────────
 
 describe("isExcluded", () => {
-  it("returns true for frontmatter boolean terrestrialBrainExclude: true", () => {
+  it("returns true for frontmatter boolean tbExclude: true", () => {
     const plugin = createTestPlugin({
-      frontmatter: { terrestrialBrainExclude: true },
+      frontmatter: { tbExclude: true },
     });
     const file = { path: "test.md" } as any;
 
     expect(plugin.isExcluded(file)).toBe(true);
   });
 
-  it("returns false for frontmatter boolean terrestrialBrainExclude: false", () => {
+  it("returns false for frontmatter boolean tbExclude: false", () => {
     const plugin = createTestPlugin({
-      frontmatter: { terrestrialBrainExclude: false },
+      frontmatter: { tbExclude: false },
     });
     const file = { path: "test.md" } as any;
 
@@ -160,7 +160,7 @@ describe("isExcluded", () => {
 
   it("returns true for tag-array exclusion (existing behavior)", () => {
     const plugin = createTestPlugin({
-      frontmatter: { tags: ["terrestrialBrainExclude"] },
+      frontmatter: { tags: ["tbExclude"] },
     });
     const file = { path: "test.md" } as any;
 
@@ -170,7 +170,7 @@ describe("isExcluded", () => {
   it("returns true for inline tag exclusion", () => {
     const plugin = createTestPlugin({
       frontmatter: {},
-      inlineTags: [{ tag: "#terrestrialBrainExclude" }],
+      inlineTags: [{ tag: "#tbExclude" }],
     });
     const file = { path: "test.md" } as any;
 
@@ -197,7 +197,7 @@ describe("isExcluded", () => {
 
   it("uses strict boolean equality (string 'true' does not match)", () => {
     const plugin = createTestPlugin({
-      frontmatter: { terrestrialBrainExclude: "true" },
+      frontmatter: { tbExclude: "true" },
     });
     const file = { path: "test.md" } as any;
 
@@ -448,7 +448,7 @@ describe("loadSettings — migration from ms to minutes", () => {
   it("migrates debounceMs to syncDelayMinutes", async () => {
     const plugin = createTestPlugin();
     plugin.loadData = vi.fn().mockResolvedValue({
-      settings: { debounceMs: 300000, pollIntervalMs: 600000, tbEndpointUrl: "", excludeTag: "terrestrialBrainExclude", projectsFolderBase: "projects" },
+      settings: { debounceMs: 300000, pollIntervalMs: 600000, tbEndpointUrl: "", excludeTag: "tbExclude", projectsFolderBase: "projects" },
       syncedHashes: {},
     });
 
@@ -463,7 +463,7 @@ describe("loadSettings — migration from ms to minutes", () => {
   it("preserves new minute settings if already present", async () => {
     const plugin = createTestPlugin();
     plugin.loadData = vi.fn().mockResolvedValue({
-      settings: { syncDelayMinutes: 3, pollIntervalMinutes: 15, tbEndpointUrl: "", excludeTag: "terrestrialBrainExclude", projectsFolderBase: "projects" },
+      settings: { syncDelayMinutes: 3, pollIntervalMinutes: 15, tbEndpointUrl: "", excludeTag: "tbExclude", projectsFolderBase: "projects" },
       syncedHashes: {},
     });
 

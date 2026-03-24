@@ -3,7 +3,7 @@
   "name": "Terrestrial Brain (Dev)",
   "version": "0.2.0",
   "minAppVersion": "1.0.0",
-  "description": "Dev build — points at local Supabase",
+  "description": "Dev build of Terrestrial Brain. Syncs your Obsidian vault to Terrestrial Brain, an AI-powered second brain backed by Supabase. Notes are automatically ingested after a configurable delay and can be searched, analyzed, and enriched by AI agents via the Terrestrial Brain MCP server. AI-generated output is delivered back into your vault for review. Requires a deployed Terrestrial Brain MCP endpoint (Supabase Edge Function).",
   "author": "Anastasia",
   "isDesktopOnly": true
 }
