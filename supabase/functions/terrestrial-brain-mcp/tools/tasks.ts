@@ -18,9 +18,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         parent_id: z.string().optional().describe("UUID of parent task for sub-tasks"),
         due_by: z.string().optional().describe("Due date as ISO 8601 string"),
         status: z.string().optional().default("open").describe("Status: open, in_progress, done, deferred"),
+        assigned_to: z.string().optional().describe("UUID of the person this task is assigned to"),
       },
     },
-    async ({ content, project_id, parent_id, due_by, status }) => {
+    async ({ content, project_id, parent_id, due_by, status, assigned_to }) => {
       try {
         const { data, error } = await supabase
           .from("tasks")
@@ -30,6 +31,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             project_id: project_id || null,
             parent_id: parent_id || null,
             due_by: due_by || null,
+            assigned_to: assigned_to || null,
           })
           .select("id")
           .single();
@@ -75,7 +77,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       try {
         let q = supabase
           .from("tasks")
-          .select("id, content, status, due_by, project_id, archived_at, created_at")
+          .select("id, content, status, due_by, project_id, assigned_to, archived_at, created_at")
           .order("created_at", { ascending: false })
           .limit(limit);
 
@@ -110,12 +112,25 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           projectMap = Object.fromEntries((projects || []).map(p => [p.id, p.name]));
         }
 
+        // Get assigned person names
+        const personIds = [...new Set(data.filter(t => t.assigned_to).map(t => t.assigned_to))];
+        let personMap: Record<string, string> = {};
+        if (personIds.length > 0) {
+          const { data: people } = await supabase
+            .from("people")
+            .select("id, name")
+            .in("id", personIds);
+          personMap = Object.fromEntries((people || []).map(p => [p.id, p.name]));
+        }
+
         const lines = data.map((t, i) => {
           const statusIcon = t.status === "done" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]";
           const parts = [`${i + 1}. ${statusIcon} ${t.content}`];
           parts.push(`   ID: ${t.id} | Status: ${t.status}`);
           if (t.project_id && projectMap[t.project_id])
             parts.push(`   Project: ${projectMap[t.project_id]}`);
+          if (t.assigned_to && personMap[t.assigned_to])
+            parts.push(`   Assigned to: ${personMap[t.assigned_to]}`);
           if (t.due_by) {
             const due = new Date(t.due_by);
             const overdue = due < new Date() && t.status !== "done";
@@ -151,15 +166,17 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         status: z.string().optional().describe("New status: open, in_progress, done, deferred"),
         due_by: z.string().nullable().optional().describe("New due date (ISO 8601), or null to clear"),
         project_id: z.string().nullable().optional().describe("New project UUID, or null to unlink"),
+        assigned_to: z.string().nullable().optional().describe("Person UUID to assign, or null to unassign"),
       },
     },
-    async ({ id, content, status, due_by, project_id }) => {
+    async ({ id, content, status, due_by, project_id, assigned_to }) => {
       try {
         const updates: Record<string, unknown> = {};
         if (content !== undefined) updates.content = content;
         if (status !== undefined) updates.status = status;
         if (due_by !== undefined) updates.due_by = due_by;
         if (project_id !== undefined) updates.project_id = project_id;
+        if (assigned_to !== undefined) updates.assigned_to = assigned_to;
 
         // Auto-archive when marked done
         if (status === "done") {

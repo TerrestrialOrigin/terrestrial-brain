@@ -10,6 +10,11 @@ update public.projects
   set parent_id = '00000000-0000-0000-0000-000000000001'
   where id = '00000000-0000-0000-0000-000000000003';
 
+-- Test people
+insert into public.people (id, name, type, email, description) values
+  ('00000000-0000-0000-0000-100000000001', 'Alice', 'human', 'alice@example.com', 'Project lead for CarChief'),
+  ('00000000-0000-0000-0000-100000000002', 'Claude', 'ai', null, 'AI assistant for Terrestrial Brain');
+
 -- Test tasks
 insert into public.tasks (content, status, project_id) values
   ('Set up local Supabase dev environment', 'done', '00000000-0000-0000-0000-000000000002'),
