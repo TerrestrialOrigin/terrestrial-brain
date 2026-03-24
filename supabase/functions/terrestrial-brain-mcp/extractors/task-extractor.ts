@@ -4,10 +4,10 @@
  * Converts ParsedCheckbox[] into task rows with:
  * - Project association via priority chain (section heading > file path > AI inference)
  * - Subtask hierarchy from indentation (parent_id)
- * - Reconciliation against existing tasks on re-ingest
- * - Metadata with extraction context (source, section_heading, extraction_method)
- * - Due date extraction from checkbox text
- * - People assignment from checkbox/heading context
+ * - Reconciliation against existing tasks on re-ingest (with containment fallback)
+ * - Metadata with extraction context (source, section_heading)
+ * - Due date extraction: regex fast path + AI fallback
+ * - People assignment: explicit pattern fast path + AI fallback
  */
 
 import type { ParsedNote, ParsedCheckbox } from "../parser.ts";
@@ -18,10 +18,8 @@ import type {
 } from "./pipeline.ts";
 import {
   extractDueDate,
-  containsDateLikeWords,
-  inferDatesFromContent,
+  cleanStrippedText,
 } from "./date-parser.ts";
-import type { DateExtractionResult } from "./date-parser.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
@@ -30,17 +28,10 @@ const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 // Content similarity
 // ---------------------------------------------------------------------------
 
-/**
- * Normalizes text for comparison: lowercase, collapse whitespace, trim.
- */
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/**
- * Computes similarity ratio between two strings (0..1).
- * Uses longest common subsequence length / max length.
- */
 export function computeSimilarity(textA: string, textB: string): number {
   const normalizedA = normalizeText(textA);
   const normalizedB = normalizeText(textB);
@@ -54,10 +45,6 @@ export function computeSimilarity(textA: string, textB: string): number {
   return lcsLength / maxLength;
 }
 
-/**
- * Returns the length of the longest common subsequence of two strings.
- * O(m*n) time and space — fine for short checkbox text.
- */
 function longestCommonSubsequenceLength(
   textA: string,
   textB: string,
@@ -65,7 +52,6 @@ function longestCommonSubsequenceLength(
   const lengthA = textA.length;
   const lengthB = textB.length;
 
-  // Use two rows to reduce memory
   let previousRow = new Array(lengthB + 1).fill(0);
   let currentRow = new Array(lengthB + 1).fill(0);
 
@@ -88,9 +74,11 @@ function longestCommonSubsequenceLength(
 }
 
 const SIMILARITY_THRESHOLD = 0.8;
+const CONTAINMENT_THRESHOLD = 0.85;
+const MIN_CONTAINMENT_LENGTH = 10;
 
 // ---------------------------------------------------------------------------
-// Task reconciliation
+// Task reconciliation (two-pass: similarity + containment fallback)
 // ---------------------------------------------------------------------------
 
 interface TaskMatch {
@@ -99,10 +87,6 @@ interface TaskMatch {
   similarity: number;
 }
 
-/**
- * Matches checkboxes against known tasks by content similarity.
- * Returns matched pairs and unmatched checkbox indices.
- */
 function reconcileCheckboxes(
   checkboxes: ParsedCheckbox[],
   knownTasks: { id: string; content: string; reference_id: string | null }[],
@@ -119,7 +103,7 @@ function reconcileCheckboxes(
     };
   }
 
-  // Build similarity matrix
+  // --- Pass 1: High similarity (LCS/maxLength >= 0.8) ---
   const candidates: TaskMatch[] = [];
   for (let checkboxIndex = 0; checkboxIndex < checkboxes.length; checkboxIndex++) {
     for (const task of knownTasks) {
@@ -128,16 +112,11 @@ function reconcileCheckboxes(
         task.content,
       );
       if (similarity >= SIMILARITY_THRESHOLD) {
-        candidates.push({
-          existingTaskId: task.id,
-          checkboxIndex,
-          similarity,
-        });
+        candidates.push({ existingTaskId: task.id, checkboxIndex, similarity });
       }
     }
   }
 
-  // Greedy match: sort by similarity desc, then assign 1:1
   candidates.sort((candidateA, candidateB) => candidateB.similarity - candidateA.similarity);
 
   const matchedCheckboxIndices = new Set<number>();
@@ -148,63 +127,89 @@ function reconcileCheckboxes(
     if (
       matchedCheckboxIndices.has(candidate.checkboxIndex) ||
       matchedTaskIds.has(candidate.existingTaskId)
-    ) {
-      continue;
-    }
+    ) continue;
     matched.push(candidate);
     matchedCheckboxIndices.add(candidate.checkboxIndex);
     matchedTaskIds.add(candidate.existingTaskId);
   }
 
-  const unmatchedCheckboxIndices = checkboxes
+  // --- Pass 2: Containment fallback (LCS/minLength >= 0.85) ---
+  // Catches edits where user adds metadata like "(assigned: Alice)" to an
+  // existing task — the original text is fully contained in the new text.
+  const remainingCheckboxIndices = checkboxes
     .map((_, index) => index)
     .filter((index) => !matchedCheckboxIndices.has(index));
+  const remainingTasks = knownTasks
+    .filter((task) => !matchedTaskIds.has(task.id));
 
-  const unmatchedTaskIds = knownTasks
-    .map((task) => task.id)
-    .filter((taskId) => !matchedTaskIds.has(taskId));
+  if (remainingCheckboxIndices.length > 0 && remainingTasks.length > 0) {
+    const containmentCandidates: TaskMatch[] = [];
 
-  return { matched, unmatchedCheckboxIndices, unmatchedTaskIds };
+    for (const checkboxIndex of remainingCheckboxIndices) {
+      const checkboxNormalized = normalizeText(checkboxes[checkboxIndex].text);
+      for (const task of remainingTasks) {
+        const taskNormalized = normalizeText(task.content);
+        const minLength = Math.min(checkboxNormalized.length, taskNormalized.length);
+        if (minLength < MIN_CONTAINMENT_LENGTH) continue;
+
+        const lcsLength = longestCommonSubsequenceLength(checkboxNormalized, taskNormalized);
+        const containmentScore = lcsLength / minLength;
+
+        if (containmentScore >= CONTAINMENT_THRESHOLD) {
+          containmentCandidates.push({
+            existingTaskId: task.id,
+            checkboxIndex,
+            similarity: containmentScore,
+          });
+        }
+      }
+    }
+
+    containmentCandidates.sort((candidateA, candidateB) => candidateB.similarity - candidateA.similarity);
+
+    for (const candidate of containmentCandidates) {
+      if (
+        matchedCheckboxIndices.has(candidate.checkboxIndex) ||
+        matchedTaskIds.has(candidate.existingTaskId)
+      ) continue;
+      matched.push(candidate);
+      matchedCheckboxIndices.add(candidate.checkboxIndex);
+      matchedTaskIds.add(candidate.existingTaskId);
+    }
+  }
+
+  return {
+    matched,
+    unmatchedCheckboxIndices: checkboxes
+      .map((_, index) => index)
+      .filter((index) => !matchedCheckboxIndices.has(index)),
+    unmatchedTaskIds: knownTasks
+      .map((task) => task.id)
+      .filter((taskId) => !matchedTaskIds.has(taskId)),
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Project association: section heading match
+// Project association
 // ---------------------------------------------------------------------------
 
-type ExtractionMethod = "heading_match" | "file_path" | "ai_inference" | "none";
-
-/**
- * Returns the project ID matching the checkbox's section heading,
- * or null if no match.
- */
 function matchProjectByHeading(
   checkbox: ParsedCheckbox,
   knownProjects: { id: string; name: string }[],
 ): string | null {
   if (!checkbox.sectionHeading || knownProjects.length === 0) return null;
-
   const headingLower = checkbox.sectionHeading.toLowerCase().trim();
   for (const project of knownProjects) {
-    if (project.name.toLowerCase() === headingLower) {
-      return project.id;
-    }
+    if (project.name.toLowerCase() === headingLower) return project.id;
   }
   return null;
 }
-
-// ---------------------------------------------------------------------------
-// Project association: AI content inference (batch)
-// ---------------------------------------------------------------------------
 
 interface TaskProjectAssignment {
   taskIndex: number;
   projectId: string;
 }
 
-/**
- * Batch LLM call to infer project associations for unassigned tasks.
- * Returns only valid project IDs from the known list.
- */
 async function inferProjectsByContent(
   taskTexts: { index: number; text: string }[],
   knownProjects: { id: string; name: string }[],
@@ -214,11 +219,9 @@ async function inferProjectsByContent(
   const projectList = knownProjects
     .map((project) => `- "${project.name}" (id: ${project.id})`)
     .join("\n");
-
   const taskList = taskTexts
     .map((task) => `${task.index}: "${task.text}"`)
     .join("\n");
-
   const validIds = new Set(knownProjects.map((project) => project.id));
 
   try {
@@ -241,25 +244,18 @@ Return JSON: {"assignments": [{"task_index": 0, "project_id": "uuid"}, ...]}
 KNOWN PROJECTS:
 ${projectList}`,
           },
-          {
-            role: "user",
-            content: `TASKS:\n${taskList}`,
-          },
+          { role: "user", content: `TASKS:\n${taskList}` },
         ],
       }),
     });
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      console.error(
-        `TaskExtractor LLM call failed: ${response.status} ${errorText}`,
-      );
+      console.error(`TaskExtractor LLM call failed: ${response.status} ${await response.text().catch(() => "")}`);
       return [];
     }
 
     const data = await response.json();
     const parsed = JSON.parse(data.choices[0].message.content);
-
     if (!Array.isArray(parsed.assignments)) return [];
 
     return parsed.assignments
@@ -274,9 +270,7 @@ ${projectList}`,
         projectId: assignment.project_id,
       }));
   } catch (error) {
-    console.error(
-      `TaskExtractor LLM project inference error: ${(error as Error).message}`,
-    );
+    console.error(`TaskExtractor LLM project inference error: ${(error as Error).message}`);
     return [];
   }
 }
@@ -285,27 +279,54 @@ ${projectList}`,
 // Metadata builder
 // ---------------------------------------------------------------------------
 
-interface TaskMetadata {
-  source: string;
-  section_heading: string | null;
-  extraction_method: ExtractionMethod;
-}
-
 export function buildTaskMetadata(
   source: string,
   sectionHeading: string | null,
-  extractionMethod: ExtractionMethod,
-): TaskMetadata {
-  return {
-    source,
-    section_heading: sectionHeading,
-    extraction_method: extractionMethod,
-  };
+): Record<string, string> {
+  const metadata: Record<string, string> = { source };
+  if (sectionHeading) {
+    metadata.section_heading = sectionHeading;
+  }
+  return metadata;
 }
 
 // ---------------------------------------------------------------------------
-// Person matching (deterministic, no AI)
+// Person matching: explicit pattern fast path
 // ---------------------------------------------------------------------------
+
+const ASSIGNMENT_PATTERN = /\(\s*(?:assigned|owner|assignee)\s*:\s*([^)]+?)\s*\)/i;
+
+/**
+ * Fast path: extracts explicit "(assigned: Alice)" / "(owner: Bob)" patterns.
+ * Strips the pattern from content if person is found.
+ * Does NOT do substring matching — that's handled by AI fallback.
+ */
+export function extractAssignment(
+  text: string,
+  knownPeople: { id: string; name: string }[],
+): { personId: string | null; cleanedText: string } {
+  if (knownPeople.length === 0) return { personId: null, cleanedText: text };
+
+  const match = text.match(ASSIGNMENT_PATTERN);
+  if (!match) return { personId: null, cleanedText: text };
+
+  const candidateName = match[1].trim().toLowerCase();
+  for (const person of knownPeople) {
+    const personLower = person.name.toLowerCase();
+    if (
+      personLower === candidateName ||
+      candidateName.includes(personLower) ||
+      personLower.includes(candidateName)
+    ) {
+      return {
+        personId: person.id,
+        cleanedText: cleanStrippedText(text.replace(match[0], "")),
+      };
+    }
+  }
+
+  return { personId: null, cleanedText: text };
+}
 
 /**
  * Returns the first known person whose full name appears in the text
@@ -318,14 +339,12 @@ export function matchPersonInText(
   if (!text || knownPeople.length === 0) return null;
 
   const textLower = text.toLowerCase();
-
-  // Build list of {id, name, position} for all matches, return earliest by position
   let earliestPosition = Infinity;
   let earliestPersonId: string | null = null;
 
   for (const person of knownPeople) {
     const nameLower = person.name.toLowerCase();
-    if (nameLower.length < 2) continue; // Skip very short names to avoid false positives
+    if (nameLower.length < 2) continue;
     const position = textLower.indexOf(nameLower);
     if (position !== -1 && position < earliestPosition) {
       earliestPosition = position;
@@ -334,6 +353,120 @@ export function matchPersonInText(
   }
 
   return earliestPersonId;
+}
+
+// ---------------------------------------------------------------------------
+// AI enrichment: combined date + person extraction for unresolved tasks
+// ---------------------------------------------------------------------------
+
+interface TaskEnrichment {
+  taskIndex: number;
+  assignedToId: string | null;
+  dueDate: string | null;
+  cleanedText: string;
+}
+
+/**
+ * Single batch LLM call that extracts both due dates and person assignment
+ * from task text + context. Handles implicit patterns like:
+ * - "# Matt's tasks" → assigned to Matt
+ * - "finish by end of month" → due date
+ * - "Bob should review this" → assigned to Bob
+ */
+async function inferTaskEnrichments(
+  tasks: { index: number; text: string; sectionHeading: string | null }[],
+  knownPeople: { id: string; name: string }[],
+  referenceDate: Date = new Date(),
+): Promise<TaskEnrichment[]> {
+  if (tasks.length === 0) return [];
+
+  const referenceDateStr = referenceDate.toISOString().split("T")[0];
+
+  const peopleList = knownPeople.length > 0
+    ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join("\n")
+    : "(no known people)";
+
+  const validPeopleIds = new Set(knownPeople.map((person) => person.id));
+
+  const taskList = tasks
+    .map((task) => {
+      const heading = task.sectionHeading ? ` [under heading: "${task.sectionHeading}"]` : "";
+      return `${task.index}: "${task.text}"${heading}`;
+    })
+    .join("\n");
+
+  try {
+    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "openai/gpt-4o-mini",
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: `You extract metadata from task descriptions. Today is ${referenceDateStr}.
+
+For each task, determine:
+1. **assigned_to_id**: Who is this task assigned to? Look for:
+   - Explicit markers: "(assigned: X)", "(owner: X)"
+   - Names in the task text: "Ask Alice about..."
+   - Section heading context: heading "Matt's tasks" means tasks under it are Matt's
+   - Only use person IDs from the KNOWN PEOPLE list. If no match, use null.
+
+2. **due_date**: When is this task due? Look for:
+   - Explicit dates: "by March 30", "deadline: April 1st", "2026-04-01"
+   - Relative dates: "by Friday", "tomorrow", "next week", "end of month"
+   - Resolve relative dates from today (${referenceDateStr}). Return ISO format.
+   - If no date found, use null.
+
+3. **cleaned_text**: The task description with assignment markers and date markers REMOVED. Keep the core task description intact. Remove patterns like "(assigned: X)", "(owner: X)", "(deadline: Y)", "by DATE", "due DATE" etc.
+
+Return JSON: {"enrichments": [{"task_index": 0, "assigned_to_id": "uuid"|null, "due_date": "2026-04-01T00:00:00.000Z"|null, "cleaned_text": "task without markers"}]}
+
+KNOWN PEOPLE:
+${peopleList}`,
+          },
+          { role: "user", content: `TASKS:\n${taskList}` },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      console.error(`Task enrichment LLM failed: ${response.status} ${await response.text().catch(() => "")}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const parsed = JSON.parse(data.choices[0].message.content);
+
+    if (!Array.isArray(parsed.enrichments)) return [];
+
+    return parsed.enrichments
+      .filter(
+        (entry: Record<string, unknown>) =>
+          typeof entry.task_index === "number" &&
+          typeof entry.cleaned_text === "string",
+      )
+      .map((entry: { task_index: number; assigned_to_id?: string | null; due_date?: string | null; cleaned_text: string }) => ({
+        taskIndex: entry.task_index,
+        assignedToId:
+          typeof entry.assigned_to_id === "string" && validPeopleIds.has(entry.assigned_to_id)
+            ? entry.assigned_to_id
+            : null,
+        dueDate:
+          typeof entry.due_date === "string" && !isNaN(new Date(entry.due_date).getTime())
+            ? new Date(entry.due_date).toISOString()
+            : null,
+        cleanedText: entry.cleaned_text,
+      }));
+  } catch (error) {
+    console.error(`Task enrichment LLM error: ${(error as Error).message}`);
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,21 +485,12 @@ export class TaskExtractor implements Extractor {
       return { referenceKey: this.referenceKey, ids: [] };
     }
 
-    const allProjects = [
-      ...context.knownProjects,
-      ...context.newlyCreatedProjects,
-    ];
-
-    // Deduplicate all projects by ID
+    const allProjects = [...context.knownProjects, ...context.newlyCreatedProjects];
     const uniqueProjects = Array.from(
       new Map(allProjects.map((project) => [project.id, project])).values(),
     );
 
-    // Deduplicate all people by ID
-    const allPeople = [
-      ...context.knownPeople,
-      ...context.newlyCreatedPeople,
-    ];
+    const allPeople = [...context.knownPeople, ...context.newlyCreatedPeople];
     const uniquePeople = Array.from(
       new Map(allPeople.map((person) => [person.id, person])).values(),
     );
@@ -377,131 +501,133 @@ export class TaskExtractor implements Extractor {
       context.knownTasks,
     );
 
-    // Track DB IDs by checkbox index for parent_id resolution
     const taskIdByCheckboxIndex = new Map<number, string>();
     const allTaskIds: string[] = [];
 
-    // --- Phase 1: Determine project + extraction method for each checkbox ---
+    // --- Phase 1: Determine project for each checkbox ---
     const projectByCheckboxIndex = new Map<number, string | null>();
-    const extractionMethodByIndex = new Map<number, ExtractionMethod>();
     const unassignedForAI: { index: number; text: string }[] = [];
 
     for (let index = 0; index < checkboxes.length; index++) {
-      // Priority 1: Section heading match
       const headingProjectId = matchProjectByHeading(checkboxes[index], uniqueProjects);
       if (headingProjectId) {
         projectByCheckboxIndex.set(index, headingProjectId);
-        extractionMethodByIndex.set(index, "heading_match");
         continue;
       }
 
-      // Priority 2: File path project (from ProjectExtractor via pipeline)
       const pipelineProjectIds = context.accumulatedReferences.projects || [];
       if (pipelineProjectIds.length > 0) {
         projectByCheckboxIndex.set(index, pipelineProjectIds[0]);
-        extractionMethodByIndex.set(index, "file_path");
         continue;
       }
 
-      // Priority 3: Collect for AI batch call
       unassignedForAI.push({ index, text: checkboxes[index].text });
     }
 
-    // AI batch inference for remaining unassigned tasks
     if (unassignedForAI.length > 0 && uniqueProjects.length > 0) {
-      const assignments = await inferProjectsByContent(
-        unassignedForAI,
-        uniqueProjects,
-      );
+      const assignments = await inferProjectsByContent(unassignedForAI, uniqueProjects);
       for (const assignment of assignments) {
         projectByCheckboxIndex.set(assignment.taskIndex, assignment.projectId);
-        extractionMethodByIndex.set(assignment.taskIndex, "ai_inference");
       }
     }
 
-    // Fill null for any still-unassigned tasks
     for (let index = 0; index < checkboxes.length; index++) {
       if (!projectByCheckboxIndex.has(index)) {
         projectByCheckboxIndex.set(index, null);
       }
-      if (!extractionMethodByIndex.has(index)) {
-        extractionMethodByIndex.set(index, "none");
-      }
     }
 
-    // --- Phase 1b: Extract due dates from checkbox text ---
-    const dateByCheckboxIndex = new Map<number, DateExtractionResult>();
-    const dateFallbackCandidates: { index: number; text: string }[] = [];
+    // --- Phase 1b: Extract dates, assignments, and clean content ---
+    const contentByIndex = new Map<number, string>();
+    const dueDateByIndex = new Map<number, string>();
+    const assignedToByIndex = new Map<number, string>();
+    const aiCandidates: { index: number; text: string; sectionHeading: string | null }[] = [];
 
     for (let index = 0; index < checkboxes.length; index++) {
-      const dateResult = extractDueDate(checkboxes[index].text);
-      if (dateResult.dueDate) {
-        dateByCheckboxIndex.set(index, dateResult);
-      } else if (containsDateLikeWords(checkboxes[index].text)) {
-        dateFallbackCandidates.push({ index, text: checkboxes[index].text });
-      }
-    }
+      let text = checkboxes[index].text;
+      let needsAIDate = true;
+      let needsAIPerson = true;
 
-    // LLM batch fallback for ambiguous date references
-    if (dateFallbackCandidates.length > 0) {
-      const llmDates = await inferDatesFromContent(dateFallbackCandidates);
-      for (const result of llmDates) {
-        dateByCheckboxIndex.set(result.taskIndex, {
-          cleanedText: result.cleanedText,
-          dueDate: result.dueDate,
+      // Fast path: regex date extraction
+      const dateResult = extractDueDate(text);
+      if (dateResult.dueDate) {
+        dueDateByIndex.set(index, dateResult.dueDate);
+        text = dateResult.cleanedText;
+        needsAIDate = false;
+      }
+
+      // Fast path 1: explicit assignment pattern "(assigned: X)" / "(owner: X)"
+      const assignResult = extractAssignment(text, uniquePeople);
+      if (assignResult.personId) {
+        assignedToByIndex.set(index, assignResult.personId);
+        text = assignResult.cleanedText;
+        needsAIPerson = false;
+      } else {
+        // Fast path 2: person name substring in checkbox text
+        const substringMatch = matchPersonInText(text, uniquePeople);
+        if (substringMatch) {
+          assignedToByIndex.set(index, substringMatch);
+          needsAIPerson = false;
+        } else if (checkboxes[index].sectionHeading) {
+          // Fast path 3: person name in section heading
+          const headingMatch = matchPersonInText(checkboxes[index].sectionHeading!, uniquePeople);
+          if (headingMatch) {
+            assignedToByIndex.set(index, headingMatch);
+            needsAIPerson = false;
+          }
+        }
+      }
+
+      contentByIndex.set(index, cleanStrippedText(text));
+
+      // Queue for AI enrichment if either date or person still unresolved
+      if (needsAIDate || needsAIPerson) {
+        aiCandidates.push({
+          index,
+          text: checkboxes[index].text, // Send original text for AI context
+          sectionHeading: checkboxes[index].sectionHeading,
         });
       }
     }
 
-    // --- Phase 1c: Resolve assigned_to for each checkbox ---
-    const assignedToByCheckboxIndex = new Map<number, string | null>();
+    // AI batch enrichment for unresolved dates + people
+    if (aiCandidates.length > 0 && (uniquePeople.length > 0 || aiCandidates.some((candidate) => !dueDateByIndex.has(candidate.index)))) {
+      const enrichments = await inferTaskEnrichments(aiCandidates, uniquePeople);
 
-    for (let index = 0; index < checkboxes.length; index++) {
-      const checkbox = checkboxes[index];
-
-      // Priority 1: Person name in checkbox text
-      const textMatch = matchPersonInText(checkbox.text, uniquePeople);
-      if (textMatch) {
-        assignedToByCheckboxIndex.set(index, textMatch);
-        continue;
-      }
-
-      // Priority 2: Person name in section heading
-      if (checkbox.sectionHeading) {
-        const headingMatch = matchPersonInText(checkbox.sectionHeading, uniquePeople);
-        if (headingMatch) {
-          assignedToByCheckboxIndex.set(index, headingMatch);
-          continue;
+      for (const enrichment of enrichments) {
+        // Only apply AI results for fields not already resolved by regex/pattern
+        if (!dueDateByIndex.has(enrichment.taskIndex) && enrichment.dueDate) {
+          dueDateByIndex.set(enrichment.taskIndex, enrichment.dueDate);
+        }
+        if (!assignedToByIndex.has(enrichment.taskIndex) && enrichment.assignedToId) {
+          assignedToByIndex.set(enrichment.taskIndex, enrichment.assignedToId);
+        }
+        // Use AI-cleaned text if it resolved something new
+        if (enrichment.cleanedText) {
+          contentByIndex.set(enrichment.taskIndex, cleanStrippedText(enrichment.cleanedText));
         }
       }
-
-      assignedToByCheckboxIndex.set(index, null);
     }
 
     // --- Phase 2: Process matched tasks (update existing) ---
     for (const match of matched) {
       const checkbox = checkboxes[match.checkboxIndex];
       const newStatus = checkbox.checked ? "done" : "open";
-      const dateResult = dateByCheckboxIndex.get(match.checkboxIndex);
-      const content = dateResult?.cleanedText ?? checkbox.text;
-
-      const metadata = buildTaskMetadata(
-        note.source,
-        checkbox.sectionHeading,
-        extractionMethodByIndex.get(match.checkboxIndex) || "none",
-      );
+      const content = contentByIndex.get(match.checkboxIndex) ?? checkbox.text;
+      const metadata = buildTaskMetadata(note.source, checkbox.sectionHeading);
 
       const updates: Record<string, unknown> = {
         content,
         status: newStatus,
         project_id: projectByCheckboxIndex.get(match.checkboxIndex) || null,
         metadata,
-        assigned_to: assignedToByCheckboxIndex.get(match.checkboxIndex) || null,
       };
 
-      if (dateResult?.dueDate) {
-        updates.due_by = dateResult.dueDate;
-      }
+      const assignedTo = assignedToByIndex.get(match.checkboxIndex);
+      if (assignedTo) updates.assigned_to = assignedTo;
+
+      const dueDate = dueDateByIndex.get(match.checkboxIndex);
+      if (dueDate) updates.due_by = dueDate;
 
       if (newStatus === "done") {
         updates.archived_at = new Date().toISOString();
@@ -519,24 +645,17 @@ export class TaskExtractor implements Extractor {
     }
 
     // --- Phase 3: Create new tasks for unmatched checkboxes ---
-    // Process in order so parents are created before children
     for (const checkboxIndex of unmatchedCheckboxIndices) {
       const checkbox = checkboxes[checkboxIndex];
       const status = checkbox.checked ? "done" : "open";
-      const dateResult = dateByCheckboxIndex.get(checkboxIndex);
-      const content = dateResult?.cleanedText ?? checkbox.text;
+      const content = contentByIndex.get(checkboxIndex) ?? checkbox.text;
 
-      // Resolve parent_id from already-processed parent checkbox
       let parentId: string | null = null;
       if (checkbox.parentIndex !== null) {
         parentId = taskIdByCheckboxIndex.get(checkbox.parentIndex) || null;
       }
 
-      const metadata = buildTaskMetadata(
-        note.source,
-        checkbox.sectionHeading,
-        extractionMethodByIndex.get(checkboxIndex) || "none",
-      );
+      const metadata = buildTaskMetadata(note.source, checkbox.sectionHeading);
 
       const insertData: Record<string, unknown> = {
         content,
@@ -545,12 +664,13 @@ export class TaskExtractor implements Extractor {
         project_id: projectByCheckboxIndex.get(checkboxIndex) || null,
         parent_id: parentId,
         metadata,
-        assigned_to: assignedToByCheckboxIndex.get(checkboxIndex) || null,
       };
 
-      if (dateResult?.dueDate) {
-        insertData.due_by = dateResult.dueDate;
-      }
+      const assignedTo = assignedToByIndex.get(checkboxIndex);
+      if (assignedTo) insertData.assigned_to = assignedTo;
+
+      const dueDate = dueDateByIndex.get(checkboxIndex);
+      if (dueDate) insertData.due_by = dueDate;
 
       if (status === "done") {
         insertData.archived_at = new Date().toISOString();
@@ -565,14 +685,9 @@ export class TaskExtractor implements Extractor {
       if (!error && newTask) {
         taskIdByCheckboxIndex.set(checkboxIndex, newTask.id);
         allTaskIds.push(newTask.id);
-        context.newlyCreatedTasks.push({
-          id: newTask.id,
-          content: newTask.content,
-        });
+        context.newlyCreatedTasks.push({ id: newTask.id, content: newTask.content });
       } else {
-        console.error(
-          `TaskExtractor insert failed for "${checkbox.text}": ${error?.message}`,
-        );
+        console.error(`TaskExtractor insert failed for "${checkbox.text}": ${error?.message}`);
       }
     }
 
@@ -588,9 +703,6 @@ export class TaskExtractor implements Extractor {
       }
     }
 
-    return {
-      referenceKey: this.referenceKey,
-      ids: allTaskIds,
-    };
+    return { referenceKey: this.referenceKey, ids: allTaskIds };
   }
 }

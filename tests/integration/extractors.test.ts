@@ -22,6 +22,7 @@ import {
   computeSimilarity,
   buildTaskMetadata,
   matchPersonInText,
+  extractAssignment,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
 import {
   PeopleExtractor,
@@ -1393,21 +1394,23 @@ Deno.test("containsDateLikeWords: returns false for plain text", () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("buildTaskMetadata: returns correct shape", () => {
-  const metadata = buildTaskMetadata("obsidian", "Sprint 12", "heading_match");
+  const metadata = buildTaskMetadata("obsidian", "Sprint 12");
   assertEquals(metadata.source, "obsidian");
   assertEquals(metadata.section_heading, "Sprint 12");
-  assertEquals(metadata.extraction_method, "heading_match");
+  assertEquals(Object.keys(metadata).length, 2);
 });
 
 Deno.test("buildTaskMetadata: null section heading", () => {
-  const metadata = buildTaskMetadata("obsidian", null, "file_path");
-  assertEquals(metadata.section_heading, null);
-  assertEquals(metadata.extraction_method, "file_path");
+  const metadata = buildTaskMetadata("obsidian", null);
+  assertEquals(metadata.source, "obsidian");
+  assertEquals(metadata.section_heading, undefined);
+  assertEquals(Object.keys(metadata).length, 1);
 });
 
-Deno.test("buildTaskMetadata: none extraction method", () => {
-  const metadata = buildTaskMetadata("obsidian", null, "none");
-  assertEquals(metadata.extraction_method, "none");
+Deno.test("buildTaskMetadata: only source when no heading", () => {
+  const metadata = buildTaskMetadata("obsidian", null);
+  assertEquals(metadata.source, "obsidian");
+  assertEquals("section_heading" in metadata, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -1489,7 +1492,6 @@ Deno.test("TaskExtractor: new task has populated metadata", async () => {
   assertExists(task.metadata);
   assertEquals(task.metadata.source, "obsidian");
   assertEquals(task.metadata.section_heading, "Sprint 12");
-  assertEquals(task.metadata.extraction_method, "none");
 
   createdTaskIds.push(task.id);
 });
@@ -1526,7 +1528,7 @@ Deno.test("TaskExtractor: metadata refreshed on re-ingest", async () => {
     .select("metadata")
     .eq("id", taskId)
     .single();
-  assertEquals(taskBefore?.metadata.section_heading, null);
+  assertEquals(taskBefore?.metadata.section_heading, undefined);
 
   // Second ingest: now under a heading
   const content2 = "# Auth Sprint\n\n- [ ] Fix the login\n";
@@ -1783,7 +1785,6 @@ Deno.test("TaskExtractor: extraction_method is heading_match when project resolv
 
   assertExists(task);
   assertEquals(task.project_id, CARCHIEF_ID);
-  assertEquals(task.metadata.extraction_method, "heading_match");
 
   createdTaskIds.push(task.id);
 });
@@ -1819,7 +1820,6 @@ Deno.test("TaskExtractor: extraction_method is file_path when project from pipel
 
   assertExists(task);
   assertEquals(task.project_id, CARCHIEF_ID);
-  assertEquals(task.metadata.extraction_method, "file_path");
 
   createdTaskIds.push(task.id);
 });
@@ -1867,9 +1867,36 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
   assertExists(task.metadata);
   assertEquals(task.metadata.source, "obsidian");
   assertEquals(task.metadata.section_heading, "CarChief");
-  assertEquals(task.metadata.extraction_method, "heading_match");
 
   createdTaskIds.push(task.id);
+});
+
+// ---------------------------------------------------------------------------
+// 9.13 — extractAssignment unit tests
+// ---------------------------------------------------------------------------
+
+Deno.test("extractAssignment: explicit pattern strips and returns personId", () => {
+  const result = extractAssignment("Review the PR (assigned: Alice)", TEST_PEOPLE);
+  assertEquals(result.personId, ALICE_ID);
+  assertEquals(result.cleanedText, "Review the PR");
+});
+
+Deno.test("extractAssignment: owner pattern works", () => {
+  const result = extractAssignment("Deploy service (owner: Claude)", TEST_PEOPLE);
+  assertEquals(result.personId, CLAUDE_ID);
+  assertEquals(result.cleanedText, "Deploy service");
+});
+
+Deno.test("extractAssignment: unknown person leaves text unchanged", () => {
+  const result = extractAssignment("Review PR (assigned: Bob)", TEST_PEOPLE);
+  assertEquals(result.personId, null);
+  assertEquals(result.cleanedText, "Review PR (assigned: Bob)");
+});
+
+Deno.test("extractAssignment: no pattern returns null personId", () => {
+  const result = extractAssignment("Just a regular task", TEST_PEOPLE);
+  assertEquals(result.personId, null);
+  assertEquals(result.cleanedText, "Just a regular task");
 });
 
 // ---------------------------------------------------------------------------

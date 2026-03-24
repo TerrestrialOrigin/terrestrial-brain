@@ -86,13 +86,19 @@ function resolveNextDayOfWeek(dayName: string, referenceDate: Date): string | nu
   );
 }
 
+const ORDINAL_SUFFIX = /(?:st|nd|rd|th)/i;
+
+function stripOrdinal(dayStr: string): number {
+  return parseInt(dayStr.replace(ORDINAL_SUFFIX, ""), 10);
+}
+
 function parseNaturalDate(fragment: string, referenceDate: Date): string | null {
-  // "Month Day(, Year)" — e.g. "March 30", "March 30, 2026"
-  const monthFirst = fragment.match(/([A-Za-z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?/);
+  // "Month Day(, Year)" — e.g. "March 30", "March 30th", "March 30, 2026"
+  const monthFirst = fragment.match(/([A-Za-z]+)\s+(\d{1,2}(?:st|nd|rd|th)?)(?:,?\s+(\d{4}))?/i);
   if (monthFirst) {
     const month = monthNameToNumber(monthFirst[1]);
     if (month !== null) {
-      const day = parseInt(monthFirst[2], 10);
+      const day = stripOrdinal(monthFirst[2]);
       const year = monthFirst[3]
         ? parseInt(monthFirst[3], 10)
         : inferYear(month, day, referenceDate);
@@ -100,12 +106,12 @@ function parseNaturalDate(fragment: string, referenceDate: Date): string | null 
     }
   }
 
-  // "Day Month(, Year)" — e.g. "30 March", "30 March 2026"
-  const dayFirst = fragment.match(/(\d{1,2})\s+([A-Za-z]+)(?:,?\s+(\d{4}))?/);
+  // "Day Month(, Year)" — e.g. "30 March", "30th March 2026"
+  const dayFirst = fragment.match(/(\d{1,2}(?:st|nd|rd|th)?)\s+([A-Za-z]+)(?:,?\s+(\d{4}))?/i);
   if (dayFirst) {
     const month = monthNameToNumber(dayFirst[2]);
     if (month !== null) {
-      const day = parseInt(dayFirst[1], 10);
+      const day = stripOrdinal(dayFirst[1]);
       const year = dayFirst[3]
         ? parseInt(dayFirst[3], 10)
         : inferYear(month, day, referenceDate);
@@ -116,8 +122,13 @@ function parseNaturalDate(fragment: string, referenceDate: Date): string | null 
   return null;
 }
 
-function cleanStrippedText(text: string): string {
+/**
+ * Cleans up text after stripping date/assignment fragments.
+ * Removes empty parens, dangling commas, and collapses whitespace.
+ */
+export function cleanStrippedText(text: string): string {
   return text
+    .replace(/\(\s*\)/g, "")
     .replace(/,\s*$/, "")
     .replace(/^\s*,/, "")
     .replace(/\s{2,}/g, " ")
@@ -133,6 +144,8 @@ const allDayNames = Object.keys(DAY_INDEX);
 const monthPattern = allMonthNames.join("|");
 const dayNamePattern = allDayNames.join("|");
 const markerPattern = "(?:due|by|deadline|before)";
+// Ordinal day: "5th", "1st", "2nd", "23rd"
+const dayNumber = "\\d{1,2}(?:st|nd|rd|th)?";
 
 interface DatePattern {
   regex: RegExp;
@@ -140,10 +153,10 @@ interface DatePattern {
 }
 
 const DATE_PATTERNS: DatePattern[] = [
-  // 1. Marker + ISO date: "by 2026-04-01"
+  // 1. Marker + ISO date: "(deadline: 2026-04-01)" or "by 2026-04-01"
   {
     regex: new RegExp(
-      `(?:,?\\s*)${markerPattern}\\s*:?\\s*(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})`,
+      `\\(?\\s*${markerPattern}\\s*:?\\s*(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})\\s*\\)?`,
       "i",
     ),
     parse: (match) => {
@@ -161,25 +174,25 @@ const DATE_PATTERNS: DatePattern[] = [
       return buildISODate(parts[0], parts[1] - 1, parts[2]);
     },
   },
-  // 3. Marker + "Month Day(, Year)": "due March 30"
+  // 3. Marker + "Month Day(, Year)": "(deadline: August 5th)" or "due March 30"
   {
     regex: new RegExp(
-      `(?:,?\\s*)${markerPattern}\\s*:?\\s*((?:${monthPattern})\\s+\\d{1,2}(?:,?\\s+\\d{4})?)`,
+      `\\(?\\s*${markerPattern}\\s*:?\\s*((?:${monthPattern})\\s+${dayNumber}(?:,?\\s+\\d{4})?)\\s*\\)?`,
       "i",
     ),
     parse: (match, ref) => parseNaturalDate(match[1], ref),
   },
-  // 4. Marker + "Day Month(, Year)": "due 30 March"
+  // 4. Marker + "Day Month(, Year)": "(deadline: 5th August)" or "due 30 March"
   {
     regex: new RegExp(
-      `(?:,?\\s*)${markerPattern}\\s*:?\\s*(\\d{1,2}\\s+(?:${monthPattern})(?:,?\\s+\\d{4})?)`,
+      `\\(?\\s*${markerPattern}\\s*:?\\s*(${dayNumber}\\s+(?:${monthPattern})(?:,?\\s+\\d{4})?)\\s*\\)?`,
       "i",
     ),
     parse: (match, ref) => parseNaturalDate(match[1], ref),
   },
-  // 5. Marker + "tomorrow": "by tomorrow"
+  // 5. Marker + "tomorrow": "(by tomorrow)" or "by tomorrow"
   {
-    regex: new RegExp(`(?:,?\\s*)${markerPattern}\\s*:?\\s*(tomorrow)`, "i"),
+    regex: new RegExp(`\\(?\\s*${markerPattern}\\s*:?\\s*(tomorrow)\\s*\\)?`, "i"),
     parse: (_match, ref) => {
       const tomorrow = new Date(ref);
       tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
@@ -190,10 +203,10 @@ const DATE_PATTERNS: DatePattern[] = [
       );
     },
   },
-  // 6. Marker + day name: "by Friday", "due next Monday"
+  // 6. Marker + day name: "(by Friday)", "due next Monday"
   {
     regex: new RegExp(
-      `(?:,?\\s*)${markerPattern}\\s*:?\\s*(?:next\\s+)?(${dayNamePattern})`,
+      `\\(?\\s*${markerPattern}\\s*:?\\s*(?:next\\s+)?(${dayNamePattern})\\s*\\)?`,
       "i",
     ),
     parse: (match, ref) => resolveNextDayOfWeek(match[1], ref),
