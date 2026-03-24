@@ -330,7 +330,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           const parsedNote = parseNote(content, null, null, "mcp");
           references = await runExtractionPipeline(
             parsedNote,
-            [new ProjectExtractor(), new TaskExtractor(), new PeopleExtractor()],
+            [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
             supabase,
           );
         } catch (pipelineError) {
@@ -421,7 +421,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         try {
           references = await runExtractionPipeline(
             parsedNote,
-            [new ProjectExtractor(), new TaskExtractor(), new PeopleExtractor()],
+            [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
             supabase,
           );
         } catch (pipelineError) {
