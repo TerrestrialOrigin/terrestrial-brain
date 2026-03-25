@@ -11,10 +11,14 @@
             "id": "e78c69acbbaa2ff3",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
+              "type": "markdown",
+              "state": {
+                "file": "projects/CarChief/redis-caching-proposal.md",
+                "mode": "source",
+                "source": false
+              },
               "icon": "lucide-file",
-              "title": "New tab"
+              "title": "redis-caching-proposal"
             }
           }
         ]
@@ -182,6 +186,9 @@
   },
   "active": "e78c69acbbaa2ff3",
   "lastOpenFiles": [
+    "projects/CarChief/redis-caching-proposal.md",
+    "projects/CarChief",
+    "projects",
     "test/ai-output-postpone-test.md",
     "test",
     "Test Notes/sample-note.md",
@@ -205,8 +212,6 @@
     "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs/journaling-entries",
     "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records/infrastructure-logs",
     "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts/historical-records",
-    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing/generated-artifacts",
-    "alphabetical-folder/breakthroughs-here/conversations-daily/documentation-files/engineering-process/functional-testing",
     "Test Notes/quick-ideas.md",
     "Test Notes/meeting-march-22.md",
     "AI Notes/test-output-3.md",

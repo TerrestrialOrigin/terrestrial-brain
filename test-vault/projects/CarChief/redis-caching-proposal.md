@@ -1,0 +1,3 @@
+# Redis Caching Proposal
+
+Based on recent thoughts captured about CarChief Backend performance...
