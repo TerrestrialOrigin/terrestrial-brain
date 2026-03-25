@@ -1,9 +1,9 @@
 /**
- * PeopleExtractor — detects known person mentions in note content.
+ * PeopleExtractor — detects person mentions in note content.
  *
- * Uses an LLM call to match person names mentioned in the note against
- * the list of known (non-archived) people. Returns matched person UUIDs.
- * Does NOT auto-create new people — only matches against existing records.
+ * Uses an LLM call to detect ALL person names mentioned in the note.
+ * Matches detected names against known people, and auto-creates new
+ * people records for previously unseen names.
  */
 
 import type { ParsedNote } from "../parser.ts";
@@ -20,19 +20,24 @@ const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 // LLM-based person detection
 // ---------------------------------------------------------------------------
 
+interface DetectedPerson {
+  name: string;
+  knownId: string | null;
+}
+
 /**
- * Batch LLM call to detect which known people are mentioned in the note.
- * Returns only valid person IDs from the known list.
+ * Batch LLM call to detect all person names in the note. Returns both
+ * matched known people (with their IDs) and new names to auto-create.
  */
-async function detectPeopleByContent(
+async function detectAllPeople(
   noteContent: string,
   knownPeople: { id: string; name: string }[],
-): Promise<string[]> {
-  if (knownPeople.length === 0 || !noteContent.trim()) return [];
+): Promise<DetectedPerson[]> {
+  if (!noteContent.trim()) return [];
 
-  const peopleList = knownPeople
-    .map((person) => `- "${person.name}" (id: ${person.id})`)
-    .join("\n");
+  const peopleList = knownPeople.length > 0
+    ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join("\n")
+    : "(none)";
 
   const validIds = new Set(knownPeople.map((person) => person.id));
 
@@ -49,9 +54,16 @@ async function detectPeopleByContent(
         messages: [
           {
             role: "system",
-            content: `You identify which known people are mentioned in a note. Given a list of known people and note content, return which people are referenced, mentioned by name, or clearly discussed. Only use person IDs from the provided list. If no known people are mentioned, return an empty array.
+            content: `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
 
-Return JSON: {"people_ids": ["uuid1", "uuid2"]}
+For each person found:
+- If they match a known person, return their ID
+- If they are a NEW person not in the known list, return their name with id: null
+
+Only detect real human names — not product names, company names, or fictional characters.
+Skip generic references like "the user", "someone", "they".
+
+Return JSON: {"people": [{"name": "Alice", "id": "uuid-if-known-or-null"}, ...]}
 
 KNOWN PEOPLE:
 ${peopleList}`,
@@ -75,12 +87,20 @@ ${peopleList}`,
     const data = await response.json();
     const parsed = JSON.parse(data.choices[0].message.content);
 
-    if (!Array.isArray(parsed.people_ids)) return [];
+    if (!Array.isArray(parsed.people)) return [];
 
-    return parsed.people_ids.filter(
-      (personId: unknown) =>
-        typeof personId === "string" && validIds.has(personId),
-    );
+    return parsed.people
+      .filter(
+        (entry: { name?: unknown; id?: unknown }) =>
+          typeof entry.name === "string" && entry.name.trim().length > 0,
+      )
+      .map((entry: { name: string; id?: string | null }) => ({
+        name: entry.name.trim(),
+        knownId:
+          typeof entry.id === "string" && validIds.has(entry.id)
+            ? entry.id
+            : null,
+      }));
   } catch (error) {
     console.error(
       `PeopleExtractor LLM detection error: ${(error as Error).message}`,
@@ -100,21 +120,7 @@ export class PeopleExtractor implements Extractor {
     note: ParsedNote,
     context: ExtractionContext,
   ): Promise<ExtractionResult> {
-    const allPeople = [
-      ...context.knownPeople,
-      ...context.newlyCreatedPeople,
-    ];
-
-    // Deduplicate by ID
-    const uniquePeople = Array.from(
-      new Map(allPeople.map((person) => [person.id, person])).values(),
-    );
-
-    if (uniquePeople.length === 0) {
-      return { referenceKey: this.referenceKey, ids: [] };
-    }
-
-    // Build a text summary of the note for the LLM
+    // Build note content for LLM
     const contentParts: string[] = [];
     if (note.title) contentParts.push(`Title: ${note.title}`);
     contentParts.push(note.content);
@@ -124,11 +130,91 @@ export class PeopleExtractor implements Extractor {
       return { referenceKey: this.referenceKey, ids: [] };
     }
 
-    const detectedIds = await detectPeopleByContent(noteContent, uniquePeople);
+    const allPeople = [
+      ...context.knownPeople,
+      ...context.newlyCreatedPeople,
+    ];
+    const uniquePeople = Array.from(
+      new Map(allPeople.map((person) => [person.id, person])).values(),
+    );
+
+    const detectedPeople = await detectAllPeople(noteContent, uniquePeople);
+    const resultIds: string[] = [];
+
+    for (const detected of detectedPeople) {
+      if (detected.knownId) {
+        // Known person — just include their ID
+        if (!resultIds.includes(detected.knownId)) {
+          resultIds.push(detected.knownId);
+        }
+      } else {
+        // New person — check if already known by case-insensitive name match
+        const existingMatch = this.findByName(detected.name, uniquePeople);
+        if (existingMatch) {
+          if (!resultIds.includes(existingMatch)) {
+            resultIds.push(existingMatch);
+          }
+        } else {
+          // Auto-create
+          const newId = await this.createPerson(detected.name, context);
+          if (newId && !resultIds.includes(newId)) {
+            resultIds.push(newId);
+          }
+        }
+      }
+    }
 
     return {
       referenceKey: this.referenceKey,
-      ids: detectedIds,
+      ids: resultIds,
     };
+  }
+
+  /**
+   * Case-insensitive name lookup against known people.
+   */
+  private findByName(
+    name: string,
+    knownPeople: { id: string; name: string }[],
+  ): string | null {
+    const nameLower = name.toLowerCase();
+    for (const person of knownPeople) {
+      if (person.name.toLowerCase() === nameLower) {
+        return person.id;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Inserts a new person record and adds it to the context so downstream
+   * extractors (TaskExtractor) can use it immediately.
+   */
+  private async createPerson(
+    name: string,
+    context: ExtractionContext,
+  ): Promise<string | null> {
+    const { data: newPerson, error } = await context.supabase
+      .from("people")
+      .insert({ name })
+      .select("id, name")
+      .single();
+
+    if (!error && newPerson) {
+      context.newlyCreatedPeople.push({
+        id: newPerson.id,
+        name: newPerson.name,
+      });
+      context.knownPeople.push({
+        id: newPerson.id,
+        name: newPerson.name,
+      });
+      return newPerson.id;
+    }
+
+    console.error(
+      `PeopleExtractor auto-create failed for "${name}": ${error?.message}`,
+    );
+    return null;
   }
 }
