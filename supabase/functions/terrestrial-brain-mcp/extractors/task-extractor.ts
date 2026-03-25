@@ -87,6 +87,22 @@ interface TaskMatch {
   similarity: number;
 }
 
+/**
+ * Strips common metadata markers from checkbox text so reconciliation
+ * compares apples-to-apples against stored (already-cleaned) content.
+ * E.g. "Fix bug (assigned: Alice) (deadline: March 30)" → "Fix bug"
+ */
+function stripMarkersForComparison(text: string): string {
+  return text
+    .replace(/\(\s*(?:assigned|owner|assignee)\s*:[^)]*\)/gi, "")
+    .replace(/\(\s*(?:due|by|deadline|before)\s*:?[^)]*\)/gi, "")
+    .replace(/(?:,?\s*)(?:due|by|deadline|before)\s*:?\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}/gi, "")
+    .replace(/(?:,?\s*)(?:due|by|deadline|before)\s*:?\s*\w+\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?/gi, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function reconcileCheckboxes(
   checkboxes: ParsedCheckbox[],
   knownTasks: { id: string; content: string; reference_id: string | null }[],
@@ -103,12 +119,20 @@ function reconcileCheckboxes(
     };
   }
 
+  // Pre-clean checkbox text for comparison: strip metadata markers so
+  // similarity is computed against core task content, not annotations.
+  // Stored task content is already cleaned, so we need to clean checkbox
+  // text to match.
+  const cleanedCheckboxTexts = checkboxes.map(
+    (checkbox) => stripMarkersForComparison(checkbox.text),
+  );
+
   // --- Pass 1: High similarity (LCS/maxLength >= 0.8) ---
   const candidates: TaskMatch[] = [];
   for (let checkboxIndex = 0; checkboxIndex < checkboxes.length; checkboxIndex++) {
     for (const task of knownTasks) {
       const similarity = computeSimilarity(
-        checkboxes[checkboxIndex].text,
+        cleanedCheckboxTexts[checkboxIndex],
         task.content,
       );
       if (similarity >= SIMILARITY_THRESHOLD) {
@@ -146,7 +170,7 @@ function reconcileCheckboxes(
     const containmentCandidates: TaskMatch[] = [];
 
     for (const checkboxIndex of remainingCheckboxIndices) {
-      const checkboxNormalized = normalizeText(checkboxes[checkboxIndex].text);
+      const checkboxNormalized = normalizeText(cleanedCheckboxTexts[checkboxIndex]);
       for (const task of remainingTasks) {
         const taskNormalized = normalizeText(task.content);
         const minLength = Math.min(checkboxNormalized.length, taskNormalized.length);
