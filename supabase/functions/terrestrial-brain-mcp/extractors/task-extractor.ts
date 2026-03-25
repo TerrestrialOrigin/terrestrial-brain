@@ -596,14 +596,19 @@ export class TaskExtractor implements Extractor {
 
       for (const enrichment of enrichments) {
         // Only apply AI results for fields not already resolved by regex/pattern
-        if (!dueDateByIndex.has(enrichment.taskIndex) && enrichment.dueDate) {
-          dueDateByIndex.set(enrichment.taskIndex, enrichment.dueDate);
+        const resolvedDate = !dueDateByIndex.has(enrichment.taskIndex) && enrichment.dueDate;
+        const resolvedPerson = !assignedToByIndex.has(enrichment.taskIndex) && enrichment.assignedToId;
+
+        if (resolvedDate) {
+          dueDateByIndex.set(enrichment.taskIndex, enrichment.dueDate!);
         }
-        if (!assignedToByIndex.has(enrichment.taskIndex) && enrichment.assignedToId) {
-          assignedToByIndex.set(enrichment.taskIndex, enrichment.assignedToId);
+        if (resolvedPerson) {
+          assignedToByIndex.set(enrichment.taskIndex, enrichment.assignedToId!);
         }
-        // Use AI-cleaned text if it resolved something new
-        if (enrichment.cleanedText) {
+        // Only use AI-cleaned text if AI actually resolved something.
+        // Otherwise we'd strip markers (like "(assigned: X)") from content
+        // without storing the info anywhere — losing data.
+        if ((resolvedDate || resolvedPerson) && enrichment.cleanedText) {
           contentByIndex.set(enrichment.taskIndex, cleanStrippedText(enrichment.cleanedText));
         }
       }
