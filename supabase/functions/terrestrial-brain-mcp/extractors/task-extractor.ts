@@ -520,7 +520,7 @@ export class TaskExtractor implements Extractor {
     );
 
     // Reconcile checkboxes against known tasks
-    const { matched, unmatchedCheckboxIndices } = reconcileCheckboxes(
+    const { matched, unmatchedCheckboxIndices, unmatchedTaskIds } = reconcileCheckboxes(
       checkboxes,
       context.knownTasks,
     );
@@ -729,6 +729,17 @@ export class TaskExtractor implements Extractor {
           .from("tasks")
           .update({ parent_id: parentId })
           .eq("id", match.existingTaskId);
+      }
+    }
+
+    // --- Phase 5: Archive tasks whose checkboxes were removed from the note ---
+    if (unmatchedTaskIds.length > 0) {
+      for (const taskId of unmatchedTaskIds) {
+        await context.supabase
+          .from("tasks")
+          .update({ archived_at: new Date().toISOString(), status: "done" })
+          .eq("id", taskId)
+          .is("archived_at", null); // Only archive if not already archived
       }
     }
 
