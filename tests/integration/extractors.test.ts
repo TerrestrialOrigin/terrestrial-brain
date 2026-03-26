@@ -1458,6 +1458,48 @@ Deno.test("matchPersonInText: skips very short names", () => {
   assertEquals(result, null);
 });
 
+// --- partial name matching ---
+
+const PARTIAL_PEOPLE = [
+  { id: "id-bub", name: "Bub Goodwin" },
+  { id: ALICE_ID, name: "Alice Cooper" },
+];
+
+Deno.test("matchPersonInText: first name matches when unambiguous", () => {
+  const result = matchPersonInText("Ask Bub about the deploy", PARTIAL_PEOPLE);
+  assertEquals(result, "id-bub");
+});
+
+Deno.test("matchPersonInText: last name matches when unambiguous", () => {
+  const result = matchPersonInText("Goodwin will handle this", PARTIAL_PEOPLE);
+  assertEquals(result, "id-bub");
+});
+
+Deno.test("matchPersonInText: ambiguous partial name returns null", () => {
+  const ambiguousPeople = [
+    { id: "id-john-s", name: "John Smith" },
+    { id: "id-john-d", name: "John Doe" },
+  ];
+  const result = matchPersonInText("John will review", ambiguousPeople);
+  assertEquals(result, null);
+});
+
+Deno.test("matchPersonInText: full name match takes priority over partial", () => {
+  const result = matchPersonInText("Bub Goodwin mentioned it", PARTIAL_PEOPLE);
+  assertEquals(result, "id-bub");
+});
+
+Deno.test("matchPersonInText: partial match is case-insensitive", () => {
+  const result = matchPersonInText("talk to goodwin", PARTIAL_PEOPLE);
+  assertEquals(result, "id-bub");
+});
+
+Deno.test("matchPersonInText: partial name not matched inside other words", () => {
+  const alPeople = [{ id: "id-al", name: "Al Green" }];
+  const result = matchPersonInText("Also check the logs", alPeople);
+  assertEquals(result, null);
+});
+
 // ---------------------------------------------------------------------------
 // 9.3 — TaskExtractor: metadata populated on new task
 // ---------------------------------------------------------------------------

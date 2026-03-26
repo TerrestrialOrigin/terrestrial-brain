@@ -12,6 +12,7 @@ import type {
   ExtractionResult,
   Extractor,
 } from "./pipeline.ts";
+import { findPersonByName } from "./name-matching.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
@@ -58,6 +59,7 @@ async function detectAllPeople(
 
 For each person found:
 - If they match a known person, return their ID
+- If the note uses only a first name or last name, match it to a known person when there is exactly one clear match (e.g., "Bub" matches "Bub Goodwin" if no other known person has the first name "Bub")
 - If they are a NEW person not in the known list, return their name with id: null
 
 Only detect real human names — not product names, company names, or fictional characters.
@@ -171,19 +173,14 @@ export class PeopleExtractor implements Extractor {
   }
 
   /**
-   * Case-insensitive name lookup against known people.
+   * Two-tier name lookup: exact case-insensitive match, then partial
+   * name-part match (unambiguous only). Delegates to shared utility.
    */
   private findByName(
     name: string,
     knownPeople: { id: string; name: string }[],
   ): string | null {
-    const nameLower = name.toLowerCase();
-    for (const person of knownPeople) {
-      if (person.name.toLowerCase() === nameLower) {
-        return person.id;
-      }
-    }
-    return null;
+    return findPersonByName(name, knownPeople);
   }
 
   /**
