@@ -1,38 +1,4 @@
-# task-extractor Specification
-
-## Purpose
-TBD - created by archiving change people-table. Update Purpose after archive.
-## Requirements
-### Requirement: Task schema includes assigned_to
-The tasks table SHALL have an optional `assigned_to` column (uuid, nullable) referencing `people(id)` with ON DELETE SET NULL.
-
-#### Scenario: Task created without assignment
-- **WHEN** a task is created via `create_task` without `assigned_to`
-- **THEN** the task's `assigned_to` SHALL be null
-
-#### Scenario: Task assigned to a person
-- **WHEN** `create_task` is called with a valid `assigned_to` person UUID
-- **THEN** the task SHALL be created with that person's UUID in `assigned_to`
-
-#### Scenario: Task updated with assignment
-- **WHEN** `update_task` is called with `assigned_to` set to a valid person UUID
-- **THEN** the task's `assigned_to` SHALL be updated to that UUID
-
-#### Scenario: Task assignment cleared
-- **WHEN** `update_task` is called with `assigned_to` set to null
-- **THEN** the task's `assigned_to` SHALL be set to null
-
-#### Scenario: Assigned person deleted
-- **WHEN** a person referenced by `assigned_to` is deleted from the people table
-- **THEN** the task's `assigned_to` SHALL be set to null (ON DELETE SET NULL)
-
-#### Scenario: List tasks shows assigned person name
-- **WHEN** `list_tasks` returns tasks that have `assigned_to` set
-- **THEN** the output SHALL include the assigned person's name for each task
-
-#### Scenario: Project summary shows assigned person name
-- **WHEN** `get_project_summary` returns tasks that have `assigned_to` set
-- **THEN** the task list in the output SHALL include the assigned person's name
+## ADDED Requirements
 
 ### Requirement: matchPersonInText supports partial name matching
 The `matchPersonInText` function SHALL first attempt full-name substring matching (existing behavior), then fall back to individual name-part matching against the text. For partial matches, it SHALL return a result only when exactly one person's name part is found in the text. Full-name matches SHALL take priority over partial matches.
@@ -56,4 +22,3 @@ The `matchPersonInText` function SHALL first attempt full-name substring matchin
 #### Scenario: Full name match takes priority over partial
 - **WHEN** task text is "Alice and Alice Cooper will pair" and known people include "Alice" (id-1) and "Alice Cooper" (id-2)
 - **THEN** matchPersonInText SHALL return id-2 (earliest full-name match "Alice Cooper") or id-1 (earliest position "Alice"), following existing earliest-position logic
-

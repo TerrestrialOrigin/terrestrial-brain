@@ -20,6 +20,7 @@ import {
   extractDueDate,
   cleanStrippedText,
 } from "./date-parser.ts";
+import { findPersonInText } from "./name-matching.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
@@ -353,30 +354,16 @@ export function extractAssignment(
 }
 
 /**
- * Returns the first known person whose full name appears in the text
- * (case-insensitive). Returns the person's UUID or null.
+ * Returns the first known person whose name (or name part) appears in
+ * the text. Full-name matches take priority; partial name-part matches
+ * are returned only when exactly one person matches (unambiguous).
+ * Delegates to shared utility.
  */
 export function matchPersonInText(
   text: string,
   knownPeople: { id: string; name: string }[],
 ): string | null {
-  if (!text || knownPeople.length === 0) return null;
-
-  const textLower = text.toLowerCase();
-  let earliestPosition = Infinity;
-  let earliestPersonId: string | null = null;
-
-  for (const person of knownPeople) {
-    const nameLower = person.name.toLowerCase();
-    if (nameLower.length < 2) continue;
-    const position = textLower.indexOf(nameLower);
-    if (position !== -1 && position < earliestPosition) {
-      earliestPosition = position;
-      earliestPersonId = person.id;
-    }
-  }
-
-  return earliestPersonId;
+  return findPersonInText(text, knownPeople);
 }
 
 // ---------------------------------------------------------------------------
