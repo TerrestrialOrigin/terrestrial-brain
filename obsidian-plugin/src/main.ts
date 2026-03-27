@@ -26,6 +26,18 @@ interface AIOutputContent {
 
 type AIOutputDecision = "accepted" | "rejected" | "postponed";
 
+/** Maps output ID → true if its file_path conflicts with an existing vault file. */
+type ConflictInfo = Record<string, boolean>;
+
+/** Maps conflicting output ID → user's chosen resolution. */
+type ConflictResolution = Map<string, "overwrite" | "rename">;
+
+/** Result returned by the confirmation dialog — decision plus per-file conflict choices. */
+interface ConfirmationResult {
+  decision: AIOutputDecision;
+  resolutions: ConflictResolution;
+}
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 interface TBPluginSettings {
@@ -228,11 +240,17 @@ export default class TerrestrialBrainPlugin extends Plugin {
         return;
       }
 
-      const decision = await this.showConfirmationDialog(metadataList);
+      // Detect conflicts: check which outputs target existing vault files
+      const conflicts: ConflictInfo = {};
+      for (const metadata of metadataList) {
+        conflicts[metadata.id] = await this.app.vault.adapter.exists(metadata.file_path);
+      }
 
-      if (decision === "accepted") {
-        await this.fetchAndDeliverOutputs(metadataList);
-      } else if (decision === "rejected") {
+      const result = await this.showConfirmationDialog(metadataList, conflicts);
+
+      if (result.decision === "accepted") {
+        await this.fetchAndDeliverOutputs(metadataList, result.resolutions);
+      } else if (result.decision === "rejected") {
         await this.rejectOutputs(metadataList);
       }
       // "postponed" — do nothing; outputs remain pending in DB
@@ -243,14 +261,20 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
   }
 
-  private showConfirmationDialog(metadataList: AIOutputMetadata[]): Promise<AIOutputDecision> {
+  private showConfirmationDialog(
+    metadataList: AIOutputMetadata[],
+    conflicts: ConflictInfo,
+  ): Promise<ConfirmationResult> {
     return new Promise((resolve) => {
-      const modal = new AIOutputConfirmModal(this.app, metadataList, resolve);
+      const modal = new AIOutputConfirmModal(this.app, metadataList, conflicts, resolve);
       modal.open();
     });
   }
 
-  private async fetchAndDeliverOutputs(metadataList: AIOutputMetadata[]) {
+  private async fetchAndDeliverOutputs(
+    metadataList: AIOutputMetadata[],
+    resolutions: ConflictResolution,
+  ) {
     const ids = metadataList.map((metadata) => metadata.id);
 
     // Phase 2: Fetch full content only after user accepted
@@ -268,18 +292,31 @@ export default class TerrestrialBrainPlugin extends Plugin {
       const content = contentById.get(metadata.id);
       if (!content && content !== "") continue; // skip if content was not returned (already processed)
 
-      const path = metadata.file_path;
+      // Determine write path — rename if user chose "Save as copy"
+      let writePath = metadata.file_path;
+      const resolution = resolutions.get(metadata.id);
+      if (resolution === "rename") {
+        try {
+          writePath = await generateCopyPath(
+            metadata.file_path,
+            (path) => this.app.vault.adapter.exists(path),
+          );
+        } catch (error) {
+          new Notice(`⚠️ ${(error as Error).message}`);
+          continue; // skip this file, deliver remaining
+        }
+      }
 
       // Ensure parent folders exist
-      const folder = path.substring(0, path.lastIndexOf("/"));
+      const folder = writePath.substring(0, writePath.lastIndexOf("/"));
       if (folder) await this.app.vault.adapter.mkdir(folder);
 
-      // Write the file (overwrite if exists — AI output is authoritative)
-      await this.app.vault.adapter.write(path, content);
+      // Write the file
+      await this.app.vault.adapter.write(writePath, content);
 
-      // Store hash so the modify event doesn't trigger re-ingestion
+      // Store hash under the actual written path so modify event doesn't trigger re-ingestion
       const contentHash = simpleHash(stripFrontmatter(content).trim());
-      this.syncedHashes[path] = contentHash;
+      this.syncedHashes[writePath] = contentHash;
 
       deliveredIds.push(metadata.id);
     }
@@ -485,13 +522,28 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
 class AIOutputConfirmModal extends Modal {
   private metadataList: AIOutputMetadata[];
-  private onDecision: (decision: AIOutputDecision) => void;
+  private conflicts: ConflictInfo;
+  private onResult: (result: ConfirmationResult) => void;
   private resolved = false;
+  private resolutions: ConflictResolution = new Map();
 
-  constructor(app: App, metadataList: AIOutputMetadata[], onDecision: (decision: AIOutputDecision) => void) {
+  constructor(
+    app: App,
+    metadataList: AIOutputMetadata[],
+    conflicts: ConflictInfo,
+    onResult: (result: ConfirmationResult) => void,
+  ) {
     super(app);
     this.metadataList = metadataList;
-    this.onDecision = onDecision;
+    this.conflicts = conflicts;
+    this.onResult = onResult;
+
+    // Initialize resolutions: conflicting files default to "overwrite"
+    for (const metadata of metadataList) {
+      if (conflicts[metadata.id]) {
+        this.resolutions.set(metadata.id, "overwrite");
+      }
+    }
   }
 
   onOpen() {
@@ -509,20 +561,60 @@ class AIOutputConfirmModal extends Modal {
 
     for (const metadata of this.metadataList) {
       const sizeDisplay = formatFileSize(metadata.content_size);
+      const hasConflict = this.conflicts[metadata.id] === true;
+
       const item = listContainer.createDiv({ cls: "tb-ai-output-item" });
       item.style.padding = "6px 0";
       item.style.borderBottom = "1px solid var(--background-modifier-border)";
 
-      item.createEl("div", {
+      const titleRow = item.createDiv({ cls: "tb-ai-output-title-row" });
+      titleRow.style.display = "flex";
+      titleRow.style.alignItems = "center";
+      titleRow.style.gap = "8px";
+
+      titleRow.createEl("span", {
         text: metadata.title || metadata.file_path,
         cls: "tb-ai-output-title",
       }).style.fontWeight = "600";
+
+      // Conflict/new-file badge
+      const badge = titleRow.createEl("span", {
+        text: hasConflict ? "overwrites existing" : "new file",
+        cls: hasConflict ? "tb-ai-output-conflict" : "tb-ai-output-new",
+      });
+      badge.style.fontSize = "0.8em";
+      badge.style.padding = "1px 6px";
+      badge.style.borderRadius = "4px";
+      if (hasConflict) {
+        badge.style.backgroundColor = "var(--background-modifier-error)";
+        badge.style.color = "var(--text-on-accent)";
+      } else {
+        badge.style.backgroundColor = "var(--background-modifier-success)";
+        badge.style.color = "var(--text-on-accent)";
+      }
 
       const detailParts = [metadata.file_path, sizeDisplay];
       item.createEl("div", {
         text: detailParts.join(" · "),
         cls: "tb-ai-output-details",
       }).style.color = "var(--text-muted)";
+
+      // Per-file overwrite/rename dropdown for conflicting files
+      if (hasConflict) {
+        const controlRow = item.createDiv({ cls: "tb-ai-output-conflict-control" });
+        controlRow.style.marginTop = "4px";
+
+        const select = controlRow.createEl("select", { cls: "dropdown" });
+        const overwriteOption = select.createEl("option", { text: "Overwrite", value: "overwrite" });
+        overwriteOption.value = "overwrite";
+        const renameOption = select.createEl("option", { text: "Save as copy", value: "rename" });
+        renameOption.value = "rename";
+        select.value = "overwrite";
+
+        select.addEventListener("change", () => {
+          this.resolutions.set(metadata.id, select.value as "overwrite" | "rename");
+        });
+      }
     }
 
     const buttonContainer = contentEl.createDiv({ cls: "tb-ai-output-buttons" });
@@ -553,14 +645,14 @@ class AIOutputConfirmModal extends Modal {
   onClose() {
     // If the user closed the modal without clicking a button, treat as postpone (not rejection)
     if (!this.resolved) {
-      this.onDecision("postponed");
+      this.onResult({ decision: "postponed", resolutions: this.resolutions });
     }
     this.contentEl.empty();
   }
 
   private resolve(decision: AIOutputDecision) {
     this.resolved = true;
-    this.onDecision(decision);
+    this.onResult({ decision, resolutions: this.resolutions });
     this.close();
   }
 }
@@ -683,4 +775,32 @@ export function simpleHash(str: string): string {
     hash |= 0;
   }
   return String(hash);
+}
+
+/**
+ * Given a vault-relative path that already exists, find the first available
+ * copy name using the pattern `Filename(N).md` starting at N=2.
+ * The `existsCheck` parameter is injected for testability.
+ */
+export async function generateCopyPath(
+  originalPath: string,
+  existsCheck: (path: string) => Promise<boolean>,
+): Promise<string> {
+  const lastSlash = originalPath.lastIndexOf("/");
+  const directory = lastSlash >= 0 ? originalPath.substring(0, lastSlash + 1) : "";
+  const filename = lastSlash >= 0 ? originalPath.substring(lastSlash + 1) : originalPath;
+
+  const dotIndex = filename.lastIndexOf(".");
+  const stem = dotIndex >= 0 ? filename.substring(0, dotIndex) : filename;
+  const extension = dotIndex >= 0 ? filename.substring(dotIndex) : "";
+
+  const maxAttempts = 100;
+  for (let suffix = 2; suffix <= maxAttempts + 1; suffix++) {
+    const candidate = `${directory}${stem}(${suffix})${extension}`;
+    if (!(await existsCheck(candidate))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Could not find available copy name for "${originalPath}" after ${maxAttempts} attempts`);
 }
