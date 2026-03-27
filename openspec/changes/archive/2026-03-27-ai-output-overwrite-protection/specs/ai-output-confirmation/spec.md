@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: AI output confirmation dialog
 
 The Obsidian plugin SHALL display a confirmation dialog before writing any AI output to the vault. The dialog SHALL appear whenever `pollAIOutput()` finds one or more pending outputs, whether triggered by the automatic poll interval or the manual "Pull AI output" command.

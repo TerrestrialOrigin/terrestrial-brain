@@ -61,7 +61,7 @@ vi.mock("obsidian", () => ({
   TFile: class {},
 }));
 
-import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize } from "./main";
+import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath } from "./main";
 
 // ─── Helper: create a partial plugin instance for testing ────────────────────
 
@@ -86,7 +86,10 @@ function createTestPlugin(overrides: {
   plugin.pollInProgress = false;
 
   // Auto-accept confirmation dialog in tests (real modal blocks forever)
-  plugin.showConfirmationDialog = vi.fn().mockResolvedValue("accepted");
+  plugin.showConfirmationDialog = vi.fn().mockResolvedValue({
+    decision: "accepted",
+    resolutions: new Map(),
+  });
 
   const cache = overrides.frontmatter === undefined && overrides.inlineTags === undefined
     ? null
@@ -103,6 +106,7 @@ function createTestPlugin(overrides: {
       adapter: {
         write: vi.fn().mockResolvedValue(undefined),
         mkdir: vi.fn().mockResolvedValue(undefined),
+        exists: vi.fn().mockResolvedValue(false),
       },
       read: vi.fn(),
       getMarkdownFiles: vi.fn().mockReturnValue([]),
@@ -317,7 +321,7 @@ describe("pollAIOutput", () => {
 
   it("does NOT call fetch_ai_output_content when user rejects", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    plugin.showConfirmationDialog = vi.fn().mockResolvedValue("rejected");
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({ decision: "rejected", resolutions: new Map() });
 
     plugin.callMCP = vi.fn()
       .mockResolvedValueOnce(JSON.stringify([
@@ -334,7 +338,7 @@ describe("pollAIOutput", () => {
 
   it("does NOT call fetch_ai_output_content or reject_ai_output when user postpones", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    plugin.showConfirmationDialog = vi.fn().mockResolvedValue("postponed");
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({ decision: "postponed", resolutions: new Map() });
 
     plugin.callMCP = vi.fn()
       .mockResolvedValueOnce(JSON.stringify([
@@ -350,7 +354,7 @@ describe("pollAIOutput", () => {
 
   it("does not show any notice when user postpones", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    plugin.showConfirmationDialog = vi.fn().mockResolvedValue("postponed");
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({ decision: "postponed", resolutions: new Map() });
 
     plugin.callMCP = vi.fn()
       .mockResolvedValueOnce(JSON.stringify([
@@ -578,5 +582,258 @@ describe("AI output delivery to nested paths", () => {
     // mkdir should not be called for root-level files (no folder prefix)
     expect(plugin.app.vault.adapter.mkdir).not.toHaveBeenCalled();
     expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("root-file.md", "Content");
+  });
+});
+
+// ─── generateCopyPath tests ──────────────────────────────────────────────────
+
+describe("generateCopyPath", () => {
+  it("returns Filename(2).md for a basic conflict", async () => {
+    const exists = vi.fn().mockResolvedValue(false);
+    const result = await generateCopyPath("projects/Plan.md", exists);
+    expect(result).toBe("projects/Plan(2).md");
+    expect(exists).toHaveBeenCalledWith("projects/Plan(2).md");
+  });
+
+  it("increments suffix when (2) already exists", async () => {
+    const exists = vi.fn()
+      .mockResolvedValueOnce(true)   // Plan(2).md exists
+      .mockResolvedValueOnce(false); // Plan(3).md available
+    const result = await generateCopyPath("projects/Plan.md", exists);
+    expect(result).toBe("projects/Plan(3).md");
+  });
+
+  it("increments through multiple existing copies", async () => {
+    const exists = vi.fn()
+      .mockResolvedValueOnce(true)   // Todo(2).md
+      .mockResolvedValueOnce(true)   // Todo(3).md
+      .mockResolvedValueOnce(true)   // Todo(4).md
+      .mockResolvedValueOnce(false); // Todo(5).md available
+    const result = await generateCopyPath("notes/Todo.md", exists);
+    expect(result).toBe("notes/Todo(5).md");
+  });
+
+  it("handles root-level file (no parent directory)", async () => {
+    const exists = vi.fn().mockResolvedValue(false);
+    const result = await generateCopyPath("README.md", exists);
+    expect(result).toBe("README(2).md");
+  });
+
+  it("throws after exhausting 100 attempts", async () => {
+    const exists = vi.fn().mockResolvedValue(true); // everything exists
+    await expect(
+      generateCopyPath("file.md", exists),
+    ).rejects.toThrow("Could not find available copy name");
+    expect(exists).toHaveBeenCalledTimes(100);
+  });
+
+  it("preserves directory in copy path", async () => {
+    const exists = vi.fn().mockResolvedValue(false);
+    const result = await generateCopyPath("deeply/nested/folder/doc.md", exists);
+    expect(result).toBe("deeply/nested/folder/doc(2).md");
+  });
+});
+
+// ─── Conflict detection tests ────────────────────────────────────────────────
+
+describe("conflict detection in pollAIOutput", () => {
+  beforeEach(() => {
+    noticeMessages.length = 0;
+  });
+
+  it("builds correct ConflictInfo from exists checks", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+
+    // file-1 exists, file-2 doesn't
+    plugin.app.vault.adapter.exists = vi.fn()
+      .mockResolvedValueOnce(true)   // projects/existing.md
+      .mockResolvedValueOnce(false); // projects/new.md
+
+    setupTwoPhaseCallMCP(
+      plugin,
+      [
+        { id: "output-1", title: "Existing", file_path: "projects/existing.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
+        { id: "output-2", title: "New", file_path: "projects/new.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
+      ],
+      [
+        { id: "output-1", content: "Content 1" },
+        { id: "output-2", content: "Content 2" },
+      ],
+    );
+
+    await plugin.pollAIOutput();
+
+    // showConfirmationDialog receives metadataList and conflicts
+    expect(plugin.showConfirmationDialog).toHaveBeenCalledWith(
+      expect.any(Array),
+      { "output-1": true, "output-2": false },
+    );
+  });
+
+  it("calls exists for each metadata entry's file_path", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.app.vault.adapter.exists = vi.fn().mockResolvedValue(false);
+
+    setupTwoPhaseCallMCP(
+      plugin,
+      [
+        { id: "o1", title: "A", file_path: "a.md", content_size: 1, created_at: "2026-03-22T00:00:00Z" },
+        { id: "o2", title: "B", file_path: "b.md", content_size: 1, created_at: "2026-03-22T00:00:00Z" },
+        { id: "o3", title: "C", file_path: "c.md", content_size: 1, created_at: "2026-03-22T00:00:00Z" },
+      ],
+      [
+        { id: "o1", content: "A" },
+        { id: "o2", content: "B" },
+        { id: "o3", content: "C" },
+      ],
+    );
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.app.vault.adapter.exists).toHaveBeenCalledWith("a.md");
+    expect(plugin.app.vault.adapter.exists).toHaveBeenCalledWith("b.md");
+    expect(plugin.app.vault.adapter.exists).toHaveBeenCalledWith("c.md");
+  });
+});
+
+// ─── Conflict-aware file writing tests ──────────────────────────────────────
+
+describe("conflict-aware file writing", () => {
+  beforeEach(() => {
+    noticeMessages.length = 0;
+  });
+
+  it("overwrites file when resolution is 'overwrite' (default)", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.app.vault.adapter.exists = vi.fn().mockResolvedValue(true); // file exists
+
+    const resolutions = new Map([["output-1", "overwrite" as const]]);
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({
+      decision: "accepted",
+      resolutions,
+    });
+
+    setupTwoPhaseCallMCP(
+      plugin,
+      [{ id: "output-1", title: "Overwrite Me", file_path: "projects/plan.md", content_size: 10, created_at: "2026-03-22T00:00:00Z" }],
+      [{ id: "output-1", content: "New content" }],
+    );
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("projects/plan.md", "New content");
+    expect(plugin.syncedHashes["projects/plan.md"]).toBe(simpleHash("New content"));
+  });
+
+  it("renames file when resolution is 'rename'", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+
+    // exists() calls: first for conflict detection, then for generateCopyPath
+    plugin.app.vault.adapter.exists = vi.fn()
+      .mockResolvedValueOnce(true)   // conflict detection: projects/plan.md exists
+      .mockResolvedValueOnce(false); // generateCopyPath: projects/plan(2).md available
+
+    const resolutions = new Map([["output-1", "rename" as const]]);
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({
+      decision: "accepted",
+      resolutions,
+    });
+
+    setupTwoPhaseCallMCP(
+      plugin,
+      [{ id: "output-1", title: "Save Copy", file_path: "projects/plan.md", content_size: 10, created_at: "2026-03-22T00:00:00Z" }],
+      [{ id: "output-1", content: "New content" }],
+    );
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("projects/plan(2).md", "New content");
+  });
+
+  it("stores hash under actual written path when renamed", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+
+    plugin.app.vault.adapter.exists = vi.fn()
+      .mockResolvedValueOnce(true)   // conflict detection
+      .mockResolvedValueOnce(false); // generateCopyPath
+
+    const resolutions = new Map([["output-1", "rename" as const]]);
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({
+      decision: "accepted",
+      resolutions,
+    });
+
+    setupTwoPhaseCallMCP(
+      plugin,
+      [{ id: "output-1", title: "Renamed", file_path: "projects/plan.md", content_size: 10, created_at: "2026-03-22T00:00:00Z" }],
+      [{ id: "output-1", content: "Renamed content" }],
+    );
+
+    await plugin.pollAIOutput();
+
+    // Hash stored under the renamed path, not the original
+    expect(plugin.syncedHashes["projects/plan(2).md"]).toBe(simpleHash("Renamed content"));
+    expect(plugin.syncedHashes["projects/plan.md"]).toBeUndefined();
+  });
+
+  it("skips file and continues when generateCopyPath fails", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+
+    // fail.md and all its copies exist; success.md does not
+    plugin.app.vault.adapter.exists = vi.fn().mockImplementation(async (path: string) => {
+      if (path === "success.md") return false;
+      return true; // fail.md and all fail(N).md variants exist
+    });
+
+    const resolutions = new Map([["output-1", "rename" as const]]);
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({
+      decision: "accepted",
+      resolutions,
+    });
+
+    plugin.callMCP = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify([
+        { id: "output-1", title: "Fail Rename", file_path: "fail.md", content_size: 5, created_at: "2026-03-22T00:00:00Z" },
+        { id: "output-2", title: "Success", file_path: "success.md", content_size: 5, created_at: "2026-03-22T00:00:00Z" },
+      ]))
+      .mockResolvedValueOnce(JSON.stringify([
+        { id: "output-1", content: "Fail" },
+        { id: "output-2", content: "Works" },
+      ]))
+      .mockResolvedValueOnce("ok"); // mark_ai_output_picked_up
+
+    await plugin.pollAIOutput();
+
+    // output-1 was skipped, output-2 was delivered
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("success.md", "Works");
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledTimes(1);
+
+    // Only output-2 was marked as picked up
+    expect(plugin.callMCP).toHaveBeenCalledWith("mark_ai_output_picked_up", { ids: ["output-2"] });
+
+    // Error notice shown for the failed rename
+    expect(noticeMessages.some((message) => message.includes("Could not find available copy name"))).toBe(true);
+  });
+
+  it("writes non-conflicting files without rename regardless of resolutions", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.app.vault.adapter.exists = vi.fn().mockResolvedValue(false); // nothing exists
+
+    // No resolutions for non-conflicting files
+    plugin.showConfirmationDialog = vi.fn().mockResolvedValue({
+      decision: "accepted",
+      resolutions: new Map(),
+    });
+
+    setupTwoPhaseCallMCP(
+      plugin,
+      [{ id: "output-1", title: "New File", file_path: "projects/new.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" }],
+      [{ id: "output-1", content: "Content" }],
+    );
+
+    await plugin.pollAIOutput();
+
+    expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("projects/new.md", "Content");
+    expect(plugin.syncedHashes["projects/new.md"]).toBeDefined();
   });
 });
