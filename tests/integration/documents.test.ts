@@ -192,6 +192,75 @@ Deno.test("list_documents returns empty for project with no documents", async ()
   assertStringIncludes(result, "No documents found");
 });
 
+// ─── list_documents title_contains Filter Tests ────────────────────────────
+
+Deno.test("list_documents filters by title_contains (substring match)", async () => {
+  const result = await callTool("list_documents", { title_contains: "Integration Test" });
+  assertExists(result);
+  assertStringIncludes(result, "Integration Test Document");
+  assertStringIncludes(result, "document(s)");
+});
+
+Deno.test("list_documents title_contains is case-insensitive", async () => {
+  const result = await callTool("list_documents", { title_contains: "integration test" });
+  assertExists(result);
+  assertStringIncludes(result, "Integration Test Document");
+});
+
+Deno.test("list_documents title_contains returns no results for non-matching string", async () => {
+  const result = await callTool("list_documents", { title_contains: "zzz-nonexistent-title-zzz" });
+  assertStringIncludes(result, "No documents found");
+});
+
+// ─── list_documents search Filter Tests ────────────────────────────────────
+
+Deno.test("list_documents filters by content search", async () => {
+  const result = await callTool("list_documents", { search: "full test document stored verbatim" });
+  assertExists(result);
+  assertStringIncludes(result, "Integration Test Document");
+  assertStringIncludes(result, "document(s)");
+  // Content body should NOT be in list results (metadata only)
+  assertEquals(result.includes("This is a full test document stored verbatim."), false,
+    "Content body should not appear in list results");
+});
+
+Deno.test("list_documents search is case-insensitive", async () => {
+  const result = await callTool("list_documents", { search: "FULL TEST DOCUMENT STORED VERBATIM" });
+  assertExists(result);
+  assertStringIncludes(result, "Integration Test Document");
+});
+
+// ─── list_documents Combined Filter Tests ──────────────────────────────────
+
+Deno.test("list_documents combines project_id and title_contains", async () => {
+  const result = await callTool("list_documents", {
+    project_id: CARCHIEF_PROJECT_ID,
+    title_contains: "Integration",
+  });
+  assertExists(result);
+  assertStringIncludes(result, "Integration Test Document");
+});
+
+Deno.test("list_documents combines project_id and title_contains (no match)", async () => {
+  // Title exists but not in this project combination
+  const result = await callTool("list_documents", {
+    project_id: CARCHIEF_PROJECT_ID,
+    title_contains: "Extraction Pipeline",
+  });
+  // Extraction Pipeline Test is under a different project (DocExtractTest), not CarChief
+  assertStringIncludes(result, "No documents found");
+});
+
+Deno.test("list_documents combines all three filters", async () => {
+  const result = await callTool("list_documents", {
+    project_id: CARCHIEF_PROJECT_ID,
+    title_contains: "Integration",
+    search: "stored verbatim",
+  });
+  assertExists(result);
+  assertStringIncludes(result, "Integration Test Document");
+});
+
 // ─── capture_thought with document_ids Test ─────────────────────────────────
 
 Deno.test("capture_thought stores document_ids in metadata.references.documents", async () => {
