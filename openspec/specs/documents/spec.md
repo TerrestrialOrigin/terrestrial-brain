@@ -20,7 +20,7 @@ The system SHALL provide a `documents` table in Supabase that stores full markdo
 
 ### Requirement: write_document MCP tool stores a document and extracts references
 
-The system SHALL expose a `write_document` MCP tool that accepts `title` (string, required), `content` (string, required), `project_id` (string, required), `file_path` (string, optional), and `references` (object with `people` and `tasks` arrays, optional). The tool SHALL insert a row into the `documents` table with content stored verbatim. The response SHALL include the inserted document's `id`, `title`, `project_id`, and a `thoughts_required: true` field.
+The system SHALL expose a `write_document` MCP tool that accepts `title` (string, required), `content` (string, required), `project_id` (string, required), `file_path` (string, optional), and `references` (object with `people` and `tasks` arrays, optional). The tool SHALL insert a row into the `documents` table with content stored verbatim. The response SHALL include the inserted document's `id`, `title`, `project_id`, and a `thoughts_required: true` field. The tool description SHALL mention that existing documents can be edited via `update_document`.
 
 #### Scenario: Document created with explicit references
 - **WHEN** `write_document` is called with title, content, project_id, and references containing people and task UUIDs
@@ -54,6 +54,10 @@ The system SHALL expose a `write_document` MCP tool that accepts `title` (string
 #### Scenario: Content stored verbatim
 - **WHEN** `write_document` is called with any content string
 - **THEN** the `content` column in the inserted row is byte-for-byte identical to the input
+
+#### Scenario: Tool description mentions update_document
+- **WHEN** the `write_document` tool is registered
+- **THEN** its description includes a note that existing documents can be edited using `update_document`
 
 ### Requirement: get_document MCP tool retrieves a full document by ID
 
