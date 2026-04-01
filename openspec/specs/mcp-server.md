@@ -26,10 +26,22 @@ Tools are organized into modules, each exporting a `register(server, supabase)` 
 
 | Module | Tools |
 |--------|-------|
-| `tools/thoughts.ts` | search_thoughts, list_thoughts, thought_stats, capture_thought, ingest_note |
+| `tools/thoughts.ts` | search_thoughts, list_thoughts, thought_stats, capture_thought |
 | `tools/projects.ts` | create_project, list_projects, get_project, update_project, archive_project |
 | `tools/tasks.ts` | create_task, list_tasks, update_task, archive_task |
 | `tools/ai_output.ts` | create_ai_output, get_pending_ai_output, mark_ai_output_picked_up |
+
+---
+
+## Direct HTTP Routes
+
+The server exposes direct HTTP routes alongside the MCP transport for operations that should not be available to AI callers via MCP.
+
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/ingest-note` | POST | Ingest a full note into thoughts (used by Obsidian plugin). Accepts `{ content, title?, note_id? }`. Returns `{ success, message? }` or `{ success: false, error }`. |
+
+Direct routes use the same `x-brain-key` authentication as MCP requests. Because Supabase Edge Functions do not pass URL subpaths to Hono's router, direct routes are dispatched by checking `url.pathname` inside the wildcard handler rather than using separate Hono route registrations.
 
 ---
 

@@ -51,6 +51,24 @@ async function callTool(
   return parsed.result?.content?.[0]?.text || "";
 }
 
+const INGEST_URL =
+  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
+
+async function callIngestNote(args: {
+  content: string;
+  title?: string;
+  note_id?: string;
+}): Promise<string> {
+  const res = await fetch(INGEST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  const body = await res.json();
+  if (!body.success) throw new Error(body.error || "Ingest failed");
+  return body.message || "";
+}
+
 // Seed project IDs (from seed.sql)
 const CARCHIEF_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -74,7 +92,7 @@ Deno.test("ingest_note: checkboxes create task rows", async () => {
 - [x] Deploy to staging
 `;
 
-  const result = await callTool("ingest_note", {
+  const result = await callIngestNote({
     content: noteContent,
     title: "Sprint Tasks",
     note_id: noteId,
@@ -114,7 +132,7 @@ Deno.test("ingest_note: thoughts have metadata.references with tasks and project
 Some notes about the CarChief dealer integration.
 `;
 
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: noteContent,
     title: "CarChief Tasks",
     note_id: noteId,
@@ -157,7 +175,7 @@ Deno.test("ingest_note: stores note snapshot", async () => {
 
   const noteContent = "A simple note for snapshot testing.";
 
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: noteContent,
     title: "Snapshot Test",
     note_id: noteId,
@@ -186,14 +204,14 @@ Deno.test("ingest_note: re-sync updates snapshot, no duplicates", async () => {
   testNoteIds.push(noteId);
 
   // First ingest
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: "Version 1 of the note.",
     title: "Resync Test",
     note_id: noteId,
   });
 
   // Second ingest with updated content
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: "Version 2 of the note with more detail.",
     title: "Resync Test Updated",
     note_id: noteId,
@@ -224,7 +242,7 @@ Deno.test("ingest_note: re-sync with checkbox state change updates task", async 
   testTaskReferenceIds.push(noteId);
 
   // First ingest: unchecked
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: "- [ ] Ship the feature\n",
     title: "Task Update",
     note_id: noteId,
@@ -240,7 +258,7 @@ Deno.test("ingest_note: re-sync with checkbox state change updates task", async 
   assertEquals(tasksBefore[0].status, "open");
 
   // Second ingest: now checked
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: "- [x] Ship the feature\n",
     title: "Task Update",
     note_id: noteId,
@@ -309,7 +327,7 @@ Deno.test("ingest_note: thoughts have note_snapshot_id set", async () => {
   const noteId = `test/enhanced-ingest/snapshot-link-${Date.now()}.md`;
   testNoteIds.push(noteId);
 
-  await callTool("ingest_note", {
+  await callIngestNote({
     content: "A thought about linking snapshots.",
     title: "Snapshot Link",
     note_id: noteId,
@@ -405,7 +423,7 @@ Deno.test("option4: round-trip — ingest of delivered content creates no duplic
   assertExists(matchingOutput, "AI output should exist for this file_path");
 
   // Simulate what happens after plugin delivery: ingest_note with the same content and path
-  const ingestResult = await callTool("ingest_note", {
+  const ingestResult = await callIngestNote({
     content: matchingOutput.content,
     title: "CarChief Sprint Plan",
     note_id: filePath,

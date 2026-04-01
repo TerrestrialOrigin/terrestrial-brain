@@ -29,11 +29,34 @@ echo ""
 
 # Step 2: Deploy edge functions
 echo "--- Step 2/4: Deploying edge functions ---"
+
+# SELinux on Fedora/Qubes blocks Docker containers from reading mounted volumes.
+# Temporarily switch to permissive mode for the deploy, then restore.
+SELINUX_WAS_ENFORCING=false
+if command -v getenforce &>/dev/null && [ "$(getenforce)" = "Enforcing" ]; then
+  echo "  SELinux is Enforcing — switching to Permissive for Docker deploy..."
+  sudo setenforce 0
+  SELINUX_WAS_ENFORCING=true
+fi
+
+deploy_failed=false
 for FUNC_DIR in supabase/functions/*/; do
   FUNC_NAME=$(basename "$FUNC_DIR")
   echo "  Deploying $FUNC_NAME..."
-  npx supabase functions deploy "$FUNC_NAME" --project-ref "$PROJECT_REF"
+  if ! npx supabase functions deploy "$FUNC_NAME" --project-ref "$PROJECT_REF"; then
+    echo "  WARNING: Failed to deploy $FUNC_NAME"
+    deploy_failed=true
+  fi
 done
+
+if [ "$SELINUX_WAS_ENFORCING" = true ]; then
+  sudo setenforce 1
+  echo "  SELinux restored to Enforcing"
+fi
+
+if [ "$deploy_failed" = true ]; then
+  echo "  Some functions failed to deploy — check output above"
+fi
 echo ""
 
 # Step 3: List secrets (reminder to set any new ones)

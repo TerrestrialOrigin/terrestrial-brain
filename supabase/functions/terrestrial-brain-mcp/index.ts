@@ -5,7 +5,7 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
 import { createClient } from "@supabase/supabase-js";
 
-import { register as registerThoughts } from "./tools/thoughts.ts";
+import { register as registerThoughts, handleIngestNote } from "./tools/thoughts.ts";
 import { register as registerProjects } from "./tools/projects.ts";
 import { register as registerTasks } from "./tools/tasks.ts";
 import { register as registerAIOutput } from "./tools/ai_output.ts";
@@ -42,12 +42,43 @@ app.use("*", cors({
   allowHeaders: ["Content-Type", "x-brain-key"],
 }));
 
+// ─── Unified handler: route by URL path ──────────────────────────────────────
+// Supabase Edge Functions may not pass subpaths to Hono's router, so we check
+// the raw URL to distinguish /ingest-note from MCP requests.
+
 app.all("*", async (c) => {
-  const provided = c.req.header("x-brain-key") || new URL(c.req.url).searchParams.get("key");
+  const url = new URL(c.req.url);
+  const provided = c.req.header("x-brain-key") || url.searchParams.get("key");
   if (!provided || provided !== MCP_ACCESS_KEY) {
     return c.json({ error: "Invalid or missing access key" }, 401);
   }
 
+  // Direct HTTP route for ingest-note (not MCP)
+  if (url.pathname.endsWith("/ingest-note") && c.req.method === "POST") {
+    try {
+      const body = await c.req.json();
+      const content = body?.content;
+      if (!content || typeof content !== "string" || content.trim().length === 0) {
+        return c.json({ success: false, error: "content is required" }, 400);
+      }
+
+      const result = await handleIngestNote(supabase, {
+        content,
+        title: body.title,
+        note_id: body.note_id,
+      });
+
+      if (result.success) {
+        return c.json({ success: true, message: result.message });
+      } else {
+        return c.json({ success: false, error: result.error }, 500);
+      }
+    } catch (err: unknown) {
+      return c.json({ success: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // MCP transport for all other requests
   const transport = new StreamableHTTPTransport();
   await server.connect(transport);
   return transport.handleRequest(c);

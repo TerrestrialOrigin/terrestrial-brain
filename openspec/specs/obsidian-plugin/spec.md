@@ -35,7 +35,7 @@ WHEN the timer callback runs
 THEN the plugin:
   1. Reads the file content
   2. Strips YAML frontmatter
-  3. Calls `ingest_note` via MCP with content, title (basename), and note_id (vault-relative path)
+  3. Calls the `/ingest-note` HTTP endpoint directly with `{ content, title (basename), note_id (vault-relative path) }` as a plain JSON POST
   4. Stores the new content hash in syncedHashes
   5. Persists syncedHashes to disk
 

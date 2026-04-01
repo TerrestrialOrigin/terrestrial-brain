@@ -5,7 +5,7 @@ The core knowledge unit in Terrestrial Brain. Thoughts are self-contained, 1-3 s
 ## Data Model
 
 - **Table:** `thoughts`
-- **Fields:** id (uuid), content (text), embedding (vector 1536), metadata (jsonb), created_at, updated_at, reference_id (text, nullable — vault-relative path for note-sourced thoughts), note_snapshot_id (uuid, nullable — FK to note_snapshots.id, ON DELETE SET NULL)
+- **Fields:** id (uuid), content (text), embedding (vector 1536), metadata (jsonb), created_at, updated_at, reference_id (text, nullable — vault-relative path for note-sourced thoughts), note_snapshot_id (uuid, nullable — FK to note_snapshots.id, ON DELETE SET NULL), reliability (text, nullable — `'reliable'` or `'less reliable'`), author (text, nullable — model identifier string e.g. `'gpt-4o-mini'`)
 - **Indexes:** HNSW on embedding (cosine), GIN on metadata, btree on created_at (desc), btree on reference_id, btree on note_snapshot_id
 - **Trigger:** `updated_at` auto-updates on row change
 
@@ -53,9 +53,9 @@ THEN the tool returns an error message with `isError: true`
 
 ### ingest_note — fresh (no prior thoughts for this note_id)
 
-GIVEN the MCP server is running
+GIVEN the `/ingest-note` HTTP endpoint is running
 AND the note has no existing thoughts (no rows with matching reference_id)
-WHEN a client calls `ingest_note` with `content`, optional `title`, optional `note_id`
+WHEN a client calls `POST /ingest-note` with `content`, optional `title`, optional `note_id`
 THEN the system:
   1. If `note_id` is provided, upserts `note_snapshots` with `reference_id = note_id`, returning `note_snapshot_id`
   2. Runs structural parser on content to produce a `ParsedNote`
@@ -67,7 +67,7 @@ THEN the system:
   5. For each extracted thought, in parallel:
      a. Generates embedding
      b. Extracts metadata
-     c. Inserts into `thoughts` with reference_id=note_id, note_snapshot_id from step 1, source="obsidian", metadata.references from step 3
+     c. Inserts into `thoughts` with reference_id=note_id, note_snapshot_id from step 1, source="obsidian", metadata.references from step 3, reliability="less reliable", author="gpt-4o-mini"
   6. Returns summary including thought count, task count, and project count
 
 #### Scenario: Fresh ingest with pipeline integration
@@ -82,9 +82,9 @@ THEN returns "No thoughts extracted — note may be empty."
 
 ### ingest_note — reconciliation (existing thoughts for this note_id)
 
-GIVEN the MCP server is running
+GIVEN the `/ingest-note` HTTP endpoint is running
 AND the note already has thoughts in the database (rows with matching reference_id)
-WHEN a client calls `ingest_note` with `content`, `title`, and `note_id`
+WHEN a client calls `POST /ingest-note` with `content`, `title`, and `note_id`
 THEN the system:
   1. If `note_id` is provided, upserts `note_snapshots` with `reference_id = note_id`, returning `note_snapshot_id`
   2. Runs structural parser and extractor pipeline to produce `references`
@@ -93,8 +93,8 @@ THEN the system:
   5. The LLM returns a reconciliation plan: keep, update, add, delete
      - Project detection is NOT done in this prompt (handled by extractors in step 2)
   6. Executes the plan in parallel:
-     - Updated thoughts get new content, embedding, metadata, note_snapshot_id, and metadata.references from pipeline
-     - Added thoughts get inserted with reference_id, note_snapshot_id, source="obsidian", and metadata.references
+     - Updated thoughts get new content, embedding, metadata, note_snapshot_id, metadata.references from pipeline, reliability="less reliable", author="gpt-4o-mini"
+     - Added thoughts get inserted with reference_id, note_snapshot_id, source="obsidian", metadata.references, reliability="less reliable", author="gpt-4o-mini"
      - Deleted thoughts are removed from the database
   7. Returns summary including thought count, task count, and project count
 
