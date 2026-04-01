@@ -79,6 +79,7 @@ export async function freshIngest(
   note_id: string | undefined,
   noteSnapshotId?: string | null,
   references?: Record<string, string[]>,
+  provenance?: { reliability: string; author: string },
 ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
   const splitResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: "POST",
@@ -162,6 +163,7 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
           note_title: title || null,
           references: pipelineRefs,
         },
+        ...(provenance ? { reliability: provenance.reliability, author: provenance.author } : {}),
       });
       if (error) throw new Error(error.message);
     })

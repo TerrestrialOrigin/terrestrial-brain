@@ -61,7 +61,7 @@ vi.mock("obsidian", () => ({
   TFile: class {},
 }));
 
-import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath } from "./main";
+import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildIngestNoteUrl } from "./main";
 
 // ─── Helper: create a partial plugin instance for testing ────────────────────
 
@@ -835,5 +835,102 @@ describe("conflict-aware file writing", () => {
 
     expect(plugin.app.vault.adapter.write).toHaveBeenCalledWith("projects/new.md", "Content");
     expect(plugin.syncedHashes["projects/new.md"]).toBeDefined();
+  });
+});
+
+// ─── buildIngestNoteUrl tests ───────────────────────────────────────────────
+
+describe("buildIngestNoteUrl", () => {
+  it("inserts /ingest-note before query string", () => {
+    expect(buildIngestNoteUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc"))
+      .toBe("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp/ingest-note?key=abc");
+  });
+
+  it("appends /ingest-note when no query string", () => {
+    expect(buildIngestNoteUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp"))
+      .toBe("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp/ingest-note");
+  });
+
+  it("handles URL with multiple query params", () => {
+    expect(buildIngestNoteUrl("https://example.com/mcp?key=abc&debug=true"))
+      .toBe("https://example.com/mcp/ingest-note?key=abc&debug=true");
+  });
+});
+
+// ─── callIngestNote tests ───────────────────────────────────────────────────
+
+describe("callIngestNote", () => {
+  it("sends plain JSON POST to /ingest-note URL and returns message", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp?key=abc" });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success: true, message: 'Captured 3 thoughts from "Test"' }),
+      headers: new Headers({ "content-type": "application/json" }),
+    } as Response);
+
+    const result = await plugin.callIngestNote("note content", "Test", "folder/Test.md");
+
+    expect(result).toBe('Captured 3 thoughts from "Test"');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://example.com/mcp/ingest-note?key=abc",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "note content", title: "Test", note_id: "folder/Test.md" }),
+      }),
+    );
+
+    fetchSpy.mockRestore();
+  });
+
+  it("throws on failure response", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp?key=abc" });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ success: false, error: "content is required" }),
+      headers: new Headers({ "content-type": "application/json" }),
+    } as Response);
+
+    await expect(plugin.callIngestNote("", "Test", "test.md"))
+      .rejects.toThrow("content is required");
+
+    fetchSpy.mockRestore();
+  });
+
+  it("throws on HTTP error", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp?key=abc" });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      text: () => Promise.resolve("Unauthorized"),
+    } as Response);
+
+    await expect(plugin.callIngestNote("content", "Test", "test.md"))
+      .rejects.toThrow("Ingest 401: Unauthorized");
+
+    fetchSpy.mockRestore();
+  });
+});
+
+// ─── processNote uses callIngestNote tests ──────────────────────────────────
+
+describe("processNote uses callIngestNote", () => {
+  it("calls callIngestNote instead of callMCP for note ingestion", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp?key=abc" });
+    plugin.callIngestNote = vi.fn().mockResolvedValue('Captured 2 thoughts from "Test"');
+    plugin.app.vault.read = vi.fn().mockResolvedValue("# Test Note\n\nSome content here.");
+
+    const file = { path: "folder/test.md", basename: "test", extension: "md" } as any;
+    await plugin.processNote(file, { force: true, silent: true });
+
+    expect(plugin.callIngestNote).toHaveBeenCalledWith(
+      "# Test Note\n\nSome content here.",
+      "test",
+      "folder/test.md",
+    );
+    expect(plugin.callMCP).not.toHaveBeenCalled();
   });
 });

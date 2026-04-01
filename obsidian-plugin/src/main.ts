@@ -364,11 +364,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
 
     try {
-      const result = await this.callMCP("ingest_note", {
-        content: stripped,
-        title: file.basename,
-        note_id: file.path, // vault-relative path e.g. "Projects/CarChief/sprint-notes.md"
-      });
+      const result = await this.callIngestNote(stripped, file.basename, file.path);
 
       this.syncedHashes[file.path] = hash;
       await this.saveSettings();
@@ -463,6 +459,29 @@ export default class TerrestrialBrainPlugin extends Plugin {
       }
       return result.result?.content?.[0]?.text || "Done";
     }
+  }
+
+  // ─── Direct HTTP call for note ingestion ───────────────────────────────────
+
+  async callIngestNote(content: string, title: string, noteId: string): Promise<string> {
+    const ingestUrl = buildIngestNoteUrl(this.settings.tbEndpointUrl);
+
+    const response = await fetch(ingestUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content, title, note_id: noteId }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Ingest ${response.status}: ${body}`);
+    }
+
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.error || "Unknown ingest error");
+    }
+    return result.message || "Done";
   }
 
   // ─── Settings Persistence ──────────────────────────────────────────────────
@@ -782,6 +801,20 @@ export function simpleHash(str: string): string {
  * copy name using the pattern `Filename(N).md` starting at N=2.
  * The `existsCheck` parameter is injected for testability.
  */
+/**
+ * Given the MCP endpoint URL (e.g. "https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc"),
+ * construct the direct ingest-note URL by inserting "/ingest-note" before the query string.
+ */
+export function buildIngestNoteUrl(tbEndpointUrl: string): string {
+  const questionMarkIndex = tbEndpointUrl.indexOf("?");
+  if (questionMarkIndex === -1) {
+    return `${tbEndpointUrl}/ingest-note`;
+  }
+  const basePath = tbEndpointUrl.substring(0, questionMarkIndex);
+  const queryString = tbEndpointUrl.substring(questionMarkIndex);
+  return `${basePath}/ingest-note${queryString}`;
+}
+
 export async function generateCopyPath(
   originalPath: string,
   existsCheck: (path: string) => Promise<boolean>,

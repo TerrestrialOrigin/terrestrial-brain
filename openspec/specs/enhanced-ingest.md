@@ -40,17 +40,17 @@ The `ingest_note` tool SHALL run the structural parser and extractor pipeline (P
 
 ---
 
-### Requirement: ingest_note populates thoughts with references and snapshot
+### Requirement: ingest_note populates thoughts with references, snapshot, reliability, and author
 
-All thoughts created or updated during `ingest_note` SHALL receive the `note_snapshot_id` from the snapshot upsert and `metadata.references` from the pipeline.
+All thoughts created or updated during `ingest_note` SHALL receive the `note_snapshot_id` from the snapshot upsert, `metadata.references` from the pipeline, `reliability = 'less reliable'`, and `author = 'gpt-4o-mini'`.
 
-#### Scenario: Fresh ingest thoughts have references and snapshot
+#### Scenario: Fresh ingest thoughts have references, snapshot, reliability, and author
 - **WHEN** `ingest_note` performs a fresh ingest (no prior thoughts)
-- **THEN** each inserted thought SHALL have `note_snapshot_id` set and `metadata.references` containing `{ projects: [...], tasks: [...] }`
+- **THEN** each inserted thought SHALL have `note_snapshot_id` set, `metadata.references` containing `{ projects: [...], tasks: [...] }`, `reliability = 'less reliable'`, and `author = 'gpt-4o-mini'`
 
-#### Scenario: Reconciliation thoughts have references and snapshot
+#### Scenario: Reconciliation thoughts have references, snapshot, reliability, and author
 - **WHEN** `ingest_note` reconciles with existing thoughts (update/add operations)
-- **THEN** updated and added thoughts SHALL have `note_snapshot_id` set and `metadata.references` containing `{ projects: [...], tasks: [...] }`
+- **THEN** updated and added thoughts SHALL have `note_snapshot_id` set, `metadata.references` containing `{ projects: [...], tasks: [...] }`, `reliability = 'less reliable'`, and `author = 'gpt-4o-mini'`
 
 ---
 
