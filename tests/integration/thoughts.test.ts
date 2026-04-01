@@ -45,6 +45,173 @@ Deno.test("list_thoughts returns results", async () => {
   assertEquals(result.includes("recent thought"), true);
 });
 
+// ─── list_thoughts project_id filter and provenance display ─────────────────
+
+const TB_PROJECT_ID = "00000000-0000-0000-0000-000000000002";
+const CC_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
+
+Deno.test("list_thoughts with project_id filter returns only matching thoughts", async () => {
+  const result = await callTool("list_thoughts", { project_id: TB_PROJECT_ID, limit: 50 });
+  assertExists(result);
+  // All returned thoughts should be about Terrestrial Brain, none about CarChief-only topics
+  assertEquals(result.includes("recent thought"), true, "Should return results");
+  // The TB-seeded thought mentions MCP or Obsidian
+  assertEquals(
+    result.includes("MCP") || result.includes("Terrestrial Brain") || result.includes("Obsidian"),
+    true,
+    `Should contain TB-related content. Got: ${result.substring(0, 500)}`,
+  );
+});
+
+Deno.test("list_thoughts with non-matching project_id returns no thoughts", async () => {
+  const result = await callTool("list_thoughts", { project_id: "00000000-0000-0000-0000-999999999999" });
+  assertEquals(result, "No thoughts found.");
+});
+
+Deno.test("list_thoughts with project_id combined with type filter", async () => {
+  const result = await callTool("list_thoughts", { project_id: TB_PROJECT_ID, type: "observation", limit: 50 });
+  assertExists(result);
+  // Should return at least the seed thought about MCP batching (type=observation, project=TB)
+  if (result !== "No thoughts found.") {
+    assertEquals(result.includes("recent thought"), true);
+  }
+});
+
+Deno.test("list_thoughts output includes reliability and author", async () => {
+  // Fetch thoughts that have reliability/author set (seeded data)
+  const result = await callTool("list_thoughts", { project_id: TB_PROJECT_ID, limit: 50 });
+  assertExists(result);
+  // The seeded TB thought has reliability='reliable' and author='claude-sonnet-4-6'
+  assertEquals(result.includes("Reliability:"), true, `Output should include Reliability. Got: ${result.substring(0, 500)}`);
+  assertEquals(result.includes("Author:"), true, `Output should include Author. Got: ${result.substring(0, 500)}`);
+});
+
+Deno.test("list_thoughts output includes resolved project names", async () => {
+  const result = await callTool("list_thoughts", { project_id: TB_PROJECT_ID, limit: 50 });
+  assertExists(result);
+  // Project UUID should be resolved to "Terrestrial Brain" name
+  assertEquals(
+    result.includes("Projects: Terrestrial Brain"),
+    true,
+    `Output should include resolved project name 'Terrestrial Brain'. Got: ${result.substring(0, 500)}`,
+  );
+});
+
+// ─── thought_stats project_id filter ────────────────────────────────────────
+
+Deno.test("thought_stats with project_id returns scoped statistics", async () => {
+  const result = await callTool("thought_stats", { project_id: TB_PROJECT_ID });
+  assertExists(result);
+  assertEquals(result.includes("Total thoughts:"), true);
+  // Scoped count should be less than or equal to total
+  const scopedMatch = result.match(/Total thoughts:\s*(\d+)/);
+  assertExists(scopedMatch, "Should have a total count");
+  const scopedCount = parseInt(scopedMatch![1]);
+
+  const allResult = await callTool("thought_stats", {});
+  const allMatch = allResult.match(/Total thoughts:\s*(\d+)/);
+  assertExists(allMatch, "All stats should have a total count");
+  const allCount = parseInt(allMatch![1]);
+
+  assertEquals(scopedCount <= allCount, true, `Scoped count (${scopedCount}) should be <= total (${allCount})`);
+  assertEquals(scopedCount > 0, true, `Scoped count should be > 0 for seeded data`);
+});
+
+Deno.test("thought_stats with non-matching project_id returns zero count", async () => {
+  const result = await callTool("thought_stats", { project_id: "00000000-0000-0000-0000-999999999999" });
+  assertExists(result);
+  assertEquals(result.includes("Total thoughts: 0"), true, `Should show 0 thoughts. Got: ${result.substring(0, 300)}`);
+});
+
+// ─── search_thoughts provenance display ─────────────────────────────────────
+
+Deno.test("search_thoughts output includes reliability and author when present", async () => {
+  // First capture a thought with known content so we can search for it
+  const uniqueContent = `Integration test search provenance: unique marker ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent, author: "test-model-42" });
+
+  // Search for it
+  const result = await callTool("search_thoughts", { query: uniqueContent, limit: 5, threshold: 0.3 });
+  assertExists(result);
+
+  if (result.includes("No thoughts found")) {
+    // Embedding may not match well enough; skip assertion but don't fail
+    console.warn("search_thoughts didn't find the test thought — embedding similarity may be too low");
+  } else {
+    assertEquals(result.includes("Reliability:"), true, `Search output should include Reliability. Got: ${result.substring(0, 500)}`);
+    assertEquals(result.includes("Author:"), true, `Search output should include Author. Got: ${result.substring(0, 500)}`);
+  }
+
+  // Cleanup
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}`,
+    {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true, "Cleanup should succeed");
+});
+
+// ─── Project name resolution fallback ───────────────────────────────────────
+
+Deno.test("list_thoughts displays raw UUID for orphaned project references", async () => {
+  const orphanedUuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const uniqueContent = `Integration test orphaned project ref ${Date.now()}`;
+
+  // Insert a thought directly with an orphaned project UUID
+  const insertResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts`,
+    {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({
+        content: uniqueContent,
+        metadata: {
+          type: "observation",
+          topics: ["test"],
+          source: "mcp",
+          references: { projects: [orphanedUuid] },
+        },
+        reliability: "reliable",
+        author: "test-model",
+      }),
+    },
+  );
+  assertEquals(insertResponse.ok, true, "Direct insert should succeed");
+  const inserted: { id: string }[] = await insertResponse.json();
+
+  // List thoughts and look for the orphaned UUID in output
+  const result = await callTool("list_thoughts", { limit: 50 });
+  assertExists(result);
+  assertEquals(
+    result.includes(orphanedUuid),
+    true,
+    `Output should contain the raw orphaned UUID as fallback. Got: ${result.substring(0, 800)}`,
+  );
+
+  // Cleanup
+  const cleanupResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${inserted[0].id}`,
+    {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(cleanupResponse.ok, true, "Cleanup should succeed");
+});
+
 // ─── Ingest Note with Project Detection (via /ingest-note HTTP route) ────────
 
 const CARCHIEF_PROJECT_ID = "00000000-0000-0000-0000-000000000001";

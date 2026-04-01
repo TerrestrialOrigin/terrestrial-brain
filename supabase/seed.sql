@@ -28,6 +28,15 @@ insert into public.thoughts (content, metadata) values
   ('Terrestrial Brain should support 2-way sync with Obsidian so the AI can write notes back to the human.',
    '{"type": "idea", "topics": ["Terrestrial Brain", "Obsidian"], "references": {"project_id": "00000000-0000-0000-0000-000000000002"}}');
 
+-- Test thoughts with new-format references, reliability, and author (for list/search provenance tests)
+insert into public.thoughts (content, metadata, reliability, author) values
+  ('The MCP server should batch project name resolution for performance.',
+   '{"type": "observation", "topics": ["MCP", "performance"], "source": "mcp", "references": {"projects": ["00000000-0000-0000-0000-000000000002"]}}',
+   'reliable', 'claude-sonnet-4-6'),
+  ('CarChief dealer search latency is above the 100ms SLA target.',
+   '{"type": "observation", "topics": ["CarChief", "latency"], "source": "obsidian", "references": {"projects": ["00000000-0000-0000-0000-000000000001"]}}',
+   'less reliable', 'gpt-4o-mini');
+
 -- Test AI output (pending)
 insert into public.ai_output (title, content, file_path, source_context) values
   ('CarChief Redis Caching Proposal',
