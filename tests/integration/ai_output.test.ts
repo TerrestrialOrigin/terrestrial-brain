@@ -3,6 +3,10 @@ import { generateTaskMarkdown } from "../../supabase/functions/terrestrial-brain
 
 const BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
 
+function httpUrl(endpoint: string): string {
+  return `http://localhost:54321/functions/v1/terrestrial-brain-mcp/${endpoint}?key=dev-test-key-123`;
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const res = await fetch(BASE, {
     method: "POST",
@@ -29,6 +33,18 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   const parsed = JSON.parse(text);
   if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
   return parsed.result?.content?.[0]?.text || "";
+}
+
+async function callHTTP(
+  endpoint: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(httpUrl(endpoint), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  return await response.json();
 }
 
 // ─── AI Output Tests ────────────────────────────────────────────────────────
@@ -59,36 +75,36 @@ Deno.test("create_ai_output stores content as-is (no frontmatter injection)", as
   });
   assertExists(result);
 
-  // Verify via get_pending that content is stored exactly as provided
-  const pending = await callTool("get_pending_ai_output", {});
-  const outputs = JSON.parse(pending);
-  const found = outputs.find((output: { title: string }) => output.title === "Plain Content Test");
+  // Verify via HTTP get-pending-ai-output that content is stored exactly as provided
+  const pending = await callHTTP("get-pending-ai-output");
+  const outputs = pending.data as { title: string; content: string }[];
+  const found = outputs.find((output) => output.title === "Plain Content Test");
   assertExists(found, "Should find the plain content output in pending list");
   assertEquals(found.content, rawContent, "Content should be stored exactly as provided — no frontmatter injected");
 });
 
-Deno.test("get_pending_ai_output shows unpicked output", async () => {
-  const result = await callTool("get_pending_ai_output", {});
-  const outputs = JSON.parse(result);
+Deno.test("get-pending-ai-output HTTP shows unpicked output", async () => {
+  const result = await callHTTP("get-pending-ai-output");
+  const outputs = result.data as { id: string; title: string; file_path: string; content: string }[];
   assertEquals(Array.isArray(outputs), true);
 
-  const testOutput = outputs.find((output: { id: string }) => output.id === createdOutputId);
+  const testOutput = outputs.find((output) => output.id === createdOutputId);
   assertExists(testOutput, "Created output should appear in pending list");
   assertEquals(testOutput.title, "Test Sprint Plan");
   assertEquals(testOutput.file_path, "projects/TestProject/sprint-plan.md");
   assertEquals(testOutput.content.includes("- [ ] Task 1"), true);
 });
 
-Deno.test("mark_ai_output_picked_up marks output", async () => {
-  const result = await callTool("mark_ai_output_picked_up", { ids: [createdOutputId] });
-  assertExists(result);
-  assertEquals(result.includes("1 output"), true);
+Deno.test("mark-ai-output-picked-up HTTP marks output", async () => {
+  const result = await callHTTP("mark-ai-output-picked-up", { ids: [createdOutputId] });
+  assertEquals(result.success, true);
+  assertEquals((result.message as string).includes("1 output"), true);
 });
 
-Deno.test("get_pending_ai_output hides picked-up output", async () => {
-  const result = await callTool("get_pending_ai_output", {});
-  const outputs = JSON.parse(result);
-  const testOutput = outputs.find((output: { id: string }) => output.id === createdOutputId);
+Deno.test("get-pending-ai-output HTTP hides picked-up output", async () => {
+  const result = await callHTTP("get-pending-ai-output");
+  const outputs = result.data as { id: string }[];
+  const testOutput = outputs.find((output) => output.id === createdOutputId);
   assertEquals(testOutput, undefined, "Picked-up output should not appear in pending list");
 });
 
@@ -102,14 +118,14 @@ Deno.test("create_ai_output with nested path preserves file_path", async () => {
   assertEquals(result.includes("projects/CarChief/sprints/2026/march/deep-plan.md"), true);
 
   // Verify the file_path is preserved in the pending output
-  const pending = await callTool("get_pending_ai_output", {});
-  const outputs = JSON.parse(pending);
-  const nested = outputs.find((output: { title: string }) => output.title === "Deeply Nested Output");
+  const pending = await callHTTP("get-pending-ai-output");
+  const outputs = pending.data as { id: string; title: string; file_path: string }[];
+  const nested = outputs.find((output) => output.title === "Deeply Nested Output");
   assertExists(nested, "Nested output should appear in pending list");
   assertEquals(nested.file_path, "projects/CarChief/sprints/2026/march/deep-plan.md");
 
   // Clean up
-  await callTool("mark_ai_output_picked_up", { ids: [nested.id] });
+  await callHTTP("mark-ai-output-picked-up", { ids: [nested.id] });
 });
 
 // ─── get_pending_ai_output_metadata Tests ─────────────────────────────────────
@@ -127,12 +143,13 @@ Deno.test("get_pending_ai_output_metadata: create test output for metadata tests
   metadataTestOutputId = match![1];
 });
 
-Deno.test("get_pending_ai_output_metadata: returns metadata without content body", async () => {
-  const result = await callTool("get_pending_ai_output_metadata", {});
-  const outputs = JSON.parse(result);
+Deno.test("get-pending-ai-output-metadata HTTP: returns metadata without content body", async () => {
+  const result = await callHTTP("get-pending-ai-output-metadata");
+  assertEquals(result.success, true);
+  const outputs = result.data as { id: string; title: string; file_path: string; content_size: number; content?: string; created_at: string }[];
   assertEquals(Array.isArray(outputs), true);
 
-  const found = outputs.find((output: { id: string }) => output.id === metadataTestOutputId);
+  const found = outputs.find((output) => output.id === metadataTestOutputId);
   assertExists(found, "Should find test output in metadata list");
   assertEquals(found.title, "Metadata Test Output");
   assertEquals(found.file_path, "test/metadata-test.md");
@@ -142,13 +159,13 @@ Deno.test("get_pending_ai_output_metadata: returns metadata without content body
   assertExists(found.created_at, "created_at should be present");
 });
 
-Deno.test("get_pending_ai_output_metadata: filters out picked-up outputs", async () => {
+Deno.test("get-pending-ai-output-metadata HTTP: filters out picked-up outputs", async () => {
   // Mark the test output as picked up
-  await callTool("mark_ai_output_picked_up", { ids: [metadataTestOutputId] });
+  await callHTTP("mark-ai-output-picked-up", { ids: [metadataTestOutputId] });
 
-  const result = await callTool("get_pending_ai_output_metadata", {});
-  const outputs = JSON.parse(result);
-  const found = outputs.find((output: { id: string }) => output.id === metadataTestOutputId);
+  const result = await callHTTP("get-pending-ai-output-metadata");
+  const outputs = result.data as { id: string }[];
+  const found = outputs.find((output) => output.id === metadataTestOutputId);
   assertEquals(found, undefined, "Picked-up output should not appear in metadata list");
 });
 
@@ -167,27 +184,28 @@ Deno.test("fetch_ai_output_content: create test output for fetch tests", async (
   fetchTestOutputId = match![1];
 });
 
-Deno.test("fetch_ai_output_content: returns content for valid pending IDs", async () => {
-  const result = await callTool("fetch_ai_output_content", { ids: [fetchTestOutputId] });
-  const items = JSON.parse(result);
+Deno.test("fetch-ai-output-content HTTP: returns content for valid pending IDs", async () => {
+  const result = await callHTTP("fetch-ai-output-content", { ids: [fetchTestOutputId] });
+  assertEquals(result.success, true);
+  const items = result.data as { id: string; content: string }[];
   assertEquals(Array.isArray(items), true);
   assertEquals(items.length, 1);
   assertEquals(items[0].id, fetchTestOutputId);
   assertEquals(items[0].content, "# Fetch Content\n\nThis is the full body.");
 });
 
-Deno.test("fetch_ai_output_content: returns empty for already-picked-up IDs", async () => {
+Deno.test("fetch-ai-output-content HTTP: returns empty for already-picked-up IDs", async () => {
   // Mark as picked up
-  await callTool("mark_ai_output_picked_up", { ids: [fetchTestOutputId] });
+  await callHTTP("mark-ai-output-picked-up", { ids: [fetchTestOutputId] });
 
-  const result = await callTool("fetch_ai_output_content", { ids: [fetchTestOutputId] });
-  const items = JSON.parse(result);
+  const result = await callHTTP("fetch-ai-output-content", { ids: [fetchTestOutputId] });
+  const items = result.data as unknown[];
   assertEquals(items.length, 0, "Should return empty array for picked-up output");
 });
 
 let rejectTestOutputId: string;
 
-Deno.test("fetch_ai_output_content: returns empty for rejected IDs", async () => {
+Deno.test("fetch-ai-output-content HTTP: returns empty for rejected IDs", async () => {
   // Create and then reject an output
   const createResult = await callTool("create_ai_output", {
     title: "Reject Test Output",
@@ -198,16 +216,16 @@ Deno.test("fetch_ai_output_content: returns empty for rejected IDs", async () =>
   assertExists(match);
   rejectTestOutputId = match![1];
 
-  await callTool("reject_ai_output", { ids: [rejectTestOutputId] });
+  await callHTTP("reject-ai-output", { ids: [rejectTestOutputId] });
 
-  const result = await callTool("fetch_ai_output_content", { ids: [rejectTestOutputId] });
-  const items = JSON.parse(result);
+  const result = await callHTTP("fetch-ai-output-content", { ids: [rejectTestOutputId] });
+  const items = result.data as unknown[];
   assertEquals(items.length, 0, "Should return empty array for rejected output");
 });
 
-Deno.test("fetch_ai_output_content: returns empty for non-existent IDs", async () => {
-  const result = await callTool("fetch_ai_output_content", { ids: ["00000000-0000-0000-0000-000000000000"] });
-  const items = JSON.parse(result);
+Deno.test("fetch-ai-output-content HTTP: returns empty for non-existent IDs", async () => {
+  const result = await callHTTP("fetch-ai-output-content", { ids: ["00000000-0000-0000-0000-000000000000"] });
+  const items = result.data as unknown[];
   assertEquals(items.length, 0, "Should return empty array for non-existent IDs");
 });
 
@@ -294,13 +312,13 @@ Deno.test("generateTaskMarkdown: tasks without project_id have no project headin
 
 // Clean up the "Plain Content Test" output
 Deno.test("cleanup: mark remaining test outputs as picked up", async () => {
-  const pending = await callTool("get_pending_ai_output", {});
-  const outputs = JSON.parse(pending);
-  const testOutputs = outputs.filter((output: { title: string }) =>
+  const pending = await callHTTP("get-pending-ai-output");
+  const outputs = pending.data as { id: string; title: string }[];
+  const testOutputs = outputs.filter((output) =>
     output.title === "Plain Content Test"
   );
   if (testOutputs.length > 0) {
-    const ids = testOutputs.map((output: { id: string }) => output.id);
-    await callTool("mark_ai_output_picked_up", { ids });
+    const ids = testOutputs.map((output) => output.id);
+    await callHTTP("mark-ai-output-picked-up", { ids });
   }
 });

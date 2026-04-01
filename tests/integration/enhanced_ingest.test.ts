@@ -51,6 +51,22 @@ async function callTool(
   return parsed.result?.content?.[0]?.text || "";
 }
 
+function httpUrl(endpoint: string): string {
+  return `http://localhost:54321/functions/v1/terrestrial-brain-mcp/${endpoint}?key=dev-test-key-123`;
+}
+
+async function callHTTP(
+  endpoint: string,
+  body?: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(httpUrl(endpoint), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  return await response.json();
+}
+
 const INGEST_URL =
   "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
 
@@ -415,10 +431,10 @@ Deno.test("option4: round-trip — ingest of delivered content creates no duplic
   ).length;
 
   // Get the ai_output content (the markdown that would be delivered to vault)
-  const pending = await callTool("get_pending_ai_output", {});
-  const outputs = JSON.parse(pending);
+  const pendingResult = await callHTTP("get-pending-ai-output");
+  const outputs = pendingResult.data as { file_path: string; content: string; id: string }[];
   const matchingOutput = outputs.find(
-    (output: { file_path: string }) => output.file_path === filePath,
+    (output) => output.file_path === filePath,
   );
   assertExists(matchingOutput, "AI output should exist for this file_path");
 
@@ -466,7 +482,7 @@ Deno.test("option4: round-trip — ingest of delivered content creates no duplic
   }
 
   // Clean up ai_output
-  await callTool("mark_ai_output_picked_up", { ids: [matchingOutput.id] });
+  await callHTTP("mark-ai-output-picked-up", { ids: [matchingOutput.id] });
 });
 
 Deno.test("option4: create_tasks_with_output with subtask hierarchy", async () => {
@@ -507,13 +523,13 @@ Deno.test("option4: create_tasks_with_output with subtask hierarchy", async () =
   assertEquals(tasks[3].parent_id, tasks[1].id);
 
   // Clean up ai_output
-  const pendingResult = await callTool("get_pending_ai_output", {});
-  const pendingOutputs = JSON.parse(pendingResult);
+  const pendingCleanup = await callHTTP("get-pending-ai-output");
+  const pendingOutputs = pendingCleanup.data as { id: string; file_path: string }[];
   const subtaskOutput = pendingOutputs.find(
-    (output: { file_path: string }) => output.file_path === filePath,
+    (output) => output.file_path === filePath,
   );
   if (subtaskOutput) {
-    await callTool("mark_ai_output_picked_up", { ids: [subtaskOutput.id] });
+    await callHTTP("mark-ai-output-picked-up", { ids: [subtaskOutput.id] });
   }
 });
 
@@ -548,17 +564,17 @@ Deno.test("option4: create_tasks_with_output with done tasks", async () => {
   assertExists(tasks[1].archived_at, "Done task should have archived_at set");
 
   // Verify markdown contains correct checkboxes
-  const pendingResult = await callTool("get_pending_ai_output", {});
-  const pendingOutputs = JSON.parse(pendingResult);
+  const pendingResult = await callHTTP("get-pending-ai-output");
+  const pendingOutputs = pendingResult.data as { id: string; file_path: string; content: string }[];
   const output = pendingOutputs.find(
-    (o: { file_path: string }) => o.file_path === filePath,
+    (o) => o.file_path === filePath,
   );
   assertExists(output);
   assertEquals(output.content.includes("- [ ] Open task"), true, "Should have unchecked checkbox");
   assertEquals(output.content.includes("- [x] Completed task"), true, "Should have checked checkbox");
 
   // Clean up
-  await callTool("mark_ai_output_picked_up", { ids: [output.id] });
+  await callHTTP("mark-ai-output-picked-up", { ids: [output.id] });
 });
 
 Deno.test("option4: create_tasks_with_output with empty tasks returns error", async () => {

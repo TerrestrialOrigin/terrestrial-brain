@@ -61,7 +61,7 @@ vi.mock("obsidian", () => ({
   TFile: class {},
 }));
 
-import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildIngestNoteUrl } from "./main";
+import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildEndpointUrl } from "./main";
 
 // ─── Helper: create a partial plugin instance for testing ────────────────────
 
@@ -123,22 +123,22 @@ function createTestPlugin(overrides: {
     });
   });
   plugin.saveData = vi.fn().mockResolvedValue(undefined);
-  plugin.callMCP = vi.fn().mockResolvedValue("[]");
+  plugin.callHTTP = vi.fn().mockResolvedValue({ success: true, data: [] });
 
   return plugin;
 }
 
-// ─── Helper: set up two-phase mock for callMCP ────────────────────────────────
+// ─── Helper: set up two-phase mock for callHTTP ──────────────────────────────
 
-function setupTwoPhaseCallMCP(
+function setupTwoPhaseCallHTTP(
   plugin: TerrestrialBrainPlugin,
   metadata: { id: string; title: string; file_path: string; content_size: number; created_at: string }[],
   contentItems: { id: string; content: string }[],
 ) {
-  plugin.callMCP = vi.fn()
-    .mockResolvedValueOnce(JSON.stringify(metadata))     // get_pending_ai_output_metadata
-    .mockResolvedValueOnce(JSON.stringify(contentItems))  // fetch_ai_output_content
-    .mockResolvedValueOnce("ok");                         // mark_ai_output_picked_up
+  plugin.callHTTP = vi.fn()
+    .mockResolvedValueOnce({ success: true, data: metadata })       // get-pending-ai-output-metadata
+    .mockResolvedValueOnce({ success: true, data: contentItems })   // fetch-ai-output-content
+    .mockResolvedValueOnce({ success: true, message: "ok" });       // mark-ai-output-picked-up
 }
 
 // ─── isExcluded tests ────────────────────────────────────────────────────────
@@ -220,7 +220,7 @@ describe("pollAIOutput", () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
     const outputContent = "# AI Generated Output\n\nSome content here.";
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Test Output", file_path: "projects/Test/output.md", content_size: 42, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: outputContent }],
@@ -236,7 +236,7 @@ describe("pollAIOutput", () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
     const outputContent = "---\ntitle: Test\n---\n# AI Output\n\nBody text.";
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Test Output", file_path: "projects/Test/output.md", content_size: 50, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: outputContent }],
@@ -251,7 +251,7 @@ describe("pollAIOutput", () => {
   it("calls saveSettings once after the loop", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [
         { id: "output-1", title: "Output 1", file_path: "test/one.md", content_size: 9, created_at: "2026-03-22T00:00:00Z" },
@@ -277,7 +277,7 @@ describe("pollAIOutput", () => {
   it("stores hashes for each file using file_path", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [
         { id: "output-1", title: "Output 1", file_path: "projects/CarChief/plan.md", content_size: 9, created_at: "2026-03-22T00:00:00Z" },
@@ -300,13 +300,13 @@ describe("pollAIOutput", () => {
 
     await plugin.pollAIOutput();
 
-    expect(plugin.callMCP).not.toHaveBeenCalled();
+    expect(plugin.callHTTP).not.toHaveBeenCalled();
   });
 
-  it("calls get_pending_ai_output_metadata, fetch_ai_output_content, and mark_ai_output_picked_up", async () => {
+  it("calls get-pending-ai-output-metadata, fetch-ai-output-content, and mark-ai-output-picked-up", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Output 1", file_path: "test/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "Content" }],
@@ -314,52 +314,52 @@ describe("pollAIOutput", () => {
 
     await plugin.pollAIOutput();
 
-    expect(plugin.callMCP).toHaveBeenCalledWith("get_pending_ai_output_metadata", {});
-    expect(plugin.callMCP).toHaveBeenCalledWith("fetch_ai_output_content", { ids: ["output-1"] });
-    expect(plugin.callMCP).toHaveBeenCalledWith("mark_ai_output_picked_up", { ids: ["output-1"] });
+    expect(plugin.callHTTP).toHaveBeenCalledWith("get-pending-ai-output-metadata");
+    expect(plugin.callHTTP).toHaveBeenCalledWith("fetch-ai-output-content", { ids: ["output-1"] });
+    expect(plugin.callHTTP).toHaveBeenCalledWith("mark-ai-output-picked-up", { ids: ["output-1"] });
   });
 
-  it("does NOT call fetch_ai_output_content when user rejects", async () => {
+  it("does NOT call fetch-ai-output-content when user rejects", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
     plugin.showConfirmationDialog = vi.fn().mockResolvedValue({ decision: "rejected", resolutions: new Map() });
 
-    plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify([
+    plugin.callHTTP = vi.fn()
+      .mockResolvedValueOnce({ success: true, data: [
         { id: "output-1", title: "Output 1", file_path: "test/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
-      ]))
-      .mockResolvedValueOnce("ok"); // reject_ai_output
+      ] })
+      .mockResolvedValueOnce({ success: true, message: "ok" }); // reject-ai-output
 
     await plugin.pollAIOutput();
 
-    expect(plugin.callMCP).toHaveBeenCalledWith("get_pending_ai_output_metadata", {});
-    expect(plugin.callMCP).not.toHaveBeenCalledWith("fetch_ai_output_content", expect.anything());
-    expect(plugin.callMCP).toHaveBeenCalledWith("reject_ai_output", { ids: ["output-1"] });
+    expect(plugin.callHTTP).toHaveBeenCalledWith("get-pending-ai-output-metadata");
+    expect(plugin.callHTTP).not.toHaveBeenCalledWith("fetch-ai-output-content", expect.anything());
+    expect(plugin.callHTTP).toHaveBeenCalledWith("reject-ai-output", { ids: ["output-1"] });
   });
 
-  it("does NOT call fetch_ai_output_content or reject_ai_output when user postpones", async () => {
+  it("does NOT call fetch-ai-output-content or reject-ai-output when user postpones", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
     plugin.showConfirmationDialog = vi.fn().mockResolvedValue({ decision: "postponed", resolutions: new Map() });
 
-    plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify([
+    plugin.callHTTP = vi.fn()
+      .mockResolvedValueOnce({ success: true, data: [
         { id: "output-1", title: "Output 1", file_path: "test/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
-      ]));
+      ] });
 
     await plugin.pollAIOutput();
 
-    expect(plugin.callMCP).toHaveBeenCalledWith("get_pending_ai_output_metadata", {});
-    expect(plugin.callMCP).not.toHaveBeenCalledWith("fetch_ai_output_content", expect.anything());
-    expect(plugin.callMCP).not.toHaveBeenCalledWith("reject_ai_output", expect.anything());
+    expect(plugin.callHTTP).toHaveBeenCalledWith("get-pending-ai-output-metadata");
+    expect(plugin.callHTTP).not.toHaveBeenCalledWith("fetch-ai-output-content", expect.anything());
+    expect(plugin.callHTTP).not.toHaveBeenCalledWith("reject-ai-output", expect.anything());
   });
 
   it("does not show any notice when user postpones", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
     plugin.showConfirmationDialog = vi.fn().mockResolvedValue({ decision: "postponed", resolutions: new Map() });
 
-    plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify([
+    plugin.callHTTP = vi.fn()
+      .mockResolvedValueOnce({ success: true, data: [
         { id: "output-1", title: "Output 1", file_path: "test/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
-      ]));
+      ] });
 
     noticeMessages.length = 0;
     await plugin.pollAIOutput();
@@ -377,7 +377,7 @@ describe("empty-poll notice", () => {
 
   it("shows notice when manual poll finds nothing", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    plugin.callMCP = vi.fn().mockResolvedValueOnce("[]"); // empty metadata
+    plugin.callHTTP = vi.fn().mockResolvedValueOnce({ success: true, data: [] });
 
     await plugin.pollAIOutput({ manual: true });
 
@@ -386,7 +386,7 @@ describe("empty-poll notice", () => {
 
   it("does NOT show notice when automatic poll finds nothing", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
-    plugin.callMCP = vi.fn().mockResolvedValueOnce("[]"); // empty metadata
+    plugin.callHTTP = vi.fn().mockResolvedValueOnce({ success: true, data: [] });
 
     await plugin.pollAIOutput();
 
@@ -542,7 +542,7 @@ describe("AI output delivery to nested paths", () => {
   it("creates parent directories for deeply nested paths", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Deep Output", file_path: "deeply/nested/folder/structure/document.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "Content" }],
@@ -557,7 +557,7 @@ describe("AI output delivery to nested paths", () => {
   it("creates parent directory for single-level nested path", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Output", file_path: "projects/file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "Content" }],
@@ -571,7 +571,7 @@ describe("AI output delivery to nested paths", () => {
   it("handles root-level file (no parent directory needed)", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Root Output", file_path: "root-file.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "Content" }],
@@ -649,7 +649,7 @@ describe("conflict detection in pollAIOutput", () => {
       .mockResolvedValueOnce(true)   // projects/existing.md
       .mockResolvedValueOnce(false); // projects/new.md
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [
         { id: "output-1", title: "Existing", file_path: "projects/existing.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" },
@@ -674,7 +674,7 @@ describe("conflict detection in pollAIOutput", () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
     plugin.app.vault.adapter.exists = vi.fn().mockResolvedValue(false);
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [
         { id: "o1", title: "A", file_path: "a.md", content_size: 1, created_at: "2026-03-22T00:00:00Z" },
@@ -713,7 +713,7 @@ describe("conflict-aware file writing", () => {
       resolutions,
     });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Overwrite Me", file_path: "projects/plan.md", content_size: 10, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "New content" }],
@@ -739,7 +739,7 @@ describe("conflict-aware file writing", () => {
       resolutions,
     });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Save Copy", file_path: "projects/plan.md", content_size: 10, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "New content" }],
@@ -763,7 +763,7 @@ describe("conflict-aware file writing", () => {
       resolutions,
     });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "Renamed", file_path: "projects/plan.md", content_size: 10, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "Renamed content" }],
@@ -791,16 +791,16 @@ describe("conflict-aware file writing", () => {
       resolutions,
     });
 
-    plugin.callMCP = vi.fn()
-      .mockResolvedValueOnce(JSON.stringify([
+    plugin.callHTTP = vi.fn()
+      .mockResolvedValueOnce({ success: true, data: [
         { id: "output-1", title: "Fail Rename", file_path: "fail.md", content_size: 5, created_at: "2026-03-22T00:00:00Z" },
         { id: "output-2", title: "Success", file_path: "success.md", content_size: 5, created_at: "2026-03-22T00:00:00Z" },
-      ]))
-      .mockResolvedValueOnce(JSON.stringify([
+      ] })
+      .mockResolvedValueOnce({ success: true, data: [
         { id: "output-1", content: "Fail" },
         { id: "output-2", content: "Works" },
-      ]))
-      .mockResolvedValueOnce("ok"); // mark_ai_output_picked_up
+      ] })
+      .mockResolvedValueOnce({ success: true, message: "ok" }); // mark-ai-output-picked-up
 
     await plugin.pollAIOutput();
 
@@ -809,7 +809,7 @@ describe("conflict-aware file writing", () => {
     expect(plugin.app.vault.adapter.write).toHaveBeenCalledTimes(1);
 
     // Only output-2 was marked as picked up
-    expect(plugin.callMCP).toHaveBeenCalledWith("mark_ai_output_picked_up", { ids: ["output-2"] });
+    expect(plugin.callHTTP).toHaveBeenCalledWith("mark-ai-output-picked-up", { ids: ["output-2"] });
 
     // Error notice shown for the failed rename
     expect(noticeMessages.some((message) => message.includes("Could not find available copy name"))).toBe(true);
@@ -825,7 +825,7 @@ describe("conflict-aware file writing", () => {
       resolutions: new Map(),
     });
 
-    setupTwoPhaseCallMCP(
+    setupTwoPhaseCallHTTP(
       plugin,
       [{ id: "output-1", title: "New File", file_path: "projects/new.md", content_size: 7, created_at: "2026-03-22T00:00:00Z" }],
       [{ id: "output-1", content: "Content" }],
@@ -838,22 +838,22 @@ describe("conflict-aware file writing", () => {
   });
 });
 
-// ─── buildIngestNoteUrl tests ───────────────────────────────────────────────
+// ─── buildEndpointUrl tests ─────────────────────────────────────────────────
 
-describe("buildIngestNoteUrl", () => {
-  it("inserts /ingest-note before query string", () => {
-    expect(buildIngestNoteUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc"))
+describe("buildEndpointUrl", () => {
+  it("inserts endpoint name before query string", () => {
+    expect(buildEndpointUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc", "ingest-note"))
       .toBe("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp/ingest-note?key=abc");
   });
 
-  it("appends /ingest-note when no query string", () => {
-    expect(buildIngestNoteUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp"))
+  it("appends endpoint name when no query string", () => {
+    expect(buildEndpointUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp", "ingest-note"))
       .toBe("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp/ingest-note");
   });
 
   it("handles URL with multiple query params", () => {
-    expect(buildIngestNoteUrl("https://example.com/mcp?key=abc&debug=true"))
-      .toBe("https://example.com/mcp/ingest-note?key=abc&debug=true");
+    expect(buildEndpointUrl("https://example.com/mcp?key=abc&debug=true", "mark-ai-output-picked-up"))
+      .toBe("https://example.com/mcp/mark-ai-output-picked-up?key=abc&debug=true");
   });
 });
 
@@ -918,7 +918,7 @@ describe("callIngestNote", () => {
 // ─── processNote uses callIngestNote tests ──────────────────────────────────
 
 describe("processNote uses callIngestNote", () => {
-  it("calls callIngestNote instead of callMCP for note ingestion", async () => {
+  it("calls callIngestNote for note ingestion", async () => {
     const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp?key=abc" });
     plugin.callIngestNote = vi.fn().mockResolvedValue('Captured 2 thoughts from "Test"');
     plugin.app.vault.read = vi.fn().mockResolvedValue("# Test Note\n\nSome content here.");
@@ -931,6 +931,5 @@ describe("processNote uses callIngestNote", () => {
       "test",
       "folder/test.md",
     );
-    expect(plugin.callMCP).not.toHaveBeenCalled();
   });
 });
