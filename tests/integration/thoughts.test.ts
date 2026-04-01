@@ -97,6 +97,208 @@ Deno.test("list_thoughts output includes resolved project names", async () => {
   );
 });
 
+// ─── list_thoughts author and reliability filters ──────────────────────────
+
+Deno.test("list_thoughts with author filter returns only matching thoughts", async () => {
+  const result = await callTool("list_thoughts", { author: "claude-sonnet-4-6", limit: 50 });
+  assertExists(result);
+  if (result === "No thoughts found.") {
+    throw new Error("Expected results for author='claude-sonnet-4-6' but got none");
+  }
+  assertEquals(result.includes("Author: claude-sonnet-4-6"), true, `Should contain Author: claude-sonnet-4-6. Got: ${result.substring(0, 500)}`);
+  // Should NOT contain thoughts from gpt-4o-mini
+  assertEquals(result.includes("Author: gpt-4o-mini"), false, `Should NOT contain Author: gpt-4o-mini. Got: ${result.substring(0, 500)}`);
+});
+
+Deno.test("list_thoughts with reliability filter returns only matching thoughts", async () => {
+  const result = await callTool("list_thoughts", { reliability: "less reliable", limit: 50 });
+  assertExists(result);
+  if (result === "No thoughts found.") {
+    throw new Error("Expected results for reliability='less reliable' but got none");
+  }
+  assertEquals(result.includes("Reliability: less reliable"), true, `Should contain 'less reliable'. Got: ${result.substring(0, 500)}`);
+  // Should NOT contain 'reliable' thoughts (but careful: "less reliable" contains "reliable")
+  // Check that "Reliability: reliable" (without "less" prefix) does not appear
+  const lines = result.split("\n");
+  const reliabilityLines = lines.filter(line => line.includes("Reliability:"));
+  for (const line of reliabilityLines) {
+    assertEquals(
+      line.includes("less reliable"),
+      true,
+      `Every reliability line should say 'less reliable', but got: ${line}`,
+    );
+  }
+});
+
+Deno.test("list_thoughts with author filter and non-matching value returns no thoughts", async () => {
+  const result = await callTool("list_thoughts", { author: "nonexistent-model-xyz" });
+  assertEquals(result, "No thoughts found.");
+});
+
+Deno.test("list_thoughts with combined author and project_id filter", async () => {
+  // claude-sonnet-4-6 authored a thought for TB project
+  const result = await callTool("list_thoughts", {
+    author: "claude-sonnet-4-6",
+    project_id: TB_PROJECT_ID,
+    limit: 50,
+  });
+  assertExists(result);
+  if (result === "No thoughts found.") {
+    throw new Error("Expected results for author=claude-sonnet-4-6 + project=TB but got none");
+  }
+  assertEquals(result.includes("Author: claude-sonnet-4-6"), true, `Should contain correct author`);
+  assertEquals(result.includes("Projects: Terrestrial Brain"), true, `Should contain correct project`);
+});
+
+Deno.test("list_thoughts with mismatched author and project_id returns no thoughts", async () => {
+  // gpt-4o-mini authored the CarChief thought, not the TB one
+  const result = await callTool("list_thoughts", {
+    author: "gpt-4o-mini",
+    project_id: TB_PROJECT_ID,
+    limit: 50,
+  });
+  assertEquals(result, "No thoughts found.");
+});
+
+// ─── search_thoughts author and reliability filters ─────────────────────────
+
+const SEARCH_FILTER_CLEANUP_IDS: string[] = [];
+
+Deno.test("search_thoughts with author filter narrows results", async () => {
+  // Capture two thoughts with different authors and similar content
+  const baseContent = `search filter test: database optimization ${Date.now()}`;
+  await callTool("capture_thought", { content: `${baseContent} — from model A`, author: "test-model-alpha" });
+  await callTool("capture_thought", { content: `${baseContent} — from model B`, author: "test-model-beta" });
+
+  // Search with author filter
+  const result = await callTool("search_thoughts", {
+    query: baseContent,
+    author: "test-model-alpha",
+    limit: 10,
+    threshold: 0.3,
+  });
+  assertExists(result);
+
+  if (!result.includes("No thoughts found")) {
+    assertEquals(result.includes("Author: test-model-alpha"), true, `Should contain model-alpha. Got: ${result.substring(0, 500)}`);
+    assertEquals(result.includes("Author: test-model-beta"), false, `Should NOT contain model-beta. Got: ${result.substring(0, 500)}`);
+  }
+
+  // Cleanup
+  for (const suffix of ["— from model A", "— from model B"]) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/thoughts?content=like.*${encodeURIComponent(suffix)}&select=id`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    if (response.ok) {
+      const thoughts: { id: string }[] = await response.json();
+      for (const thought of thoughts) {
+        SEARCH_FILTER_CLEANUP_IDS.push(thought.id);
+      }
+    }
+  }
+});
+
+Deno.test("search_thoughts with reliability filter narrows results", async () => {
+  const timestamp = Date.now();
+  const contentA = `search filter reliability test thought A ${timestamp}`;
+  const contentB = `search filter reliability test thought B ${timestamp}`;
+
+  // Capture two thoughts via MCP (both get reliability='reliable' and embeddings generated server-side)
+  await callTool("capture_thought", { content: contentA, author: "test-rel-a" });
+  await callTool("capture_thought", { content: contentB, author: "test-rel-b" });
+
+  // Fetch thought B's ID so we can patch its reliability
+  const fetchResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(contentB)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(fetchResponse.ok, true, "DB fetch should succeed");
+  const thoughtsB: { id: string }[] = await fetchResponse.json();
+  assertEquals(thoughtsB.length, 1, "Should find exactly one thought B");
+  SEARCH_FILTER_CLEANUP_IDS.push(thoughtsB[0].id);
+
+  // Also fetch thought A for cleanup
+  const fetchResponseA = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(contentA)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(fetchResponseA.ok, true);
+  const thoughtsA: { id: string }[] = await fetchResponseA.json();
+  for (const thought of thoughtsA) {
+    SEARCH_FILTER_CLEANUP_IDS.push(thought.id);
+  }
+
+  // Update thought B to 'less reliable' via direct DB patch
+  const patchResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtsB[0].id}`,
+    {
+      method: "PATCH",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ reliability: "less reliable" }),
+    },
+  );
+  assertEquals(patchResponse.ok, true, "Patch reliability should succeed");
+
+  // Search with reliability filter — should only find the 'less reliable' thought
+  const searchQuery = `search filter reliability test ${timestamp}`;
+  const result = await callTool("search_thoughts", {
+    query: searchQuery,
+    reliability: "less reliable",
+    limit: 10,
+    threshold: 0.3,
+  });
+  assertExists(result);
+
+  if (!result.includes("No thoughts found")) {
+    assertEquals(result.includes("Reliability: less reliable"), true, `Should contain 'less reliable'. Got: ${result.substring(0, 500)}`);
+    // Should not contain the "reliable" one (that's not "less reliable")
+    const lines = result.split("\n").filter(line => line.includes("Reliability:"));
+    for (const line of lines) {
+      assertEquals(
+        line.includes("less reliable"),
+        true,
+        `Every reliability line should say 'less reliable', but got: ${line}`,
+      );
+    }
+  }
+});
+
+Deno.test("cleanup search filter test data", async () => {
+  for (const thoughtId of SEARCH_FILTER_CLEANUP_IDS) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
+  }
+});
+
 // ─── thought_stats project_id filter ────────────────────────────────────────
 
 Deno.test("thought_stats with project_id returns scoped statistics", async () => {

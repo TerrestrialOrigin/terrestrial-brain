@@ -21,14 +21,17 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         "Semantic search across all captured thoughts using meaning, not keywords. " +
         "Use this when the user asks about a topic, person, idea, or decision — even if they phrase it differently from how it was originally captured. " +
         "Returns the most relevant thoughts ranked by similarity. " +
+        "Optionally filter results by author (model identifier) or reliability level. " +
         "Prefer this over list_thoughts when the user has a specific question; use list_thoughts for browsing or filtering by type/date.",
       inputSchema: {
         query: z.string().describe("Natural language description of what to search for — works best as a phrase or sentence, not single keywords"),
         limit: z.number().optional().default(10),
         threshold: z.number().optional().default(0.5),
+        author: z.string().optional().describe("Filter by the model that authored the thought, e.g. 'claude-sonnet-4-6' or 'gpt-4o-mini'"),
+        reliability: z.string().optional().describe("Filter by reliability level, e.g. 'reliable' or 'less reliable'"),
       },
     },
-    async ({ query, limit, threshold }) => {
+    async ({ query, limit, threshold, author, reliability }) => {
       try {
         const qEmb = await getEmbedding(query);
         const { data, error } = await supabase.rpc("match_thoughts", {
@@ -36,6 +39,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           match_threshold: threshold,
           match_count: limit,
           filter: {},
+          filter_author: author || null,
+          filter_reliability: reliability || null,
         });
 
         if (error) {
@@ -122,7 +127,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       description:
         "Browse recent thoughts chronologically with optional filters. " +
         "Use this when the user wants to see what's been captured lately, review thoughts by category, or check activity for a time period. " +
-        "Supports filtering by type, topic, person, time window, or project. " +
+        "Supports filtering by type, topic, person, time window, project, author (model identifier), or reliability level. " +
         "Prefer search_thoughts when the user has a specific question; use this for open-ended browsing like 'what did I capture this week?' or 'show me all person_notes'.",
       inputSchema: {
         limit: z.number().optional().default(10),
@@ -131,9 +136,11 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         person: z.string().optional().describe("Filter by person mentioned"),
         days: z.number().optional().describe("Only thoughts from the last N days"),
         project_id: z.string().optional().describe("Filter by project UUID — matches thoughts whose metadata.references.projects array contains this UUID"),
+        author: z.string().optional().describe("Filter by the model that authored the thought, e.g. 'claude-sonnet-4-6' or 'gpt-4o-mini'"),
+        reliability: z.string().optional().describe("Filter by reliability level, e.g. 'reliable' or 'less reliable'"),
       },
     },
-    async ({ limit, type, topic, person, days, project_id }) => {
+    async ({ limit, type, topic, person, days, project_id, author, reliability }) => {
       try {
         let q = supabase
           .from("thoughts")
@@ -145,6 +152,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         if (topic) q = q.contains("metadata", { topics: [topic] });
         if (person) q = q.contains("metadata", { people: [person] });
         if (project_id) q = q.contains("metadata", { references: { projects: [project_id] } });
+        if (author) q = q.eq("author", author);
+        if (reliability) q = q.eq("reliability", reliability);
         if (days) {
           const since = new Date();
           since.setDate(since.getDate() - days);
