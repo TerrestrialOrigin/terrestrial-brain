@@ -71,6 +71,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
               metadata: Record<string, unknown>;
               similarity: number;
               created_at: string;
+              updated_at: string | null;
               reliability: string | null;
               author: string | null;
             },
@@ -79,9 +80,12 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             const m = t.metadata || {};
             const parts = [
               `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
-              `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
-              `Type: ${m.type || "unknown"}`,
+              `Captured: ${new Date(t.created_at).toISOString()}`,
             ];
+            if (t.updated_at) {
+              parts.push(`Updated: ${new Date(t.updated_at).toISOString()}`);
+            }
+            parts.push(`Type: ${m.type || "unknown"}`);
             if (t.reliability || t.author) {
               const provenanceParts: string[] = [];
               if (t.reliability) provenanceParts.push(`Reliability: ${t.reliability}`);
@@ -144,7 +148,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       try {
         let q = supabase
           .from("thoughts")
-          .select("content, metadata, created_at, reliability, author")
+          .select("content, metadata, created_at, updated_at, reliability, author")
           .order("created_at", { ascending: false })
           .limit(limit);
 
@@ -183,12 +187,15 @@ export function register(server: McpServer, supabase: SupabaseClient) {
 
         const results = data.map(
           (
-            t: { content: string; metadata: Record<string, unknown>; created_at: string; reliability: string | null; author: string | null },
+            t: { content: string; metadata: Record<string, unknown>; created_at: string; updated_at: string | null; reliability: string | null; author: string | null },
             i: number
           ) => {
             const m = t.metadata || {};
             const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
-            const parts = [`${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})`];
+            const parts = [`${i + 1}. [${new Date(t.created_at).toISOString()}] (${m.type || "??"}${tags ? " - " + tags : ""})`];
+            if (t.updated_at) {
+              parts.push(`   Updated: ${new Date(t.updated_at).toISOString()}`);
+            }
             if (t.reliability || t.author) {
               const provenanceParts: string[] = [];
               if (t.reliability) provenanceParts.push(`Reliability: ${t.reliability}`);
@@ -333,10 +340,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         const metadata = (data.metadata || {}) as Record<string, unknown>;
         const lines: string[] = [
           `ID: ${data.id}`,
-          `Captured: ${new Date(data.created_at).toLocaleDateString()}`,
+          `Captured: ${new Date(data.created_at).toISOString()}`,
         ];
         if (data.updated_at) {
-          lines.push(`Updated: ${new Date(data.updated_at).toLocaleDateString()}`);
+          lines.push(`Updated: ${new Date(data.updated_at).toISOString()}`);
         }
         lines.push(`Type: ${metadata.type || "unknown"}`);
         if (data.reference_id) lines.push(`Source: ${data.reference_id}`);

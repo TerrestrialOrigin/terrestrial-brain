@@ -30,6 +30,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
   return parsed.result?.content?.[0]?.text || "";
 }
 
+const SUPABASE_URL = "http://localhost:54321";
+const SUPABASE_SERVICE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+
 // ─── Thoughts Tests ──────────────────────────────────────────────────────────
 
 Deno.test("thought_stats returns accurate counts", async () => {
@@ -43,6 +47,73 @@ Deno.test("list_thoughts returns results", async () => {
   const result = await callTool("list_thoughts", { limit: 5 });
   assertExists(result);
   assertEquals(result.includes("recent thought"), true);
+});
+
+// ─── Timestamp format tests ────────────────────────────────────────────────
+
+const ISO_TIMESTAMP_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+
+Deno.test("list_thoughts shows full ISO 8601 timestamps", async () => {
+  const result = await callTool("list_thoughts", { limit: 5 });
+  assertExists(result);
+  assertEquals(
+    ISO_TIMESTAMP_PATTERN.test(result),
+    true,
+    `list_thoughts should include ISO 8601 timestamps with time component. Got: ${result.substring(0, 300)}`,
+  );
+});
+
+Deno.test("search_thoughts shows full ISO 8601 timestamps", async () => {
+  const result = await callTool("search_thoughts", { query: "project", limit: 3, threshold: 0.3 });
+  assertExists(result);
+  if (!result.includes("No thoughts found")) {
+    assertEquals(
+      ISO_TIMESTAMP_PATTERN.test(result),
+      true,
+      `search_thoughts should include ISO 8601 timestamps with time component. Got: ${result.substring(0, 300)}`,
+    );
+  }
+});
+
+Deno.test("get_thought_by_id shows full ISO 8601 timestamps", async () => {
+  // Capture a thought to get a known ID
+  const uniqueContent = `Timestamp format test ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent });
+
+  // Get the thought ID from DB
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  const thoughtId = thoughts[0].id;
+
+  const result = await callTool("get_thought_by_id", { id: thoughtId });
+  assertExists(result);
+  assertEquals(
+    ISO_TIMESTAMP_PATTERN.test(result),
+    true,
+    `get_thought_by_id should include ISO 8601 timestamps with time component. Got: ${result.substring(0, 300)}`,
+  );
+
+  // Cleanup
+  await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+    {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
 });
 
 // ─── list_thoughts project_id filter and provenance display ─────────────────
@@ -417,9 +488,6 @@ Deno.test("list_thoughts displays raw UUID for orphaned project references", asy
 // ─── Ingest Note with Project Detection (via /ingest-note HTTP route) ────────
 
 const CARCHIEF_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
-const SUPABASE_URL = "http://localhost:54321";
-const SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 const INGEST_URL =
   "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
 
