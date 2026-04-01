@@ -1,5 +1,5 @@
 BEGIN;
-SELECT plan(5);
+SELECT plan(9);
 
 -- ─── Setup: insert thoughts with known embeddings ────────────────────────────
 -- Using 1536-dimensional vectors. We create simple unit vectors along different axes
@@ -91,6 +91,70 @@ SELECT is(
   ) WHERE id IN ('dddddddd-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000002', 'dddddddd-0000-0000-0000-000000000003')),
   2,
   'Threshold 0.99 returns only exact-match vectors (similarity ~1.0)'
+);
+
+-- ─── match_thoughts respects filter_author ──────────────────────────────────
+
+-- Tag thoughts 1 and 2 with different authors
+UPDATE public.thoughts SET author = 'model-a', reliability = 'reliable'
+  WHERE id = 'dddddddd-0000-0000-0000-000000000001';
+UPDATE public.thoughts SET author = 'model-b', reliability = 'less reliable'
+  WHERE id = 'dddddddd-0000-0000-0000-000000000002';
+
+SELECT is(
+  (SELECT count(*)::int FROM match_thoughts(
+    ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
+    0.5,
+    10,
+    '{}',
+    'model-a',
+    NULL
+  ) WHERE id IN ('dddddddd-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000002')),
+  1,
+  'filter_author=model-a returns only model-a thought (1 of 2 similar)'
+);
+
+SELECT is(
+  (SELECT author FROM match_thoughts(
+    ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
+    0.5,
+    10,
+    '{}',
+    'model-a',
+    NULL
+  ) WHERE id = 'dddddddd-0000-0000-0000-000000000001'),
+  'model-a',
+  'filter_author=model-a returns the correct author value'
+);
+
+-- ─── match_thoughts respects filter_reliability ─────────────────────────────
+
+SELECT is(
+  (SELECT count(*)::int FROM match_thoughts(
+    ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
+    0.5,
+    10,
+    '{}',
+    NULL,
+    'less reliable'
+  ) WHERE id IN ('dddddddd-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000002')),
+  1,
+  'filter_reliability=less reliable returns only the less-reliable thought'
+);
+
+-- ─── match_thoughts with both filters ───────────────────────────────────────
+
+SELECT is(
+  (SELECT count(*)::int FROM match_thoughts(
+    ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
+    0.5,
+    10,
+    '{}',
+    'model-a',
+    'reliable'
+  ) WHERE id IN ('dddddddd-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000002')),
+  1,
+  'filter_author=model-a AND filter_reliability=reliable returns exactly the matching thought'
 );
 
 SELECT * FROM finish();

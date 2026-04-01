@@ -62,8 +62,8 @@ VALUES ('test/defaults.md', 'Test defaults');
 
 SELECT is(
   (SELECT source FROM public.note_snapshots WHERE reference_id = 'test/defaults.md'),
-  'obsidian',
-  'Source defaults to obsidian'
+  NULL,
+  'Source defaults to NULL (no default after migration)'
 );
 
 SELECT * FROM finish();
