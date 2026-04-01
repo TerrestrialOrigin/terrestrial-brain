@@ -1,16 +1,4 @@
-# Note Snapshots
-
-Stores the latest full text of each ingested note, keyed by a stable reference identifier. Enables source-note retrieval and extractor pipeline access.
-
-## Data Model
-
-- **Table:** `note_snapshots`
-- **Fields:** id (uuid, PK, auto-generated), reference_id (text, NOT NULL, UNIQUE), title (text, nullable), content (text, NOT NULL), source (text, nullable, no default), captured_at (timestamptz, NOT NULL, default now())
-- **Indexes:** btree on reference_id (`note_snapshots_reference_id_idx`), btree on source (`note_snapshots_source_idx`)
-
----
-
-## Scenarios
+## MODIFIED Requirements
 
 ### Requirement: Note snapshot storage
 
@@ -19,15 +7,15 @@ The system SHALL store a single snapshot of each note's full content, keyed by `
 - `reference_id` (text, NOT NULL, UNIQUE) — the stable identifier (vault-relative path for Obsidian, session ID for other sources)
 - `title` (text, nullable)
 - `content` (text, NOT NULL)
-- `source` (text, nullable, no default) — callers may provide a free-form value (e.g. `'obsidian'`, `'mcp'`) or omit it
+- `source` (text, nullable, **no default**) — callers MAY provide a free-form value (e.g. `'obsidian'`, `'mcp'`) or omit it
 - `captured_at` (timestamptz, NOT NULL, default `now()`)
 
-#### Scenario: Insert a new note snapshot with source
+#### Scenario: Insert a new note snapshot with explicit source
 - **WHEN** a row is inserted into `note_snapshots` with a `reference_id` that does not yet exist and `source` is provided
 - **THEN** the row SHALL be created with `id` auto-generated, `captured_at` defaulting to now, and `source` set to the provided value
 
-#### Scenario: Insert a new note snapshot without source
-- **WHEN** a row is inserted into `note_snapshots` with a `reference_id` that does not yet exist and `source` is omitted
+#### Scenario: Insert without source succeeds
+- **WHEN** a row is inserted into `note_snapshots` without providing a `source` value
 - **THEN** the row SHALL be created with `source` set to NULL
 
 #### Scenario: Upsert an existing note snapshot
@@ -41,13 +29,3 @@ The system SHALL store a single snapshot of each note's full content, keyed by `
 #### Scenario: Content is required
 - **WHEN** a row is inserted with `content` set to NULL
 - **THEN** the database SHALL reject the insert with a NOT NULL violation
-
----
-
-### Requirement: Note snapshot indexes
-
-The system SHALL maintain btree indexes on `reference_id` and `source` for efficient lookups.
-
-#### Scenario: Query by reference_id uses index
-- **WHEN** a query filters `note_snapshots` by `reference_id`
-- **THEN** the query plan SHALL use the `note_snapshots_reference_id_idx` index
