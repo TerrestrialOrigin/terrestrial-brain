@@ -19,6 +19,38 @@ export function getProjectRefs(metadata: Record<string, unknown>): string[] {
   return [];
 };
 
+/**
+ * Resolves project UUIDs to human-readable project names via a single batch query.
+ * Falls back to the raw UUID for any project not found in the database.
+ */
+export async function resolveProjectNames(
+  supabase: SupabaseClient,
+  projectUuids: string[],
+): Promise<Map<string, string>> {
+  const nameMap = new Map<string, string>();
+  if (projectUuids.length === 0) return nameMap;
+
+  const uniqueUuids = [...new Set(projectUuids)];
+  const { data, error } = await supabase
+    .from("projects")
+    .select("id, name")
+    .in("id", uniqueUuids);
+
+  if (error) {
+    console.error(`Project name resolution failed: ${error.message}`);
+    for (const uuid of uniqueUuids) nameMap.set(uuid, uuid);
+    return nameMap;
+  }
+
+  for (const project of data || []) {
+    nameMap.set(project.id, project.name);
+  }
+  for (const uuid of uniqueUuids) {
+    if (!nameMap.has(uuid)) nameMap.set(uuid, uuid);
+  }
+  return nameMap;
+}
+
 export async function getEmbedding(text: string): Promise<number[]> {
   const r = await fetch(`${OPENROUTER_BASE}/embeddings`, {
     method: "POST",

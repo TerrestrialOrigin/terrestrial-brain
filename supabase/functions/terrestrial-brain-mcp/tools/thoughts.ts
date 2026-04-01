@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { getEmbedding, extractMetadata, freshIngest } from "../helpers.ts";
+import { getEmbedding, extractMetadata, freshIngest, getProjectRefs, resolveProjectNames } from "../helpers.ts";
 import { parseNote } from "../parser.ts";
 import { runExtractionPipeline } from "../extractors/pipeline.ts";
 import { ProjectExtractor } from "../extractors/project-extractor.ts";
@@ -51,6 +51,14 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           };
         }
 
+        // Collect all project UUIDs and resolve to names
+        const allProjectUuids: string[] = [];
+        for (const thought of data) {
+          const projectRefs = getProjectRefs((thought.metadata || {}) as Record<string, unknown>);
+          allProjectUuids.push(...projectRefs);
+        }
+        const projectNameMap = await resolveProjectNames(supabase, allProjectUuids);
+
         const results = data.map(
           (
             t: {
@@ -58,6 +66,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
               metadata: Record<string, unknown>;
               similarity: number;
               created_at: string;
+              reliability: string | null;
+              author: string | null;
             },
             i: number
           ) => {
@@ -67,10 +77,21 @@ export function register(server: McpServer, supabase: SupabaseClient) {
               `Captured: ${new Date(t.created_at).toLocaleDateString()}`,
               `Type: ${m.type || "unknown"}`,
             ];
+            if (t.reliability || t.author) {
+              const provenanceParts: string[] = [];
+              if (t.reliability) provenanceParts.push(`Reliability: ${t.reliability}`);
+              if (t.author) provenanceParts.push(`Author: ${t.author}`);
+              parts.push(provenanceParts.join(" | "));
+            }
             if (Array.isArray(m.topics) && m.topics.length)
               parts.push(`Topics: ${(m.topics as string[]).join(", ")}`);
             if (Array.isArray(m.people) && m.people.length)
               parts.push(`People: ${(m.people as string[]).join(", ")}`);
+            const projectRefs = getProjectRefs(m as Record<string, unknown>);
+            if (projectRefs.length > 0) {
+              const projectNames = projectRefs.map((uuid) => projectNameMap.get(uuid) || uuid);
+              parts.push(`Projects: ${projectNames.join(", ")}`);
+            }
             if (Array.isArray(m.action_items) && m.action_items.length)
               parts.push(`Actions: ${(m.action_items as string[]).join("; ")}`);
             parts.push(`\n${t.content}`);
@@ -101,6 +122,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       description:
         "Browse recent thoughts chronologically with optional filters. " +
         "Use this when the user wants to see what's been captured lately, review thoughts by category, or check activity for a time period. " +
+        "Supports filtering by type, topic, person, time window, or project. " +
         "Prefer search_thoughts when the user has a specific question; use this for open-ended browsing like 'what did I capture this week?' or 'show me all person_notes'.",
       inputSchema: {
         limit: z.number().optional().default(10),
@@ -108,19 +130,21 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         topic: z.string().optional().describe("Filter by topic tag"),
         person: z.string().optional().describe("Filter by person mentioned"),
         days: z.number().optional().describe("Only thoughts from the last N days"),
+        project_id: z.string().optional().describe("Filter by project UUID — matches thoughts whose metadata.references.projects array contains this UUID"),
       },
     },
-    async ({ limit, type, topic, person, days }) => {
+    async ({ limit, type, topic, person, days, project_id }) => {
       try {
         let q = supabase
           .from("thoughts")
-          .select("content, metadata, created_at")
+          .select("content, metadata, created_at, reliability, author")
           .order("created_at", { ascending: false })
           .limit(limit);
 
         if (type) q = q.contains("metadata", { type });
         if (topic) q = q.contains("metadata", { topics: [topic] });
         if (person) q = q.contains("metadata", { people: [person] });
+        if (project_id) q = q.contains("metadata", { references: { projects: [project_id] } });
         if (days) {
           const since = new Date();
           since.setDate(since.getDate() - days);
@@ -140,14 +164,35 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           return { content: [{ type: "text" as const, text: "No thoughts found." }] };
         }
 
+        // Collect all project UUIDs and resolve to names
+        const allProjectUuids: string[] = [];
+        for (const thought of data) {
+          const projectRefs = getProjectRefs((thought.metadata || {}) as Record<string, unknown>);
+          allProjectUuids.push(...projectRefs);
+        }
+        const projectNameMap = await resolveProjectNames(supabase, allProjectUuids);
+
         const results = data.map(
           (
-            t: { content: string; metadata: Record<string, unknown>; created_at: string },
+            t: { content: string; metadata: Record<string, unknown>; created_at: string; reliability: string | null; author: string | null },
             i: number
           ) => {
             const m = t.metadata || {};
             const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
-            return `${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})\n   ${t.content}`;
+            const parts = [`${i + 1}. [${new Date(t.created_at).toLocaleDateString()}] (${m.type || "??"}${tags ? " - " + tags : ""})`];
+            if (t.reliability || t.author) {
+              const provenanceParts: string[] = [];
+              if (t.reliability) provenanceParts.push(`Reliability: ${t.reliability}`);
+              if (t.author) provenanceParts.push(`Author: ${t.author}`);
+              parts.push(`   ${provenanceParts.join(" | ")}`);
+            }
+            const projectRefs = getProjectRefs(m as Record<string, unknown>);
+            if (projectRefs.length > 0) {
+              const projectNames = projectRefs.map((uuid) => projectNameMap.get(uuid) || uuid);
+              parts.push(`   Projects: ${projectNames.join(", ")}`);
+            }
+            parts.push(`   ${t.content}`);
+            return parts.join("\n");
           }
         );
 
@@ -173,19 +218,26 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       title: "Thought Statistics",
       description:
         "Get high-level statistics about the knowledge base: total thought count, breakdown by type, most frequent topics, and people mentioned. " +
+        "Optionally filter by project_id to see stats for a specific project. " +
         "Use this to orient yourself when starting a conversation, to answer 'how much is in my brain?', or to discover which topics and people appear most often.",
-      inputSchema: {},
+      inputSchema: {
+        project_id: z.string().optional().describe("Filter statistics to a specific project UUID — only counts thoughts linked to this project"),
+      },
     },
-    async () => {
+    async ({ project_id }) => {
       try {
-        const { count } = await supabase
+        let countQuery = supabase
           .from("thoughts")
           .select("*", { count: "exact", head: true });
+        if (project_id) countQuery = countQuery.contains("metadata", { references: { projects: [project_id] } });
+        const { count } = await countQuery;
 
-        const { data } = await supabase
+        let dataQuery = supabase
           .from("thoughts")
           .select("metadata, created_at")
           .order("created_at", { ascending: false });
+        if (project_id) dataQuery = dataQuery.contains("metadata", { references: { projects: [project_id] } });
+        const { data } = await dataQuery;
 
         const types: Record<string, number> = {};
         const topics: Record<string, number> = {};
