@@ -114,6 +114,131 @@ CarChief Backend API should expose a cache-invalidation webhook so the dealer da
   );
 });
 
+// ─── capture_thought Provenance Tests ────────────────────────────────────────
+
+const CAPTURE_THOUGHT_CLEANUP_IDS: string[] = [];
+
+Deno.test("capture_thought sets reliability to 'reliable'", async () => {
+  const uniqueContent = `Integration test: reliability check ${Date.now()}`;
+  const result = await callTool("capture_thought", { content: uniqueContent });
+  assertExists(result);
+
+  // Query DB to verify reliability
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id,reliability,author`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true, "DB query should succeed");
+  const thoughts: { id: string; reliability: string | null; author: string | null }[] = await response.json();
+  assertEquals(thoughts.length, 1, "Should have exactly one thought");
+  assertEquals(thoughts[0].reliability, "reliable", "reliability should be 'reliable'");
+  CAPTURE_THOUGHT_CLEANUP_IDS.push(thoughts[0].id);
+});
+
+Deno.test("capture_thought stores author when provided", async () => {
+  const uniqueContent = `Integration test: author provided ${Date.now()}`;
+  const result = await callTool("capture_thought", {
+    content: uniqueContent,
+    author: "claude-sonnet-4-6",
+  });
+  assertExists(result);
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id,reliability,author`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const thoughts: { id: string; reliability: string | null; author: string | null }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  assertEquals(thoughts[0].author, "claude-sonnet-4-6", "author should match provided value");
+  assertEquals(thoughts[0].reliability, "reliable", "reliability should still be 'reliable'");
+  CAPTURE_THOUGHT_CLEANUP_IDS.push(thoughts[0].id);
+});
+
+Deno.test("capture_thought leaves author null when omitted", async () => {
+  const uniqueContent = `Integration test: author omitted ${Date.now()}`;
+  const result = await callTool("capture_thought", { content: uniqueContent });
+  assertExists(result);
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id,reliability,author`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const thoughts: { id: string; reliability: string | null; author: string | null }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  assertEquals(thoughts[0].author, null, "author should be null when not provided");
+  CAPTURE_THOUGHT_CLEANUP_IDS.push(thoughts[0].id);
+});
+
+Deno.test("capture_thought merges explicit project_ids with pipeline-detected projects", async () => {
+  // Use CarChief in the content so the pipeline detects it, and also pass a second explicit UUID
+  const explicitProjectId = "00000000-0000-0000-0000-000000000002";
+  const uniqueContent = `Integration test: CarChief project merge check ${Date.now()}`;
+  const result = await callTool("capture_thought", {
+    content: uniqueContent,
+    project_ids: [explicitProjectId],
+  });
+  assertExists(result);
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id,metadata`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const thoughts: { id: string; metadata: Record<string, unknown> }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+
+  const refs = thoughts[0].metadata?.references as Record<string, unknown> | undefined;
+  assertExists(refs, "metadata.references should exist");
+  const projects = refs.projects as string[];
+  assertExists(projects, "references.projects should exist");
+
+  // The explicit project_id must be present
+  assertEquals(
+    projects.includes(explicitProjectId),
+    true,
+    `Explicit project ${explicitProjectId} should be in references.projects. Got: ${JSON.stringify(projects)}`,
+  );
+  CAPTURE_THOUGHT_CLEANUP_IDS.push(thoughts[0].id);
+});
+
+Deno.test("cleanup capture_thought provenance test data", async () => {
+  for (const thoughtId of CAPTURE_THOUGHT_CLEANUP_IDS) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
+  }
+});
+
 // Cleanup: remove test thoughts after the test
 Deno.test("cleanup ingest_note test data", async () => {
   const response = await fetch(

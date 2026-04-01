@@ -314,15 +314,18 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Capture Thought",
       description:
-        "Save a single thought directly to the knowledge base. Generates an embedding and extracts metadata (type, topics, people, action items) automatically. " +
-        "Use this when the user shares something worth remembering: a decision, insight, observation, preference, or piece of context about a person or project. " +
-        "Each thought should be a clear, self-contained statement that will make sense when retrieved later without any surrounding context. " +
-        "Do NOT use this for ingesting full notes from Obsidian — use ingest_note for that.",
+        "Save a single thought directly to the knowledge base, stored verbatim. If you are an AI, use this function — do NOT use ingest_note, which paraphrases and is for the Obsidian plugin only. " +
+        "Generates an embedding and extracts metadata (type, topics, people, action items) automatically for consistency. " +
+        "Each thought should be a clear, self-contained statement. " +
+        "Pass your model name as author (e.g. 'claude-sonnet-4-6') and any known project_ids to link projects explicitly. " +
+        "Reliability is hardcoded to 'reliable' for all calls to this function.",
       inputSchema: {
         content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
+        author: z.string().optional().describe("Model identifier of the AI writing this thought, e.g. 'claude-sonnet-4-6'. Stored for provenance — informational only."),
+        project_ids: z.string().array().optional().describe("UUIDs of projects to explicitly associate with this thought, merged with any projects the extractor finds."),
       },
     },
-    async ({ content }) => {
+    async ({ content, author, project_ids }) => {
       try {
         // Run structural parser + extractor pipeline
         let references: Record<string, string[]> = {};
@@ -337,6 +340,13 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           console.error(`capture_thought pipeline error: ${(pipelineError as Error).message}`);
         }
 
+        // Merge explicit project_ids with pipeline-detected projects (union, deduplicated)
+        if (project_ids && project_ids.length > 0) {
+          const pipelineProjects: string[] = references.projects || [];
+          const merged = [...new Set([...pipelineProjects, ...project_ids])];
+          references = { ...references, projects: merged };
+        }
+
         const [embedding, metadata] = await Promise.all([
           getEmbedding(content),
           extractMetadata(content),
@@ -345,6 +355,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         const { error } = await supabase.from("thoughts").insert({
           content,
           embedding,
+          reliability: "reliable",
+          author: author || null,
           metadata: { ...metadata, source: "mcp", references },
         });
 
