@@ -171,14 +171,18 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "List Documents",
       description:
-        "List documents in the knowledge base, optionally filtered by project. " +
+        "List documents in the knowledge base, with optional filters. " +
+        "Filters: project_id (exact match), title_contains (case-insensitive substring match on title), " +
+        "search (case-insensitive substring match on content). All filters combine with AND logic. " +
         "Returns metadata only (no content body). Use get_document with a specific ID to retrieve full content.",
       inputSchema: {
         project_id: z.string().optional().describe("Filter by project UUID"),
+        title_contains: z.string().optional().describe("Case-insensitive substring match against document title"),
+        search: z.string().optional().describe("Case-insensitive substring match against document content"),
         limit: z.number().optional().default(20).describe("Max results (default 20)"),
       },
     },
-    async ({ project_id, limit }) => {
+    async ({ project_id, title_contains, search, limit }) => {
       try {
         let query = supabase
           .from("documents")
@@ -187,6 +191,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           .limit(limit);
 
         if (project_id) query = query.eq("project_id", project_id);
+        if (title_contains) query = query.ilike("title", `%${title_contains}%`);
+        if (search) query = query.ilike("content", `%${search}%`);
 
         const { data, error } = await query;
 
