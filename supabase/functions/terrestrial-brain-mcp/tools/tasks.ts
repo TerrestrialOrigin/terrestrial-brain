@@ -249,4 +249,124 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       }
     }
   );
+
+  server.registerTool(
+    "get_tasks",
+    {
+      title: "Get Tasks by ID",
+      description:
+        "Retrieve one or more tasks by their UUIDs. Returns full task details including " +
+        "resolved project name, assigned person name, parent task content, and overdue detection. " +
+        "Use this when you already have task IDs (e.g. from create_task, get_project_summary, or prior conversation) " +
+        "and need to check their current state. Archived tasks are included — if you ask for an ID, you get it.",
+      inputSchema: {
+        ids: z.array(z.string()).describe("Array of task UUIDs to retrieve (max 50)"),
+      },
+    },
+    async ({ ids }) => {
+      try {
+        if (ids.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "Error: At least one task ID is required." }],
+            isError: true,
+          };
+        }
+
+        if (ids.length > 50) {
+          return {
+            content: [{ type: "text" as const, text: "Error: Maximum 50 task IDs per request." }],
+            isError: true,
+          };
+        }
+
+        const { data, error } = await supabase
+          .from("tasks")
+          .select("id, content, status, due_by, project_id, parent_id, assigned_to, archived_at, created_at")
+          .in("id", ids);
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        const foundIds = new Set((data || []).map(task => task.id));
+        const missingIds = ids.filter(requestedId => !foundIds.has(requestedId));
+
+        if (!data || data.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: `No tasks found. Missing IDs: ${missingIds.join(", ")}` }],
+          };
+        }
+
+        // Batch-resolve project names
+        const projectIds = [...new Set(data.filter(task => task.project_id).map(task => task.project_id))];
+        let projectMap: Record<string, string> = {};
+        if (projectIds.length > 0) {
+          const { data: projects } = await supabase
+            .from("projects")
+            .select("id, name")
+            .in("id", projectIds);
+          projectMap = Object.fromEntries((projects || []).map(project => [project.id, project.name]));
+        }
+
+        // Batch-resolve assigned person names
+        const personIds = [...new Set(data.filter(task => task.assigned_to).map(task => task.assigned_to))];
+        let personMap: Record<string, string> = {};
+        if (personIds.length > 0) {
+          const { data: people } = await supabase
+            .from("people")
+            .select("id, name")
+            .in("id", personIds);
+          personMap = Object.fromEntries((people || []).map(person => [person.id, person.name]));
+        }
+
+        // Batch-resolve parent task content
+        const parentIds = [...new Set(data.filter(task => task.parent_id).map(task => task.parent_id))];
+        let parentMap: Record<string, string> = {};
+        if (parentIds.length > 0) {
+          const { data: parents } = await supabase
+            .from("tasks")
+            .select("id, content")
+            .in("id", parentIds);
+          parentMap = Object.fromEntries((parents || []).map(parent => [parent.id, parent.content]));
+        }
+
+        const lines = data.map((task, index) => {
+          const statusIcon = task.status === "done" ? "[x]" : task.status === "in_progress" ? "[~]" : "[ ]";
+          const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
+          parts.push(`   ID: ${task.id} | Status: ${task.status}`);
+          if (task.project_id && projectMap[task.project_id])
+            parts.push(`   Project: ${projectMap[task.project_id]}`);
+          if (task.assigned_to && personMap[task.assigned_to])
+            parts.push(`   Assigned to: ${personMap[task.assigned_to]}`);
+          if (task.parent_id && parentMap[task.parent_id])
+            parts.push(`   Parent task: ${parentMap[task.parent_id]}`);
+          if (task.due_by) {
+            const due = new Date(task.due_by);
+            const overdue = due < new Date() && task.status !== "done";
+            parts.push(`   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`);
+          }
+          if (task.archived_at)
+            parts.push(`   Archived: ${new Date(task.archived_at).toLocaleDateString()}`);
+          return parts.join("\n");
+        });
+
+        let result = `${data.length} task(s):\n\n${lines.join("\n\n")}`;
+        if (missingIds.length > 0) {
+          result += `\n\nNot found (${missingIds.length}): ${missingIds.join(", ")}`;
+        }
+
+        return {
+          content: [{ type: "text" as const, text: result }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
 }
