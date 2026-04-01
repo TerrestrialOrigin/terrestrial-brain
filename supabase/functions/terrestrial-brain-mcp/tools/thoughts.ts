@@ -318,14 +318,16 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         "Generates an embedding and extracts metadata (type, topics, people, action items) automatically for consistency. " +
         "Each thought should be a clear, self-contained statement. " +
         "Pass your model name as author (e.g. 'claude-sonnet-4-6') and any known project_ids to link projects explicitly. " +
+        "If this thought was derived from a document stored via write_document, pass the document UUID as document_ids to create a bidirectional link. " +
         "Reliability is hardcoded to 'reliable' for all calls to this function.",
       inputSchema: {
         content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
         author: z.string().optional().describe("Model identifier of the AI writing this thought, e.g. 'claude-sonnet-4-6'. Stored for provenance — informational only."),
         project_ids: z.string().array().optional().describe("UUIDs of projects to explicitly associate with this thought, merged with any projects the extractor finds."),
+        document_ids: z.string().array().optional().describe("UUIDs of source documents this thought was derived from (e.g. from write_document). Stored in metadata.references.documents for traceability."),
       },
     },
-    async ({ content, author, project_ids }) => {
+    async ({ content, author, project_ids, document_ids }) => {
       try {
         // Run structural parser + extractor pipeline
         let references: Record<string, string[]> = {};
@@ -345,6 +347,13 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           const pipelineProjects: string[] = references.projects || [];
           const merged = [...new Set([...pipelineProjects, ...project_ids])];
           references = { ...references, projects: merged };
+        }
+
+        // Merge explicit document_ids into references (same union pattern)
+        if (document_ids && document_ids.length > 0) {
+          const existing: string[] = references.documents || [];
+          const merged = [...new Set([...existing, ...document_ids])];
+          references = { ...references, documents: merged };
         }
 
         const [embedding, metadata] = await Promise.all([
