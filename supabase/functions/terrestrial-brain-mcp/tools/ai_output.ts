@@ -80,6 +80,66 @@ export function generateTaskMarkdown(
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Standalone handler functions — used by HTTP route handlers in index.ts
+// ---------------------------------------------------------------------------
+
+export async function handleGetPendingAIOutput(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from("ai_output")
+    .select("id, title, content, file_path, created_at")
+    .eq("picked_up", false)
+    .eq("rejected", false)
+    .order("created_at", { ascending: true });
+
+  if (error) return { error: error.message };
+  return { data: data || [] };
+}
+
+export async function handleGetPendingAIOutputMetadata(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .rpc("get_pending_ai_output_metadata");
+
+  if (error) return { error: error.message };
+  return { data: data || [] };
+}
+
+export async function handleFetchAIOutputContent(supabase: SupabaseClient, ids: string[]) {
+  const { data, error } = await supabase
+    .from("ai_output")
+    .select("id, content")
+    .in("id", ids)
+    .eq("picked_up", false)
+    .eq("rejected", false);
+
+  if (error) return { error: error.message };
+  return { data: data || [] };
+}
+
+export async function handleMarkAIOutputPickedUp(supabase: SupabaseClient, ids: string[]) {
+  const { error } = await supabase
+    .from("ai_output")
+    .update({ picked_up: true, picked_up_at: new Date().toISOString() })
+    .in("id", ids);
+
+  if (error) return { error: error.message };
+  return { message: `Marked ${ids.length} output${ids.length > 1 ? "s" : ""} as picked up.` };
+}
+
+export async function handleRejectAIOutput(supabase: SupabaseClient, ids: string[]) {
+  const { error } = await supabase
+    .from("ai_output")
+    .update({ rejected: true, rejected_at: new Date().toISOString() })
+    .in("id", ids);
+
+  if (error) return { error: error.message };
+  return { message: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.` };
+}
+
+// ---------------------------------------------------------------------------
+// MCP tool registration — only AI-facing tools remain
+// ---------------------------------------------------------------------------
+
 export function register(server: McpServer, supabase: SupabaseClient) {
   server.registerTool(
     "create_ai_output",
@@ -128,191 +188,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
 
         return {
           content: [{ type: "text" as const, text: `Created AI output "${title}" (id: ${data.id})\nWill appear at: ${file_path}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
-    "get_pending_ai_output",
-    {
-      title: "Get Pending AI Output",
-      description:
-        "Returns all AI output that hasn't been delivered to the Obsidian vault yet, as a JSON array. " +
-        "This is primarily used by the Obsidian plugin's polling loop. " +
-        "AI clients generally do not need to call this — use create_ai_output or create_tasks_with_output to produce content, and the plugin handles delivery.",
-      inputSchema: {},
-    },
-    async () => {
-      try {
-        const { data, error } = await supabase
-          .from("ai_output")
-          .select("id, title, content, file_path, created_at")
-          .eq("picked_up", false)
-          .eq("rejected", false)
-          .order("created_at", { ascending: true });
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(data || []) }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
-    "get_pending_ai_output_metadata",
-    {
-      title: "Get Pending AI Output Metadata",
-      description:
-        "Returns metadata (id, title, file_path, content_size in bytes, created_at) for all pending AI outputs WITHOUT the content body. " +
-        "Used by the Obsidian plugin to display pending outputs in the confirmation dialog without downloading potentially large content. " +
-        "After the user accepts, the plugin calls fetch_ai_output_content to retrieve the actual content.",
-      inputSchema: {},
-    },
-    async () => {
-      try {
-        const { data, error } = await supabase
-          .rpc("get_pending_ai_output_metadata");
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(data || []) }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
-    "fetch_ai_output_content",
-    {
-      title: "Fetch AI Output Content",
-      description:
-        "Fetches the full content body for specific AI output IDs. Only returns content for outputs that are still pending (not picked up, not rejected). " +
-        "This is called by the Obsidian plugin after the user clicks 'Accept All' in the confirmation dialog — AI clients should not call this directly.",
-      inputSchema: {
-        ids: z.array(z.string()).describe("Array of AI output UUIDs to fetch content for"),
-      },
-    },
-    async ({ ids }) => {
-      try {
-        const { data, error } = await supabase
-          .from("ai_output")
-          .select("id, content")
-          .in("id", ids)
-          .eq("picked_up", false)
-          .eq("rejected", false);
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(data || []) }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
-    "mark_ai_output_picked_up",
-    {
-      title: "Mark AI Output Picked Up",
-      description:
-        "Mark AI output entries as delivered after the Obsidian plugin has written them to the vault. " +
-        "This is an internal tool used by the Obsidian plugin — AI clients should not call this directly.",
-      inputSchema: {
-        ids: z.array(z.string()).describe("Array of AI output UUIDs to mark as picked up"),
-      },
-    },
-    async ({ ids }) => {
-      try {
-        const { error } = await supabase
-          .from("ai_output")
-          .update({ picked_up: true, picked_up_at: new Date().toISOString() })
-          .in("id", ids);
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to mark picked up: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: `Marked ${ids.length} output${ids.length > 1 ? "s" : ""} as picked up.` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.registerTool(
-    "reject_ai_output",
-    {
-      title: "Reject AI Output",
-      description:
-        "Mark AI output entries as rejected by the user. Rejected outputs are excluded from future pending polls but preserved for audit. " +
-        "This is an internal tool used by the Obsidian plugin when the user clicks 'Reject All' in the confirmation dialog — AI clients should not call this directly.",
-      inputSchema: {
-        ids: z.array(z.string()).describe("Array of AI output UUIDs to reject"),
-      },
-    },
-    async ({ ids }) => {
-      try {
-        const { error } = await supabase
-          .from("ai_output")
-          .update({ rejected: true, rejected_at: new Date().toISOString() })
-          .in("id", ids);
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to reject: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.` }],
         };
       } catch (err: unknown) {
         return {

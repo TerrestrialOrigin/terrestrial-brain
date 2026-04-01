@@ -187,13 +187,13 @@ THEN the plugin SHALL for each output:
   4. Computes the content hash using `simpleHash(stripFrontmatter(content).trim())` and stores it in `syncedHashes[actualWrittenPath]`
   5. Collects the output ID
 After all outputs are written:
-  6. Calls `mark_ai_output_picked_up` with the collected IDs
+  6. Calls the `/mark-ai-output-picked-up` HTTP endpoint with the collected IDs
   7. Persists `syncedHashes` to disk via `saveSettings()`
   8. Shows a Notice: "{N} AI output(s) delivered to vault"
 
 GIVEN the user clicks "Reject All"
 THEN the plugin SHALL handle rejection:
-  1. Call `reject_ai_output` via MCP with all pending output IDs
+  1. Call the `/reject-ai-output` HTTP endpoint with all pending output IDs
   2. Show a Notice: "{N} AI output(s) rejected"
   3. NOT write any files to the vault
 
@@ -257,15 +257,53 @@ THEN the plugin SHALL run `pollAIOutput()` immediately
 
 ### MCP communication
 
-GIVEN the plugin needs to call an MCP tool
-WHEN `callMCP(toolName, args)` is called
+GIVEN the plugin needs to call a direct HTTP endpoint on the edge function
+WHEN `callHTTP(endpointName, body?)` is called
 THEN the plugin:
-  1. Sends a JSON-RPC 2.0 POST to `tbEndpointUrl`
-  2. Handles two response formats:
-     a. `application/json` — parses result directly
-     b. `text/event-stream` — extracts data lines, parses each as JSON, returns first valid result
-  3. Returns the text content from the first content block
-  4. Throws on HTTP errors, JSON-RPC errors, or tool errors (isError)
+  1. Constructs the URL using `buildEndpointUrl(tbEndpointUrl, endpointName)`
+  2. Sends a POST request with `Content-Type: application/json` header
+  3. If `body` is provided, serializes it as JSON in the request body
+  4. Parses the JSON response
+  5. If `response.success` is false, throws an error with `response.error`
+  6. Returns the parsed response object
+
+The `callMCP` method SHALL be removed since no operations use MCP JSON-RPC from the plugin.
+
+#### Scenario: Successful HTTP call with data
+- **WHEN** `callHTTP("get-pending-ai-output-metadata")` is called
+- **AND** the endpoint returns `{ success: true, data: [...] }`
+- **THEN** `callHTTP` SHALL return the full response object
+
+#### Scenario: Successful HTTP call with message
+- **WHEN** `callHTTP("mark-ai-output-picked-up", { ids: [...] })` is called
+- **AND** the endpoint returns `{ success: true, message: "..." }`
+- **THEN** `callHTTP` SHALL return the full response object
+
+#### Scenario: HTTP error response
+- **WHEN** `callHTTP` receives a non-2xx HTTP status
+- **THEN** it SHALL throw an error with the response body
+
+#### Scenario: Endpoint returns success: false
+- **WHEN** `callHTTP` receives `{ success: false, error: "..." }`
+- **THEN** it SHALL throw an error with the error message
+
+---
+
+### Generic endpoint URL construction
+
+The plugin SHALL provide a `buildEndpointUrl(tbEndpointUrl, endpointName)` function that constructs a direct HTTP endpoint URL from the base MCP endpoint URL. The function inserts `/<endpointName>` before the query string. This replaces the specific `buildIngestNoteUrl` function.
+
+#### Scenario: URL with query string
+- **WHEN** `buildEndpointUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc", "mark-ai-output-picked-up")` is called
+- **THEN** it SHALL return `"https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp/mark-ai-output-picked-up?key=abc"`
+
+#### Scenario: URL without query string
+- **WHEN** `buildEndpointUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp", "ingest-note")` is called
+- **THEN** it SHALL return `"https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp/ingest-note"`
+
+#### Scenario: Backwards compatibility with ingest-note
+- **WHEN** `callIngestNote` calls `buildEndpointUrl(url, "ingest-note")`
+- **THEN** it SHALL produce the same URL as the old `buildIngestNoteUrl` function
 
 ---
 

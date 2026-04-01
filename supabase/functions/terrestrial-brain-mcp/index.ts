@@ -8,7 +8,14 @@ import { createClient } from "@supabase/supabase-js";
 import { register as registerThoughts, handleIngestNote } from "./tools/thoughts.ts";
 import { register as registerProjects } from "./tools/projects.ts";
 import { register as registerTasks } from "./tools/tasks.ts";
-import { register as registerAIOutput } from "./tools/ai_output.ts";
+import {
+  register as registerAIOutput,
+  handleGetPendingAIOutput,
+  handleGetPendingAIOutputMetadata,
+  handleFetchAIOutputContent,
+  handleMarkAIOutputPickedUp,
+  handleRejectAIOutput,
+} from "./tools/ai_output.ts";
 import { register as registerQueries } from "./tools/queries.ts";
 import { register as registerPeople } from "./tools/people.ts";
 import { register as registerDocuments } from "./tools/documents.ts";
@@ -75,6 +82,76 @@ app.all("*", async (c) => {
       } else {
         return c.json({ success: false, error: result.error }, 500);
       }
+    } catch (err: unknown) {
+      return c.json({ success: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // Direct HTTP route for get-pending-ai-output
+  if (url.pathname.endsWith("/get-pending-ai-output") && c.req.method === "POST") {
+    try {
+      const result = await handleGetPendingAIOutput(supabase);
+      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      return c.json({ success: true, data: result.data });
+    } catch (err: unknown) {
+      return c.json({ success: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // Direct HTTP route for get-pending-ai-output-metadata
+  if (url.pathname.endsWith("/get-pending-ai-output-metadata") && c.req.method === "POST") {
+    try {
+      const result = await handleGetPendingAIOutputMetadata(supabase);
+      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      return c.json({ success: true, data: result.data });
+    } catch (err: unknown) {
+      return c.json({ success: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // Direct HTTP route for fetch-ai-output-content
+  if (url.pathname.endsWith("/fetch-ai-output-content") && c.req.method === "POST") {
+    try {
+      const body = await c.req.json();
+      const ids = body?.ids;
+      if (!ids || !Array.isArray(ids)) {
+        return c.json({ success: false, error: "ids array is required" }, 400);
+      }
+      const result = await handleFetchAIOutputContent(supabase, ids);
+      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      return c.json({ success: true, data: result.data });
+    } catch (err: unknown) {
+      return c.json({ success: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // Direct HTTP route for mark-ai-output-picked-up
+  if (url.pathname.endsWith("/mark-ai-output-picked-up") && c.req.method === "POST") {
+    try {
+      const body = await c.req.json();
+      const ids = body?.ids;
+      if (!ids || !Array.isArray(ids)) {
+        return c.json({ success: false, error: "ids array is required" }, 400);
+      }
+      const result = await handleMarkAIOutputPickedUp(supabase, ids);
+      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      return c.json({ success: true, message: result.message });
+    } catch (err: unknown) {
+      return c.json({ success: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // Direct HTTP route for reject-ai-output
+  if (url.pathname.endsWith("/reject-ai-output") && c.req.method === "POST") {
+    try {
+      const body = await c.req.json();
+      const ids = body?.ids;
+      if (!ids || !Array.isArray(ids)) {
+        return c.json({ success: false, error: "ids array is required" }, 400);
+      }
+      const result = await handleRejectAIOutput(supabase, ids);
+      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      return c.json({ success: true, message: result.message });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
     }

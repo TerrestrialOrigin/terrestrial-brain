@@ -230,8 +230,8 @@ export default class TerrestrialBrainPlugin extends Plugin {
     this.pollInProgress = true;
     try {
       // Phase 1: Fetch metadata only (no content body)
-      const raw = await this.callMCP("get_pending_ai_output_metadata", {});
-      const metadataList: AIOutputMetadata[] = JSON.parse(raw);
+      const metadataResponse = await this.callHTTP("get-pending-ai-output-metadata");
+      const metadataList: AIOutputMetadata[] = metadataResponse.data as AIOutputMetadata[];
 
       if (!metadataList.length) {
         if (options.manual) {
@@ -278,8 +278,8 @@ export default class TerrestrialBrainPlugin extends Plugin {
     const ids = metadataList.map((metadata) => metadata.id);
 
     // Phase 2: Fetch full content only after user accepted
-    const contentRaw = await this.callMCP("fetch_ai_output_content", { ids });
-    const contentList: AIOutputContent[] = JSON.parse(contentRaw);
+    const contentResponse = await this.callHTTP("fetch-ai-output-content", { ids });
+    const contentList: AIOutputContent[] = contentResponse.data as AIOutputContent[];
 
     // Build a lookup map for content by ID
     const contentById = new Map<string, string>();
@@ -322,7 +322,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
 
     if (deliveredIds.length > 0) {
-      await this.callMCP("mark_ai_output_picked_up", { ids: deliveredIds });
+      await this.callHTTP("mark-ai-output-picked-up", { ids: deliveredIds });
       await this.saveSettings();
       new Notice(`🧠 ${deliveredIds.length} AI output${deliveredIds.length > 1 ? "s" : ""} delivered to vault`);
     }
@@ -330,7 +330,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   private async rejectOutputs(metadataList: AIOutputMetadata[]) {
     const ids = metadataList.map((metadata) => metadata.id);
-    await this.callMCP("reject_ai_output", { ids });
+    await this.callHTTP("reject-ai-output", { ids });
     new Notice(`🧠 ${ids.length} AI output${ids.length > 1 ? "s" : ""} rejected`);
   }
 
@@ -401,70 +401,33 @@ export default class TerrestrialBrainPlugin extends Plugin {
     return [...inlineTags, ...fmTagList].includes(excludeTagLower);
   }
 
-  // ─── MCP Call ──────────────────────────────────────────────────────────────
+  // ─── Direct HTTP Call ───────────────────────────────────────────────────────
 
-  async callMCP(toolName: string, args: Record<string, unknown>): Promise<string> {
-    const response = await fetch(this.settings.tbEndpointUrl, {
+  async callHTTP(endpointName: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const endpointUrl = buildEndpointUrl(this.settings.tbEndpointUrl, endpointName);
+
+    const response = await fetch(endpointUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: Date.now(),
-        method: "tools/call",
-        params: { name: toolName, arguments: args },
-      }),
+      headers: { "Content-Type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`MCP ${response.status}: ${body}`);
+      const responseBody = await response.text();
+      throw new Error(`HTTP ${response.status}: ${responseBody}`);
     }
 
-    const contentType = response.headers.get("content-type") || "";
-
-    if (contentType.includes("text/event-stream")) {
-      const text = await response.text();
-      const dataLines = text
-        .split("\n")
-        .filter((l) => l.startsWith("data:"))
-        .map((l) => l.slice(5).trim())
-        .filter((l) => l && l !== "[DONE]");
-
-      // Collect all valid results and return the last one — intermediate SSE
-      // events may contain progress data; the final event has the real result.
-      let lastResult = "Done";
-      for (const line of dataLines) {
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.error) throw new Error(JSON.stringify(parsed.error));
-          const toolResult = parsed.result;
-          if (toolResult?.isError) {
-            throw new Error(toolResult?.content?.[0]?.text || "Unknown error");
-          }
-          lastResult = toolResult?.content?.[0]?.text || "Done";
-        } catch (parseError) {
-          if (parseError instanceof SyntaxError) continue;
-          throw parseError;
-        }
-      }
-      return lastResult;
-    } else {
-      const result = await response.json();
-      if (result.error) throw new Error(JSON.stringify(result.error));
-      if (result.result?.isError) {
-        throw new Error(result.result?.content?.[0]?.text || "Unknown error");
-      }
-      return result.result?.content?.[0]?.text || "Done";
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.error || "Unknown error");
     }
+    return result;
   }
 
   // ─── Direct HTTP call for note ingestion ───────────────────────────────────
 
   async callIngestNote(content: string, title: string, noteId: string): Promise<string> {
-    const ingestUrl = buildIngestNoteUrl(this.settings.tbEndpointUrl);
+    const ingestUrl = buildEndpointUrl(this.settings.tbEndpointUrl, "ingest-note");
 
     const response = await fetch(ingestUrl, {
       method: "POST",
@@ -805,14 +768,14 @@ export function simpleHash(str: string): string {
  * Given the MCP endpoint URL (e.g. "https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc"),
  * construct the direct ingest-note URL by inserting "/ingest-note" before the query string.
  */
-export function buildIngestNoteUrl(tbEndpointUrl: string): string {
+export function buildEndpointUrl(tbEndpointUrl: string, endpointName: string): string {
   const questionMarkIndex = tbEndpointUrl.indexOf("?");
   if (questionMarkIndex === -1) {
-    return `${tbEndpointUrl}/ingest-note`;
+    return `${tbEndpointUrl}/${endpointName}`;
   }
   const basePath = tbEndpointUrl.substring(0, questionMarkIndex);
   const queryString = tbEndpointUrl.substring(questionMarkIndex);
-  return `${basePath}/ingest-note${queryString}`;
+  return `${basePath}/${endpointName}${queryString}`;
 }
 
 export async function generateCopyPath(
