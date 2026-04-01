@@ -1,0 +1,11 @@
+{
+  "imports": {
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.47.10",
+    "@modelcontextprotocol/sdk/server/mcp.js": "npm:@modelcontextprotocol/sdk@1.24.3/server/mcp.js",
+    "zod": "npm:zod@4.1.13",
+    "hono": "npm:hono@4.9.2",
+    "hono/": "npm:hono@4.9.2/",
+    "@hono/mcp": "npm:@hono/mcp@0.1.1"
+  },
+  "lock": false
+}
