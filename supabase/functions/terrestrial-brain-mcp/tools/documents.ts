@@ -20,7 +20,8 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         "Pass a references object with people and task UUIDs if known; otherwise, references are extracted automatically from content using the same pipeline as capture_thought. " +
         "Does NOT generate thoughts — after calling this, use capture_thought to atomize the document into searchable thoughts while you still have full context. " +
         "Pass the returned document ID as document_ids to capture_thought so thoughts link back to their source document. " +
-        "Response includes thoughts_required: true as a reminder.",
+        "Response includes thoughts_required: true as a reminder. " +
+        "To edit an existing document later, use update_document.",
       inputSchema: {
         title: z.string().describe("Document title"),
         content: z.string().describe("Full document text in markdown — stored verbatim, never modified"),
@@ -241,6 +242,122 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             type: "text" as const,
             text: `${data.length} document(s):\n\n${lines.join("\n\n")}`,
           }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ─── update_document ──────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "update_document",
+    {
+      title: "Update Document",
+      description:
+        "Update an existing document's title, content, and/or project assignment. " +
+        "At least one of title, content, or project_id must be provided. " +
+        "When content is updated, stale thoughts linked to this document are automatically deleted " +
+        "and references are re-extracted from the new content. " +
+        "After a content update, use capture_thought with document_ids to re-atomize the document into thoughts.",
+      inputSchema: {
+        id: z.string().describe("UUID of the document to update"),
+        title: z.string().optional().describe("New document title"),
+        content: z.string().optional().describe("New full document text in markdown — replaces existing content verbatim"),
+        project_id: z.string().optional().describe("UUID of the new owning project"),
+      },
+    },
+    async ({ id, title, content, project_id }) => {
+      try {
+        // Validate at least one optional field is provided
+        if (title === undefined && content === undefined && project_id === undefined) {
+          return {
+            content: [{ type: "text" as const, text: "At least one of title, content, or project_id must be provided." }],
+            isError: true,
+          };
+        }
+
+        // Verify document exists and get current data for extraction context
+        const { data: existing, error: fetchError } = await supabase
+          .from("documents")
+          .select("id, title, project_id")
+          .eq("id", id)
+          .single();
+
+        if (fetchError || !existing) {
+          return {
+            content: [{ type: "text" as const, text: "Document not found." }],
+            isError: true,
+          };
+        }
+
+        // Build update payload
+        const updates: Record<string, unknown> = {};
+        if (title !== undefined) updates.title = title;
+        if (content !== undefined) updates.content = content;
+        if (project_id !== undefined) updates.project_id = project_id;
+
+        // If content changed, clean up stale thoughts and re-extract references
+        let contentWarning = "";
+        if (content !== undefined) {
+          // Delete thoughts linked to this document (same nested JSONB pattern as project filtering)
+          const { error: deleteError } = await supabase
+            .from("thoughts")
+            .delete()
+            .contains("metadata", { references: { documents: [id] } });
+
+          if (deleteError) {
+            console.error(`update_document thought cleanup error: ${deleteError.message}`);
+          }
+
+          // Re-extract references from new content
+          const effectiveTitle = title ?? existing.title;
+          try {
+            const parsedNote = parseNote(content, effectiveTitle, null, "mcp");
+            const extractedRefs = await runExtractionPipeline(
+              parsedNote,
+              [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
+              supabase,
+            );
+            updates.references = extractedRefs;
+          } catch (pipelineError) {
+            console.error(`update_document extraction pipeline error: ${(pipelineError as Error).message}`);
+            updates.references = { people: [], tasks: [] };
+            contentWarning = " (warning: reference extraction failed — references reset to empty)";
+          }
+        }
+
+        // Perform the update
+        const { error: updateError } = await supabase
+          .from("documents")
+          .update(updates)
+          .eq("id", id);
+
+        if (updateError) {
+          return {
+            content: [{ type: "text" as const, text: `Update failed: ${updateError.message}` }],
+            isError: true,
+          };
+        }
+
+        const updatedFields = Object.keys(updates).filter(key => key !== "references").join(", ");
+        const base = `Document updated: ${updatedFields}${contentWarning}`;
+
+        if (content !== undefined) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `${base}\nthoughts_required: true — Previous thoughts were deleted. Use capture_thought with document_ids: ["${id}"] to re-atomize the updated document.`,
+            }],
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: base }],
         };
       } catch (err: unknown) {
         return {

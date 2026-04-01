@@ -329,6 +329,241 @@ Deno.test("capture_thought without document_ids does not add documents reference
   cleanupThoughtIds.push(thoughts[0].id);
 });
 
+// ─── update_document Tests ─────────────────────────────────────────────────
+
+Deno.test("update_document updates title only (no thought churn)", async () => {
+  // Create a document to update
+  const createResult = await callTool("write_document", {
+    title: "Update Title Test",
+    content: "Content that should remain unchanged.",
+    project_id: CARCHIEF_PROJECT_ID,
+    references: { people: [], tasks: [] },
+  });
+  const idMatch = createResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(idMatch);
+  const docId = idMatch![1];
+  cleanupDocumentIds.push(docId);
+
+  // Capture the original updated_at
+  const beforeResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/documents?id=eq.${docId}&select=updated_at`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const beforeDocs: { updated_at: string }[] = await beforeResp.json();
+  const originalUpdatedAt = beforeDocs[0].updated_at;
+
+  // Wait a moment so updated_at differs
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const result = await callTool("update_document", {
+    id: docId,
+    title: "Updated Title Test",
+  });
+
+  assertExists(result);
+  assertStringIncludes(result, "Document updated");
+  assertStringIncludes(result, "title");
+  // Should NOT include thoughts_required since content didn't change
+  assertEquals(result.includes("thoughts_required"), false,
+    "Title-only update should not trigger thoughts_required");
+
+  // Verify title changed and updated_at refreshed
+  const afterResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/documents?id=eq.${docId}&select=title,content,updated_at`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const afterDocs: { title: string; content: string; updated_at: string }[] = await afterResp.json();
+  assertEquals(afterDocs[0].title, "Updated Title Test");
+  assertEquals(afterDocs[0].content, "Content that should remain unchanged.");
+  assertEquals(afterDocs[0].updated_at !== originalUpdatedAt, true, "updated_at should have refreshed");
+});
+
+Deno.test("update_document updates content — deletes old thoughts, re-extracts refs, returns thoughts_required", async () => {
+  // Create a document
+  const createResult = await callTool("write_document", {
+    title: "Content Update Test",
+    content: "Original content for testing updates.",
+    project_id: CARCHIEF_PROJECT_ID,
+    references: { people: [], tasks: [] },
+  });
+  const idMatch = createResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(idMatch);
+  const docId = idMatch![1];
+  cleanupDocumentIds.push(docId);
+
+  // Create a thought linked to this document
+  const thoughtContent = `Thought linked to doc ${Date.now()}`;
+  const thoughtResult = await callTool("capture_thought", {
+    content: thoughtContent,
+    document_ids: [docId],
+  });
+  assertExists(thoughtResult);
+
+  // Get the thought ID for verification
+  const thoughtResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(thoughtContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const thoughts: { id: string }[] = await thoughtResp.json();
+  assertEquals(thoughts.length, 1, "Should have the linked thought before update");
+  const thoughtId = thoughts[0].id;
+
+  // Update the document content
+  const newContent = "Completely new content after update.";
+  const updateResult = await callTool("update_document", {
+    id: docId,
+    content: newContent,
+  });
+
+  assertExists(updateResult);
+  assertStringIncludes(updateResult, "Document updated");
+  assertStringIncludes(updateResult, "thoughts_required: true");
+
+  // Verify old thought was deleted
+  const deletedThoughtResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const deletedThoughts: { id: string }[] = await deletedThoughtResp.json();
+  assertEquals(deletedThoughts.length, 0, "Linked thought should have been deleted after content update");
+
+  // Verify content was updated verbatim
+  const docResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/documents?id=eq.${docId}&select=content`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const docs: { content: string }[] = await docResp.json();
+  assertEquals(docs[0].content, newContent, "Content should be updated verbatim");
+});
+
+Deno.test("update_document updates project_id only", async () => {
+  // Create a second project to reassign to
+  const projectResult = await callTool("create_project", {
+    name: "UpdateDocTargetProject",
+    type: "personal",
+  });
+  const projectMatch = projectResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(projectMatch);
+  const newProjectId = projectMatch![1];
+  cleanupProjectIds.push(newProjectId);
+
+  // Create a document under CARCHIEF
+  const createResult = await callTool("write_document", {
+    title: "Project Reassign Test",
+    content: "Document to be reassigned.",
+    project_id: CARCHIEF_PROJECT_ID,
+    references: { people: [], tasks: [] },
+  });
+  const idMatch = createResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(idMatch);
+  const docId = idMatch![1];
+  cleanupDocumentIds.push(docId);
+
+  // Reassign to new project
+  const result = await callTool("update_document", {
+    id: docId,
+    project_id: newProjectId,
+  });
+
+  assertExists(result);
+  assertStringIncludes(result, "Document updated");
+  assertStringIncludes(result, "project_id");
+
+  // Verify project_id changed
+  const docResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/documents?id=eq.${docId}&select=project_id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const docs: { project_id: string }[] = await docResp.json();
+  assertEquals(docs[0].project_id, newProjectId, "project_id should be updated");
+});
+
+Deno.test("update_document returns error when no optional fields provided", async () => {
+  try {
+    await callTool("update_document", { id: testDocumentId });
+    assertEquals(true, false, "Should have thrown validation error");
+  } catch (error: unknown) {
+    assertStringIncludes((error as Error).message, "At least one of title, content, or project_id must be provided");
+  }
+});
+
+Deno.test("update_document returns error for non-existent document ID", async () => {
+  try {
+    await callTool("update_document", {
+      id: "00000000-0000-0000-0000-999999999999",
+      title: "Should Fail",
+    });
+    assertEquals(true, false, "Should have thrown not-found error");
+  } catch (error: unknown) {
+    assertStringIncludes((error as Error).message, "Document not found");
+  }
+});
+
+Deno.test("write_document description mentions update_document", async () => {
+  // Call list tools to check the description
+  const res = await fetch(BASE, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  const text = await res.text();
+  let parsed;
+  if (text.startsWith("event:")) {
+    const dataLine = text.split("\n").find(line => line.startsWith("data:"));
+    assertExists(dataLine);
+    parsed = JSON.parse(dataLine!.slice(5).trim());
+  } else {
+    parsed = JSON.parse(text);
+  }
+
+  const tools = parsed.result?.tools || [];
+  const writeDoc = tools.find((tool: { name: string }) => tool.name === "write_document");
+  assertExists(writeDoc, "write_document tool should exist");
+  assertStringIncludes(
+    writeDoc.description,
+    "update_document",
+    "write_document description should mention update_document",
+  );
+});
+
 // ─── Cleanup ────────────────────────────────────────────────────────────────
 
 Deno.test("cleanup documents test data", async () => {
