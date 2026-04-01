@@ -86,9 +86,10 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     {
       title: "Create AI Output",
       description:
-        "Create a markdown document that will be automatically delivered to the user's Obsidian vault at the specified file path. " +
-        "Use this whenever the user asks you to write something up, create a document, draft a proposal, or produce any structured output they'll want to reference later. " +
-        "The content is stored exactly as provided and will be ingested as thoughts when delivered, so it becomes searchable in the knowledge base. " +
+        "Create a markdown document delivered to the user's Obsidian vault. " +
+        "IMPORTANT: Only call this when the user has explicitly asked you to create, write up, or save a document — do NOT call proactively or as a side effect of answering a question. " +
+        "Every document delivered here gets ingested into the knowledge base via ingest_note, so unnecessary calls create duplicate thoughts. " +
+        "If the document should not be ingested as thoughts, include a #tbExclude tag in the content. " +
         "For task lists specifically, prefer create_tasks_with_output — it creates both structured task rows and a checklist document.",
       inputSchema: {
         title: z.string().describe("Human-readable title for this output"),
@@ -328,6 +329,9 @@ export function register(server: McpServer, supabase: SupabaseClient) {
       title: "Create Tasks with AI Output",
       description:
         "Create multiple tasks at once AND generate a markdown checklist document delivered to the user's Obsidian vault. " +
+        "IMPORTANT: Only call this when the user has explicitly asked you to create tasks or a task document — do NOT call proactively. " +
+        "The delivered markdown gets ingested into the knowledge base via ingest_note; while task checkboxes use reference_id deduplication, " +
+        "prose content surrounding the task list can generate unwanted thoughts. " +
         "This is the preferred way to create task lists — it writes structured task rows (queryable, filterable, trackable) " +
         "AND a human-readable markdown document with checkboxes (visible in Obsidian). " +
         "Tasks are tagged with reference_id = file_path so re-ingesting the delivered document won't create duplicates. " +
