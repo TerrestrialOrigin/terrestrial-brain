@@ -465,6 +465,178 @@ export function register(server: McpServer, supabase: SupabaseClient) {
     }
   );
 
+  // Tool 6: Update Thought
+  server.registerTool(
+    "update_thought",
+    {
+      title: "Update Thought",
+      description:
+        "Update an existing thought's content, reliability, author, or project/document associations. " +
+        "At least one optional field must be provided. " +
+        "When content is updated, the embedding and metadata (type, topics, people, action_items, dates_mentioned) are regenerated automatically. " +
+        "When only non-content fields are updated, no AI processing occurs — changes are applied directly. " +
+        "project_ids and document_ids use REPLACE semantics: the provided array becomes the new value (not merged with existing). " +
+        "Pass project_ids: [] to clear all project links. " +
+        "Original created_at, reference_id, note_snapshot_id, and metadata.source are always preserved.",
+      inputSchema: {
+        id: z.string().describe("UUID of the thought to update"),
+        content: z.string().optional().describe("New thought content — triggers embedding regeneration and metadata re-extraction"),
+        reliability: z.string().optional().describe("New reliability level: 'reliable' or 'less reliable'"),
+        author: z.string().optional().describe("New author attribution, e.g. 'claude-sonnet-4-6'"),
+        project_ids: z.string().array().optional().describe("Replace project associations — these UUIDs become the new metadata.references.projects array"),
+        document_ids: z.string().array().optional().describe("Replace document associations — these UUIDs become the new metadata.references.documents array"),
+      },
+    },
+    async ({ id, content, reliability, author, project_ids, document_ids }) => {
+      try {
+        // Validate at least one optional field is provided
+        if (
+          content === undefined &&
+          reliability === undefined &&
+          author === undefined &&
+          project_ids === undefined &&
+          document_ids === undefined
+        ) {
+          return {
+            content: [{ type: "text" as const, text: "At least one of content, reliability, author, project_ids, or document_ids must be provided." }],
+            isError: true,
+          };
+        }
+
+        // Fetch existing thought
+        const { data: existing, error: fetchError } = await supabase
+          .from("thoughts")
+          .select("id, content, reliability, author, metadata")
+          .eq("id", id)
+          .single();
+
+        if (fetchError || !existing) {
+          return {
+            content: [{ type: "text" as const, text: "Thought not found." }],
+            isError: true,
+          };
+        }
+
+        const existingMetadata = (existing.metadata || {}) as Record<string, unknown>;
+        const existingReferences = (existingMetadata.references || {}) as Record<string, string[]>;
+        const updatedFields: string[] = [];
+
+        if (content !== undefined) {
+          // Content update path: regenerate embedding + metadata
+          const [embedding, newMetadata] = await Promise.all([
+            getEmbedding(content),
+            extractMetadata(content),
+          ]);
+
+          // Build updated references: preserve existing, apply explicit overrides
+          const updatedReferences = { ...existingReferences };
+          if (project_ids !== undefined) {
+            updatedReferences.projects = project_ids;
+            updatedFields.push("project_ids");
+          }
+          if (document_ids !== undefined) {
+            updatedReferences.documents = document_ids;
+            updatedFields.push("document_ids");
+          }
+
+          // Merge: re-extracted metadata overwrites content-dependent fields,
+          // preserve source and apply updated references
+          const mergedMetadata = {
+            ...existingMetadata,
+            ...(newMetadata as Record<string, unknown>),
+            source: existingMetadata.source,
+            references: updatedReferences,
+          };
+
+          const updatePayload: Record<string, unknown> = {
+            content,
+            embedding,
+            metadata: mergedMetadata,
+          };
+
+          // Apply top-level field updates alongside content
+          if (reliability !== undefined) {
+            updatePayload.reliability = reliability;
+            updatedFields.push("reliability");
+          }
+          if (author !== undefined) {
+            updatePayload.author = author;
+            updatedFields.push("author");
+          }
+
+          const { error: updateError } = await supabase
+            .from("thoughts")
+            .update(updatePayload)
+            .eq("id", id);
+
+          if (updateError) {
+            return {
+              content: [{ type: "text" as const, text: `Update failed: ${updateError.message}` }],
+              isError: true,
+            };
+          }
+
+          updatedFields.unshift("content (embedding + metadata regenerated)");
+          return {
+            content: [{ type: "text" as const, text: `Thought updated: ${updatedFields.join(", ")}` }],
+          };
+        } else {
+          // Non-content update path: direct DB update, no AI calls
+          const updatePayload: Record<string, unknown> = {};
+          let metadataChanged = false;
+          const updatedReferences = { ...existingReferences };
+
+          if (reliability !== undefined) {
+            updatePayload.reliability = reliability;
+            updatedFields.push("reliability");
+          }
+          if (author !== undefined) {
+            updatePayload.author = author;
+            updatedFields.push("author");
+          }
+          if (project_ids !== undefined) {
+            updatedReferences.projects = project_ids;
+            metadataChanged = true;
+            updatedFields.push("project_ids");
+          }
+          if (document_ids !== undefined) {
+            updatedReferences.documents = document_ids;
+            metadataChanged = true;
+            updatedFields.push("document_ids");
+          }
+
+          if (metadataChanged) {
+            updatePayload.metadata = {
+              ...existingMetadata,
+              references: updatedReferences,
+            };
+          }
+
+          const { error: updateError } = await supabase
+            .from("thoughts")
+            .update(updatePayload)
+            .eq("id", id);
+
+          if (updateError) {
+            return {
+              content: [{ type: "text" as const, text: `Update failed: ${updateError.message}` }],
+              isError: true,
+            };
+          }
+
+          return {
+            content: [{ type: "text" as const, text: `Thought updated: ${updatedFields.join(", ")}` }],
+          };
+        }
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
 }
 
 // ─── Standalone ingest_note handler (called via direct HTTP route, not MCP) ──
