@@ -82,3 +82,16 @@ THEN returns "No fields to update."
 GIVEN the MCP server is running
 WHEN a client calls `archive_task` with `id`
 THEN sets archived_at to the current timestamp and returns "Task {id} archived."
+
+---
+
+### get_tasks
+
+GIVEN the MCP server is running
+WHEN a client calls `get_tasks` with `ids` (array of task UUIDs, max 50)
+THEN the system:
+  1. Validates that ids is non-empty (error if empty) and contains at most 50 entries (error if exceeded)
+  2. Queries tasks matching the provided IDs (including archived tasks)
+  3. Resolves project names, assigned person names, and parent task content
+  4. Returns a formatted list with status icon ([ ] open, [~] in_progress, [x] done), content, ID, status, project name, person name, parent task, due date with OVERDUE flag, and archived date if applicable
+  5. Appends a note listing any requested IDs that were not found
