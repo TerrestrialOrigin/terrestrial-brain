@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -18,7 +19,7 @@ function formatDate(dateStr: string | null | undefined): string {
 // Registration
 // ---------------------------------------------------------------------------
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   // ─── get_project_summary ─────────────────────────────────────────────────
 
   server.registerTool(
@@ -34,7 +35,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Project UUID"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("get_project_summary", async ({ id }) => {
       try {
         // 1. Fetch project
         const { data: project, error: projectError } = await supabase
@@ -217,7 +218,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             const meta = (thought.metadata || {}) as Record<string, unknown>;
             const typeLabel = (meta.type as string) || "unknown";
             thoughtLines.push(
-              `- [${formatDate(thought.created_at)}] (${typeLabel}) ${thought.content}`
+              `- [${formatDate(thought.created_at)}] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`
             );
           }
         }
@@ -237,6 +238,14 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           sections.push(noteLines.join("\n"));
         }
 
+        // Usefulness reminder
+        if (matchingThoughts.length > 0) {
+          const thoughtIds = matchingThoughts.map((thought: { id: string }) => thought.id);
+          sections.push(
+            `\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${JSON.stringify(thoughtIds)}`
+          );
+        }
+
         return {
           content: [{ type: "text" as const, text: sections.join("\n") }],
         };
@@ -246,7 +255,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // ─── get_recent_activity ─────────────────────────────────────────────────
@@ -264,7 +273,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         days: z.number().optional().default(7).describe("Number of days to look back (default 7)"),
       },
     },
-    async ({ days }) => {
+    withMcpLogging("get_recent_activity", async ({ days }) => {
       try {
         const effectiveDays = Math.max(1, days);
         const sinceDate = new Date();
@@ -274,7 +283,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         // 1. Recent thoughts
         const { data: thoughts } = await supabase
           .from("thoughts")
-          .select("content, metadata, created_at")
+          .select("id, content, metadata, created_at")
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false })
           .limit(20);
@@ -393,7 +402,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           for (const thought of thoughtList) {
             const meta = (thought.metadata || {}) as Record<string, unknown>;
             const typeLabel = (meta.type as string) || "unknown";
-            sections.push(`- [${formatDate(thought.created_at)}] (${typeLabel}) ${thought.content}`);
+            sections.push(`- [${formatDate(thought.created_at)}] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`);
           }
         }
 
@@ -461,6 +470,14 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           }
         }
 
+        // Usefulness reminder
+        if (thoughtList.length > 0) {
+          const thoughtIds = thoughtList.map((thought: { id: string }) => thought.id);
+          sections.push(
+            `\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${JSON.stringify(thoughtIds)}`
+          );
+        }
+
         return {
           content: [{ type: "text" as const, text: sections.join("\n") }],
         };
@@ -470,6 +487,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 }

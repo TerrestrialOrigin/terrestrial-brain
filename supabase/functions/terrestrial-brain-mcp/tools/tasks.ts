@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   server.registerTool(
     "create_task",
     {
@@ -22,7 +23,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         assigned_to: z.string().optional().describe("UUID of the person this task is assigned to"),
       },
     },
-    async ({ content, project_id, parent_id, due_by, status, assigned_to }) => {
+    withMcpLogging("create_task", async ({ content, project_id, parent_id, due_by, status, assigned_to }) => {
       try {
         const { data, error } = await supabase
           .from("tasks")
@@ -53,7 +54,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -74,7 +75,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         limit: z.number().optional().default(20).describe("Max results"),
       },
     },
-    async ({ project_id, status, overdue_only, include_archived, limit }) => {
+    withMcpLogging("list_tasks", async ({ project_id, status, overdue_only, include_archived, limit }) => {
       try {
         let q = supabase
           .from("tasks")
@@ -149,7 +150,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -170,7 +171,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         assigned_to: z.string().nullable().optional().describe("Person UUID to assign, or null to unassign"),
       },
     },
-    async ({ id, content, status, due_by, project_id, assigned_to }) => {
+    withMcpLogging("update_task", async ({ id, content, status, due_by, project_id, assigned_to }) => {
       try {
         const updates: Record<string, unknown> = {};
         if (content !== undefined) updates.content = content;
@@ -209,7 +210,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -224,7 +225,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Task UUID to archive"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("archive_task", async ({ id }) => {
       try {
         const { error } = await supabase
           .from("tasks")
@@ -247,7 +248,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -263,7 +264,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         ids: z.array(z.string()).describe("Array of task UUIDs to retrieve (max 50)"),
       },
     },
-    async ({ ids }) => {
+    withMcpLogging("get_tasks", async ({ ids }) => {
       try {
         if (ids.length === 0) {
           return {
@@ -367,6 +368,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 }

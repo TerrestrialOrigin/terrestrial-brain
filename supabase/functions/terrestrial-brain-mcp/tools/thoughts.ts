@@ -7,11 +7,12 @@ import { runExtractionPipeline } from "../extractors/pipeline.ts";
 import { ProjectExtractor } from "../extractors/project-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { PeopleExtractor } from "../extractors/people-extractor.ts";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   // Tool 1: Semantic Search
   server.registerTool(
     "search_thoughts",
@@ -31,7 +32,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         reliability: z.string().optional().describe("Filter by reliability level, e.g. 'reliable' or 'less reliable'"),
       },
     },
-    async ({ query, limit, threshold, author, reliability }) => {
+    withMcpLogging("search_thoughts", async ({ query, limit, threshold, author, reliability }) => {
       try {
         const qEmb = await getEmbedding(query);
         const { data, error } = await supabase.rpc("match_thoughts", {
@@ -67,6 +68,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         const results = data.map(
           (
             t: {
+              id: string;
               content: string;
               metadata: Record<string, unknown>;
               similarity: number;
@@ -80,6 +82,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
             const m = t.metadata || {};
             const parts = [
               `--- Result ${i + 1} (${(t.similarity * 100).toFixed(1)}% match) ---`,
+              `ID: ${t.id}`,
               `Captured: ${new Date(t.created_at).toISOString()}`,
             ];
             if (t.updated_at) {
@@ -108,10 +111,13 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           }
         );
 
+        const thoughtIds = data.map((t: { id: string }) => t.id);
+
         return {
           content: [{
             type: "text" as const,
-            text: `Found ${data.length} thought(s):\n\n${results.join("\n\n")}`,
+            text: `Found ${data.length} thought(s):\n\n${results.join("\n\n")}` +
+              `\n\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${JSON.stringify(thoughtIds)}`,
           }],
         };
       } catch (err: unknown) {
@@ -120,7 +126,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // Tool 2: List Recent
@@ -144,11 +150,11 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         reliability: z.string().optional().describe("Filter by reliability level, e.g. 'reliable' or 'less reliable'"),
       },
     },
-    async ({ limit, type, topic, person, days, project_id, author, reliability }) => {
+    withMcpLogging("list_thoughts", async ({ limit, type, topic, person, days, project_id, author, reliability }) => {
       try {
         let q = supabase
           .from("thoughts")
-          .select("content, metadata, created_at, updated_at, reliability, author")
+          .select("id, content, metadata, created_at, updated_at, reliability, author")
           .order("created_at", { ascending: false })
           .limit(limit);
 
@@ -187,12 +193,12 @@ export function register(server: McpServer, supabase: SupabaseClient) {
 
         const results = data.map(
           (
-            t: { content: string; metadata: Record<string, unknown>; created_at: string; updated_at: string | null; reliability: string | null; author: string | null },
+            t: { id: string; content: string; metadata: Record<string, unknown>; created_at: string; updated_at: string | null; reliability: string | null; author: string | null },
             i: number
           ) => {
             const m = t.metadata || {};
             const tags = Array.isArray(m.topics) ? (m.topics as string[]).join(", ") : "";
-            const parts = [`${i + 1}. [${new Date(t.created_at).toISOString()}] (${m.type || "??"}${tags ? " - " + tags : ""})`];
+            const parts = [`${i + 1}. [${new Date(t.created_at).toISOString()}] (${m.type || "??"}${tags ? " - " + tags : ""})`, `   ID: ${t.id}`];
             if (t.updated_at) {
               parts.push(`   Updated: ${new Date(t.updated_at).toISOString()}`);
             }
@@ -212,10 +218,13 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           }
         );
 
+        const thoughtIds = data.map((t: { id: string }) => t.id);
+
         return {
           content: [{
             type: "text" as const,
-            text: `${data.length} recent thought(s):\n\n${results.join("\n\n")}`,
+            text: `${data.length} recent thought(s):\n\n${results.join("\n\n")}` +
+              `\n\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${JSON.stringify(thoughtIds)}`,
           }],
         };
       } catch (err: unknown) {
@@ -224,7 +233,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // Tool 3: Stats
@@ -240,7 +249,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         project_id: z.string().optional().describe("Filter statistics to a specific project UUID — only counts thoughts linked to this project"),
       },
     },
-    async ({ project_id }) => {
+    withMcpLogging("thought_stats", async ({ project_id }) => {
       try {
         let countQuery = supabase
           .from("thoughts")
@@ -304,7 +313,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // Tool 4: Get Thought by ID
@@ -319,7 +328,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().uuid().describe("The UUID of the thought to retrieve"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("get_thought_by_id", async ({ id }) => {
       try {
         const { data, error } = await supabase
           .from("thoughts")
@@ -373,7 +382,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // Tool 5: Capture Thought
@@ -395,7 +404,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         document_ids: z.string().array().optional().describe("UUIDs of source documents this thought was derived from (e.g. from write_document). Stored in metadata.references.documents for traceability."),
       },
     },
-    async ({ content, author, project_ids, document_ids }) => {
+    withMcpLogging("capture_thought", async ({ content, author, project_ids, document_ids }) => {
       try {
         // Run structural parser + extractor pipeline
         let references: Record<string, string[]> = {};
@@ -462,7 +471,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // Tool 6: Update Thought
@@ -487,7 +496,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         document_ids: z.string().array().optional().describe("Replace document associations — these UUIDs become the new metadata.references.documents array"),
       },
     },
-    async ({ id, content, reliability, author, project_ids, document_ids }) => {
+    withMcpLogging("update_thought", async ({ id, content, reliability, author, project_ids, document_ids }) => {
       try {
         // Validate at least one optional field is provided
         if (
@@ -634,7 +643,49 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
+  );
+
+  // Tool 7: Record Useful Thoughts
+  server.registerTool(
+    "record_useful_thoughts",
+    {
+      title: "Record Useful Thoughts",
+      description:
+        "Record which thoughts were useful during this interaction by incrementing their usefulness score. " +
+        "Call this with the IDs of thoughts that helped you answer the user's question or accomplish their task. " +
+        "This feedback loop helps surface the most valuable thoughts in future queries. " +
+        "Each call increments the score by 1 for every thought ID provided.",
+      inputSchema: {
+        thought_ids: z.string().uuid().array().min(1).describe("Array of thought UUIDs that were useful in this interaction"),
+      },
+    },
+    withMcpLogging("record_useful_thoughts", async ({ thought_ids }) => {
+      try {
+        const { data: affectedCount, error } = await supabase.rpc("increment_usefulness", {
+          thought_ids,
+        });
+
+        if (error) {
+          return {
+            content: [{ type: "text" as const, text: `Failed to record usefulness: ${error.message}` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Recorded usefulness for ${affectedCount} thought(s) out of ${thought_ids.length} provided.`,
+          }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }, logger)
   );
 
 }

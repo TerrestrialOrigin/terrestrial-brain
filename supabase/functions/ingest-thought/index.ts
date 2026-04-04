@@ -9,6 +9,47 @@ const SLACK_CAPTURE_CHANNEL = Deno.env.get("SLACK_CAPTURE_CHANNEL")!;
 const MCP_ENDPOINT = `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp`;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// ─── Fire-and-forget function call logging ──────────────────────────────────
+
+async function logFunctionCall(
+  functionName: string,
+  input: Record<string, unknown>,
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("function_call_logs")
+      .insert({
+        function_name: functionName,
+        function_type: "http",
+        input: JSON.stringify(input),
+      })
+      .select("id")
+      .single();
+    if (error) {
+      console.error(`Function call logging failed: ${error.message}`);
+      return null;
+    }
+    return data.id;
+  } catch (err) {
+    console.error(`Function call logging error: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+async function logFunctionError(logId: string, errorDetails: string): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from("function_call_logs")
+      .update({ error_details: errorDetails })
+      .eq("id", logId);
+    if (error) {
+      console.error(`Function call error logging failed: ${error.message}`);
+    }
+  } catch (err) {
+    console.error(`Function call error logging error: ${(err as Error).message}`);
+  }
+}
+
 /**
  * Calls the MCP server's capture_thought tool via Streamable HTTP transport.
  * Sends a JSON-RPC batch: initialize → initialized notification → tools/call.
@@ -111,10 +152,13 @@ async function processMessage(event: Record<string, unknown>): Promise<void> {
     return;
   }
 
+  const logId = await logFunctionCall("ingest-thought", { content: messageText });
+
   try {
     const result = await callCaptureThought(messageText);
 
     if (result.isError) {
+      if (logId) await logFunctionError(logId, result.text);
       await replyInSlack(channel, messageTs, `Failed to capture: ${result.text}`);
       return;
     }
@@ -122,6 +166,7 @@ async function processMessage(event: Record<string, unknown>): Promise<void> {
     await replyInSlack(channel, messageTs, result.text);
   } catch (error) {
     console.error("Error capturing thought:", error);
+    if (logId) await logFunctionError(logId, (error as Error).message);
     await replyInSlack(channel, messageTs, `Failed to capture: ${(error as Error).message}`);
   }
 }

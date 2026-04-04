@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { validateFilePath } from "../validators.ts";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
 // ---------------------------------------------------------------------------
 // Task input type for create_tasks_with_output
@@ -140,7 +141,7 @@ export async function handleRejectAIOutput(supabase: SupabaseClient, ids: string
 // MCP tool registration — only AI-facing tools remain
 // ---------------------------------------------------------------------------
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   server.registerTool(
     "create_ai_output",
     {
@@ -158,7 +159,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         source_context: z.string().optional().describe("What prompted this output (for provenance tracking)"),
       },
     },
-    async ({ title, content, file_path, source_context }) => {
+    withMcpLogging("create_ai_output", async ({ title, content, file_path, source_context }) => {
       try {
         const pathError = validateFilePath(file_path);
         if (pathError) {
@@ -195,7 +196,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -253,7 +254,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           .describe("What prompted this output (for provenance tracking)"),
       },
     },
-    async ({ title, file_path, tasks, source_context }) => {
+    withMcpLogging("create_tasks_with_output", async ({ title, file_path, tasks, source_context }) => {
       try {
         const pathError = validateFilePath(file_path);
         if (pathError) {
@@ -414,6 +415,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    },
+    }, logger),
   );
 }
