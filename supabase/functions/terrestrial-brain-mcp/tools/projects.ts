@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   server.registerTool(
     "create_project",
     {
@@ -19,7 +20,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         description: z.string().optional().describe("Project description — include client name, purpose, location, key contacts, or any context that helps understand this project at a glance"),
       },
     },
-    async ({ name, type, parent_id, description }) => {
+    withMcpLogging("create_project", async ({ name, type, parent_id, description }) => {
       try {
         const { data, error } = await supabase
           .from("projects")
@@ -48,7 +49,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -65,7 +66,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         type: z.string().optional().describe("Filter by project type"),
       },
     },
-    async ({ include_archived, parent_id, type }) => {
+    withMcpLogging("list_projects", async ({ include_archived, parent_id, type }) => {
       try {
         let q = supabase
           .from("projects")
@@ -137,7 +138,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -152,7 +153,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Project UUID"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("get_project", async ({ id }) => {
       try {
         const { data: project, error } = await supabase
           .from("projects")
@@ -217,7 +218,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -238,7 +239,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         description: z.string().optional().describe("New or updated description — include client name, purpose, location, key contacts, or any context. Append to existing description unless correcting outdated info"),
       },
     },
-    async ({ id, name, type, parent_id, description }) => {
+    withMcpLogging("update_project", async ({ id, name, type, parent_id, description }) => {
       try {
         const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
@@ -271,7 +272,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -286,7 +287,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Project UUID to archive"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("archive_project", async ({ id }) => {
       try {
         // Get the project name
         const { data: project, error: fetchErr } = await supabase
@@ -360,6 +361,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 }

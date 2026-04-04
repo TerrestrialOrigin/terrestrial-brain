@@ -6,8 +6,9 @@ import { runExtractionPipeline } from "../extractors/pipeline.ts";
 import { ProjectExtractor } from "../extractors/project-extractor.ts";
 import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   // ─── write_document ───────────────────────────────────────────────────────────
 
   server.registerTool(
@@ -33,7 +34,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         }).optional().describe("Explicit references — if omitted, extracted automatically from content"),
       },
     },
-    async ({ title, content, project_id, file_path, references }) => {
+    withMcpLogging("write_document", async ({ title, content, project_id, file_path, references }) => {
       try {
         let resolvedReferences: Record<string, string[]> = references
           ? { people: references.people || [], tasks: references.tasks || [] }
@@ -96,7 +97,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // ─── get_document ─────────────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Document UUID"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("get_document", async ({ id }) => {
       try {
         const { data, error } = await supabase
           .from("documents")
@@ -162,7 +163,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // ─── list_documents ───────────────────────────────────────────────────────────
@@ -183,7 +184,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         limit: z.number().optional().default(20).describe("Max results (default 20)"),
       },
     },
-    async ({ project_id, title_contains, search, limit }) => {
+    withMcpLogging("list_documents", async ({ project_id, title_contains, search, limit }) => {
       try {
         let query = supabase
           .from("documents")
@@ -249,7 +250,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   // ─── update_document ──────────────────────────────────────────────────────────
@@ -271,7 +272,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         project_id: z.string().optional().describe("UUID of the new owning project"),
       },
     },
-    async ({ id, title, content, project_id }) => {
+    withMcpLogging("update_document", async ({ id, title, content, project_id }) => {
       try {
         // Validate at least one optional field is provided
         if (title === undefined && content === undefined && project_id === undefined) {
@@ -365,6 +366,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 }

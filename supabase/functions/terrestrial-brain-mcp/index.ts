@@ -19,12 +19,14 @@ import {
 import { register as registerQueries } from "./tools/queries.ts";
 import { register as registerPeople } from "./tools/people.ts";
 import { register as registerDocuments } from "./tools/documents.ts";
+import { createFunctionCallLogger, extractIpAddress, setCurrentRequestIp } from "./logger.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const MCP_ACCESS_KEY = Deno.env.get("MCP_ACCESS_KEY")!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const logger = createFunctionCallLogger(supabase);
 
 // ─── MCP Server ───────────────────────────────────────────────────────────────
 
@@ -33,13 +35,13 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-registerThoughts(server, supabase);
-registerProjects(server, supabase);
-registerTasks(server, supabase);
-registerAIOutput(server, supabase);
-registerQueries(server, supabase);
-registerPeople(server, supabase);
-registerDocuments(server, supabase);
+registerThoughts(server, supabase, logger);
+registerProjects(server, supabase, logger);
+registerTasks(server, supabase, logger);
+registerAIOutput(server, supabase, logger);
+registerQueries(server, supabase, logger);
+registerPeople(server, supabase, logger);
+registerDocuments(server, supabase, logger);
 
 // ─── Hono App with Auth Check ─────────────────────────────────────────────────
 
@@ -62,12 +64,16 @@ app.all("*", async (c) => {
     return c.json({ error: "Invalid or missing access key" }, 401);
   }
 
+  const ipAddress = extractIpAddress(c.req.raw.headers);
+
   // Direct HTTP route for ingest-note (not MCP)
   if (url.pathname.endsWith("/ingest-note") && c.req.method === "POST") {
     try {
       const body = await c.req.json();
+      const logId = await logger.logCall("ingest-note", "http", body || {}, ipAddress);
       const content = body?.content;
       if (!content || typeof content !== "string" || content.trim().length === 0) {
+        if (logId) await logger.logError(logId, "content is required");
         return c.json({ success: false, error: "content is required" }, 400);
       }
 
@@ -80,6 +86,7 @@ app.all("*", async (c) => {
       if (result.success) {
         return c.json({ success: true, message: result.message });
       } else {
+        if (logId) await logger.logError(logId, result.error || "Unknown error");
         return c.json({ success: false, error: result.error }, 500);
       }
     } catch (err: unknown) {
@@ -90,8 +97,12 @@ app.all("*", async (c) => {
   // Direct HTTP route for get-pending-ai-output
   if (url.pathname.endsWith("/get-pending-ai-output") && c.req.method === "POST") {
     try {
+      const logId = await logger.logCall("get-pending-ai-output", "http", {}, ipAddress);
       const result = await handleGetPendingAIOutput(supabase);
-      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      if (result.error) {
+        if (logId) await logger.logError(logId, result.error);
+        return c.json({ success: false, error: result.error }, 500);
+      }
       return c.json({ success: true, data: result.data });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -101,8 +112,12 @@ app.all("*", async (c) => {
   // Direct HTTP route for get-pending-ai-output-metadata
   if (url.pathname.endsWith("/get-pending-ai-output-metadata") && c.req.method === "POST") {
     try {
+      const logId = await logger.logCall("get-pending-ai-output-metadata", "http", {}, ipAddress);
       const result = await handleGetPendingAIOutputMetadata(supabase);
-      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      if (result.error) {
+        if (logId) await logger.logError(logId, result.error);
+        return c.json({ success: false, error: result.error }, 500);
+      }
       return c.json({ success: true, data: result.data });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -113,12 +128,17 @@ app.all("*", async (c) => {
   if (url.pathname.endsWith("/fetch-ai-output-content") && c.req.method === "POST") {
     try {
       const body = await c.req.json();
+      const logId = await logger.logCall("fetch-ai-output-content", "http", body || {}, ipAddress);
       const ids = body?.ids;
       if (!ids || !Array.isArray(ids)) {
+        if (logId) await logger.logError(logId, "ids array is required");
         return c.json({ success: false, error: "ids array is required" }, 400);
       }
       const result = await handleFetchAIOutputContent(supabase, ids);
-      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      if (result.error) {
+        if (logId) await logger.logError(logId, result.error);
+        return c.json({ success: false, error: result.error }, 500);
+      }
       return c.json({ success: true, data: result.data });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -129,12 +149,17 @@ app.all("*", async (c) => {
   if (url.pathname.endsWith("/mark-ai-output-picked-up") && c.req.method === "POST") {
     try {
       const body = await c.req.json();
+      const logId = await logger.logCall("mark-ai-output-picked-up", "http", body || {}, ipAddress);
       const ids = body?.ids;
       if (!ids || !Array.isArray(ids)) {
+        if (logId) await logger.logError(logId, "ids array is required");
         return c.json({ success: false, error: "ids array is required" }, 400);
       }
       const result = await handleMarkAIOutputPickedUp(supabase, ids);
-      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      if (result.error) {
+        if (logId) await logger.logError(logId, result.error);
+        return c.json({ success: false, error: result.error }, 500);
+      }
       return c.json({ success: true, message: result.message });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -145,12 +170,17 @@ app.all("*", async (c) => {
   if (url.pathname.endsWith("/reject-ai-output") && c.req.method === "POST") {
     try {
       const body = await c.req.json();
+      const logId = await logger.logCall("reject-ai-output", "http", body || {}, ipAddress);
       const ids = body?.ids;
       if (!ids || !Array.isArray(ids)) {
+        if (logId) await logger.logError(logId, "ids array is required");
         return c.json({ success: false, error: "ids array is required" }, 400);
       }
       const result = await handleRejectAIOutput(supabase, ids);
-      if (result.error) return c.json({ success: false, error: result.error }, 500);
+      if (result.error) {
+        if (logId) await logger.logError(logId, result.error);
+        return c.json({ success: false, error: result.error }, 500);
+      }
       return c.json({ success: true, message: result.message });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -158,6 +188,7 @@ app.all("*", async (c) => {
   }
 
   // MCP transport for all other requests
+  setCurrentRequestIp(ipAddress);
   const transport = new StreamableHTTPTransport();
   await server.connect(transport);
   return transport.handleRequest(c);

@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient) {
+export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   server.registerTool(
     "create_person",
     {
@@ -18,7 +19,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         description: z.string().optional().describe("Notes about this person — role, relationship, context"),
       },
     },
-    async ({ name, type, email, description }) => {
+    withMcpLogging("create_person", async ({ name, type, email, description }) => {
       try {
         const { data, error } = await supabase
           .from("people")
@@ -47,7 +48,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -63,7 +64,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         include_archived: z.boolean().optional().default(false).describe("Include archived people"),
       },
     },
-    async ({ type, include_archived }) => {
+    withMcpLogging("list_people", async ({ type, include_archived }) => {
       try {
         let query = supabase
           .from("people")
@@ -108,7 +109,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -122,7 +123,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Person UUID"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("get_person", async ({ id }) => {
       try {
         const { data: person, error } = await supabase
           .from("people")
@@ -165,7 +166,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -184,7 +185,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         description: z.string().optional().describe("New or updated description"),
       },
     },
-    async ({ id, name, type, email, description }) => {
+    withMcpLogging("update_person", async ({ id, name, type, email, description }) => {
       try {
         const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
@@ -217,7 +218,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 
   server.registerTool(
@@ -232,7 +233,7 @@ export function register(server: McpServer, supabase: SupabaseClient) {
         id: z.string().describe("Person UUID to archive"),
       },
     },
-    async ({ id }) => {
+    withMcpLogging("archive_person", async ({ id }) => {
       try {
         const { data: person, error: fetchError } = await supabase
           .from("people")
@@ -268,6 +269,6 @@ export function register(server: McpServer, supabase: SupabaseClient) {
           isError: true,
         };
       }
-    }
+    }, logger)
   );
 }
