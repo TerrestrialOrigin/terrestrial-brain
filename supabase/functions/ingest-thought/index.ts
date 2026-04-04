@@ -50,6 +50,32 @@ async function logFunctionError(logId: string, errorDetails: string): Promise<vo
   }
 }
 
+async function logFunctionResult(
+  logId: string,
+  recordsReturned: number,
+  responseCharacters: number,
+  errorDetails?: string | null,
+): Promise<void> {
+  try {
+    const updatePayload: Record<string, unknown> = {
+      records_returned: recordsReturned,
+      response_characters: responseCharacters,
+    };
+    if (errorDetails) {
+      updatePayload.error_details = errorDetails;
+    }
+    const { error } = await supabase
+      .from("function_call_logs")
+      .update(updatePayload)
+      .eq("id", logId);
+    if (error) {
+      console.error(`Function call result logging failed: ${error.message}`);
+    }
+  } catch (err) {
+    console.error(`Function call result logging error: ${(err as Error).message}`);
+  }
+}
+
 /**
  * Calls the MCP server's capture_thought tool via Streamable HTTP transport.
  * Sends a JSON-RPC batch: initialize → initialized notification → tools/call.
@@ -158,15 +184,16 @@ async function processMessage(event: Record<string, unknown>): Promise<void> {
     const result = await callCaptureThought(messageText);
 
     if (result.isError) {
-      if (logId) await logFunctionError(logId, result.text);
+      if (logId) await logFunctionResult(logId, 0, result.text.length, result.text);
       await replyInSlack(channel, messageTs, `Failed to capture: ${result.text}`);
       return;
     }
 
+    if (logId) await logFunctionResult(logId, 1, result.text.length);
     await replyInSlack(channel, messageTs, result.text);
   } catch (error) {
     console.error("Error capturing thought:", error);
-    if (logId) await logFunctionError(logId, (error as Error).message);
+    if (logId) await logFunctionResult(logId, 0, 0, (error as Error).message);
     await replyInSlack(channel, messageTs, `Failed to capture: ${(error as Error).message}`);
   }
 }

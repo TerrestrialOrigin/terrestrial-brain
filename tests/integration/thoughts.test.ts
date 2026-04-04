@@ -690,3 +690,205 @@ Deno.test("cleanup ingest_note test data", async () => {
   );
   assertEquals(response.ok, true, "Cleanup should succeed");
 });
+
+// ─── archive_thought Tests ─────────────────────────────────────────────────
+
+const ARCHIVE_THOUGHT_CLEANUP_IDS: string[] = [];
+
+Deno.test("archive_thought archives a thought", async () => {
+  const uniqueContent = `Archive test thought ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent, author: "test-archive" });
+
+  // Get the thought ID
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  const thoughtId = thoughts[0].id;
+  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+
+  const result = await callTool("archive_thought", { id: thoughtId });
+  assertExists(result);
+  assertEquals(result.includes("Archived thought:"), true, `Should confirm archiving. Got: ${result}`);
+
+  // Verify archived_at is set in DB
+  const verifyResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=archived_at`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(verifyResponse.ok, true);
+  const verified: { archived_at: string | null }[] = await verifyResponse.json();
+  assertEquals(verified.length, 1);
+  assertExists(verified[0].archived_at, "archived_at should be set");
+});
+
+Deno.test("archive_thought on already-archived thought returns error", async () => {
+  // Use the thought archived in the previous test
+  const thoughtId = ARCHIVE_THOUGHT_CLEANUP_IDS[0];
+  assertExists(thoughtId, "Need an archived thought ID from previous test");
+
+  const res = await fetch(BASE, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/call",
+      params: { name: "archive_thought", arguments: { id: thoughtId } }
+    })
+  });
+  const text = await res.text();
+  let resultText: string;
+  let isError: boolean;
+  if (text.startsWith("event:")) {
+    const dataLine = text.split("\n").find(l => l.startsWith("data:"));
+    const parsed = JSON.parse(dataLine!.slice(5).trim());
+    resultText = parsed.result?.content?.[0]?.text || "";
+    isError = !!parsed.result?.isError;
+  } else {
+    const parsed = JSON.parse(text);
+    resultText = parsed.result?.content?.[0]?.text || "";
+    isError = !!parsed.result?.isError;
+  }
+
+  assertEquals(isError, true, `Should return error for already-archived thought. Got: ${resultText}`);
+  assertEquals(
+    resultText.includes("already archived") || resultText.includes("not found"),
+    true,
+    `Error message should mention already archived or not found. Got: ${resultText}`,
+  );
+});
+
+Deno.test("list_thoughts excludes archived thoughts by default", async () => {
+  // Capture a new thought and archive it
+  const uniqueContent = `Archived list exclusion test ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent, author: "test-archive-list" });
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  const thoughtId = thoughts[0].id;
+  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+
+  // Archive it
+  await callTool("archive_thought", { id: thoughtId });
+
+  // list_thoughts should NOT include it
+  const listResult = await callTool("list_thoughts", { limit: 100 });
+  assertEquals(
+    listResult.includes(uniqueContent),
+    false,
+    `Archived thought should not appear in list_thoughts. Got: ${listResult.substring(0, 500)}`,
+  );
+});
+
+Deno.test("list_thoughts with include_archived shows archived thoughts", async () => {
+  // The thought archived in the previous test should appear with include_archived
+  const listResult = await callTool("list_thoughts", { limit: 100, include_archived: true });
+  assertExists(listResult);
+  // At least one archived thought should now be present
+  assertEquals(
+    listResult.includes("test-archive-list") || listResult.includes("Archived list exclusion test"),
+    true,
+    `Archived thought should appear when include_archived=true. Got: ${listResult.substring(0, 500)}`,
+  );
+});
+
+Deno.test("search_thoughts excludes archived thoughts", async () => {
+  // Capture a thought with very specific content, archive it, then search for it
+  const uniqueContent = `Archived search exclusion zylophone quantum ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent, author: "test-archive-search" });
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  const thoughtId = thoughts[0].id;
+  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+
+  // Archive it
+  await callTool("archive_thought", { id: thoughtId });
+
+  // Search should not find it — either "No thoughts found" or results that don't include the archived thought's ID
+  const searchResult = await callTool("search_thoughts", {
+    query: uniqueContent,
+    limit: 10,
+    threshold: 0.3,
+  });
+  assertEquals(
+    searchResult.includes(thoughtId),
+    false,
+    `Archived thought ID should not appear in search_thoughts results. Got: ${searchResult.substring(0, 500)}`,
+  );
+});
+
+Deno.test("thought_stats excludes archived thoughts from counts", async () => {
+  // Get stats before — the archived thoughts from previous tests should not be counted
+  const statsResult = await callTool("thought_stats", {});
+  const countMatch = statsResult.match(/Total thoughts:\s*(\d+)/);
+  assertExists(countMatch);
+  const totalCount = parseInt(countMatch![1]);
+
+  // Verify by checking the DB directly for non-archived count
+  const dbResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?archived_at=is.null&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        Prefer: "count=exact",
+      },
+    },
+  );
+  // Consume the response body to avoid resource leak
+  await dbResponse.text();
+  const dbCount = parseInt(dbResponse.headers.get("content-range")?.split("/")[1] || "0");
+  assertEquals(totalCount, dbCount, `thought_stats count (${totalCount}) should match non-archived DB count (${dbCount})`);
+});
+
+Deno.test("cleanup archive_thought test data", async () => {
+  for (const thoughtId of ARCHIVE_THOUGHT_CLEANUP_IDS) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
+  }
+});

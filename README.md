@@ -37,10 +37,16 @@ AI Agents (Claude, etc.) -+---> Search thoughts semantically
 ## Features
 
 - **Automatic note ingestion** -- Edit a note in Obsidian and it syncs to your brain after a configurable delay (default 5 min). Hash-based dedup prevents redundant syncs.
-- **Semantic search** -- All thoughts are embedded with `text-embedding-3-small` via OpenRouter. Search by meaning, not just keywords.
+- **Semantic search** -- All thoughts are embedded with `text-embedding-3-small` via OpenRouter. Search by meaning, not just keywords. Filter by author model and reliability level.
 - **AI extraction pipeline** -- LLM-powered extractors automatically detect projects, tasks, and people mentioned in your notes and create/link database records.
-- **AI output workflow** -- AI agents can submit content (summaries, analyses, plans) to an `ai_output` table. The plugin polls for pending output, presents it for human review (accept/reject/postpone), and writes accepted content back into your vault.
-- **MCP server** -- 30+ tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
+- **Document storage** -- Store and manage long-form reference documents (research, specs, briefs) linked to projects. Documents are automatically scanned for people and task references.
+- **Provenance tracking** -- Every thought records which AI model authored it and a reliability classification (`reliable` / `less reliable`), so you can filter your knowledge base by trust level.
+- **Usefulness scoring** -- AI agents can mark thoughts they found helpful, incrementing a `usefulness_score`. Over time this surfaces the most valuable knowledge.
+- **Archiving** -- Soft-delete support across projects, tasks, and people. Archiving a project cascades to its children and their open tasks. Archived records are hidden by default but remain queryable.
+- **Composite queries** -- Single-call summaries like `get_project_summary` (project details, child projects, open tasks, recent thoughts, source notes) and `get_recent_activity` (cross-table activity feed with configurable lookback).
+- **AI output workflow** -- AI agents can submit content (summaries, analyses, plans) to an `ai_output` table. The plugin polls for pending output, presents it for human review (accept/reject/postpone), and writes accepted content back into your vault. Batch task creation with auto-generated markdown checklists is also supported.
+- **Function call logging** -- Every MCP tool call and HTTP endpoint invocation is logged with input, response size, record count, errors, and caller IP address for a complete audit trail.
+- **MCP server** -- 31 tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
 - **Row-Level Security** -- All database tables have RLS enabled with access-key authentication.
 
 ## Project Structure
@@ -55,31 +61,26 @@ terrestrial-brain/
 ├── supabase/                     # Supabase backend
 │   ├── config.toml               #   Local dev configuration
 │   ├── seed.sql                  #   Seed data for local development
-│   ├── migrations/               #   Database migrations (PostgreSQL)
-│   │   ├── 00000000000000_initial.sql        # thoughts table + pgvector
-│   │   ├── 20260321000001_projects.sql       # projects CRUD
-│   │   ├── 20260321000002_tasks.sql          # tasks CRUD
-│   │   ├── 20260322000001_create_note_snapshots_ai_output.sql
-│   │   ├── 20260322000004_enable_rls.sql     # Row-Level Security
-│   │   ├── 20260324000001_people.sql         # people table
-│   │   └── ...                               # (12 migration files total)
+│   ├── migrations/               #   Database migrations (PostgreSQL, 22 files)
 │   └── functions/                #   Supabase Edge Functions (Deno)
 │       ├── terrestrial-brain-mcp/    # Main MCP server
 │       │   ├── index.ts              #   Hono + MCP server entry
 │       │   ├── helpers.ts            #   OpenRouter API calls
 │       │   ├── parser.ts             #   Markdown structural parser
 │       │   ├── validators.ts         #   Zod schemas
+│       │   ├── logger.ts             #   Function call audit logging
 │       │   ├── extractors/           #   LLM-based content extractors
 │       │   │   ├── pipeline.ts       #     Orchestrates all extractors
 │       │   │   ├── project-extractor.ts
 │       │   │   ├── task-extractor.ts
 │       │   │   └── people-extractor.ts
 │       │   └── tools/                #   MCP tool implementations
-│       │       ├── thoughts.ts       #     search, list, capture, ingest
-│       │       ├── projects.ts       #     CRUD for projects
-│       │       ├── tasks.ts          #     CRUD for tasks
-│       │       ├── people.ts         #     CRUD for people + activity feed
-│       │       ├── ai_output.ts      #     AI output accept/reject workflow
+│       │       ├── thoughts.ts       #     search, list, capture, stats, usefulness
+│       │       ├── projects.ts       #     CRUD + archive for projects
+│       │       ├── tasks.ts          #     CRUD + archive for tasks
+│       │       ├── people.ts         #     CRUD + archive for people
+│       │       ├── documents.ts      #     Long-form document storage
+│       │       ├── ai_output.ts      #     AI output + batch task creation
 │       │       └── queries.ts        #     Cross-table composite queries
 │       └── ingest-thought/       # Secondary edge function (Slack integration)
 ├── tests/                        # Node.js integration tests (Vitest)
@@ -110,12 +111,14 @@ terrestrial-brain/
 
 | Table | Purpose |
 |---|---|
-| `thoughts` | Atomic ideas/notes with vector embeddings and JSONB metadata |
-| `projects` | Project groupings (client/internal), with hierarchy via `parent_id` |
-| `tasks` | Action items extracted from notes, linked to projects and people |
-| `people` | Human and AI entities referenced in notes |
-| `note_snapshots` | Version history of ingested notes |
-| `ai_output` | AI-generated content awaiting human review (accept/reject/postpone) |
+| `thoughts` | Atomic ideas/notes with vector embeddings, JSONB metadata, provenance (author/reliability), usefulness scoring, and soft-delete archiving |
+| `projects` | Project groupings (client/personal/research/internal), with hierarchy via `parent_id` and soft-delete archiving |
+| `tasks` | Action items linked to projects and people, with status tracking (open/in_progress/done/deferred) and subtask hierarchy |
+| `people` | Human and AI entities referenced in notes, with soft-delete archiving |
+| `documents` | Long-form reference documents (research, specs, briefs) linked to projects, with extracted people/task references |
+| `note_snapshots` | Version history of ingested notes with source tracking |
+| `ai_output` | AI-generated content awaiting human review (accept/reject/postpone) with pickup and archival workflow |
+| `function_call_logs` | Audit trail for all MCP tool calls and HTTP endpoint invocations, tracking input, response size, errors, and caller IP |
 
 ---
 
@@ -243,7 +246,7 @@ curl -X POST https://<your-project-ref>.supabase.co/functions/v1/terrestrial-bra
 You should get a JSON-RPC response (not a 401 or 500).
 
 You can also check the Supabase dashboard:
-- **Table Editor** -- tables exist: `thoughts`, `projects`, `tasks`, `people`, `note_snapshots`, `ai_output`
+- **Table Editor** -- tables exist: `thoughts`, `projects`, `tasks`, `people`, `documents`, `note_snapshots`, `ai_output`, `function_call_logs`
 - **Edge Functions** -- `terrestrial-brain-mcp` is listed and active
 
 ### Step 6: Install the Obsidian Plugin
@@ -322,7 +325,17 @@ Add to your `.claude/settings.json`:
 }
 ```
 
-Once connected, your AI agent has access to tools like `search_thoughts`, `list_thoughts`, `capture_thought`, `ingest_note`, `create_project`, `list_tasks`, `create_ai_output`, and more.
+Once connected, your AI agent has access to 31 MCP tools:
+
+| Category | Tools |
+|---|---|
+| Thoughts | `search_thoughts`, `list_thoughts`, `capture_thought`, `get_thought_by_id`, `update_thought`, `thought_stats`, `record_useful_thoughts`, `archive_thought` |
+| Projects | `create_project`, `list_projects`, `get_project`, `update_project`, `archive_project` |
+| Tasks | `create_task`, `list_tasks`, `get_tasks`, `update_task`, `archive_task` |
+| People | `create_person`, `list_people`, `get_person`, `update_person`, `archive_person` |
+| Documents | `write_document`, `list_documents`, `get_document`, `update_document` |
+| AI Output | `create_ai_output`, `create_tasks_with_output` |
+| Queries | `get_project_summary`, `get_recent_activity` |
 
 ---
 

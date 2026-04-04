@@ -45,6 +45,13 @@ export interface FunctionCallLogger {
   ): Promise<string | null>;
 
   logError(logId: string, errorDetails: string): Promise<void>;
+
+  logResult(
+    logId: string,
+    recordsReturned: number,
+    responseCharacters: number,
+    errorDetails?: string | null,
+  ): Promise<void>;
 }
 
 export function createFunctionCallLogger(supabase: SupabaseClient): FunctionCallLogger {
@@ -87,19 +94,43 @@ export function createFunctionCallLogger(supabase: SupabaseClient): FunctionCall
         console.error(`Function call error logging error: ${(err as Error).message}`);
       }
     },
+
+    async logResult(logId, recordsReturned, responseCharacters, errorDetails): Promise<void> {
+      try {
+        const updatePayload: Record<string, unknown> = {
+          records_returned: recordsReturned,
+          response_characters: responseCharacters,
+        };
+        if (errorDetails) {
+          updatePayload.error_details = errorDetails;
+        }
+
+        const { error } = await supabase
+          .from("function_call_logs")
+          .update(updatePayload)
+          .eq("id", logId);
+
+        if (error) {
+          console.error(`Function call result logging failed: ${error.message}`);
+        }
+      } catch (err) {
+        console.error(`Function call result logging error: ${(err as Error).message}`);
+      }
+    },
   };
 }
 
 // ─── MCP tool handler wrapper ───────────────────────────────────────────────
 
 interface McpToolResult {
-  content: { type: string; text: string }[];
+  [key: string]: unknown;
+  content: { type: "text"; text: string }[];
   isError?: boolean;
 }
 
 /**
  * Wraps an MCP tool handler with fire-and-forget logging.
- * Logs input before execution; updates error_details if the response has isError.
+ * Logs input before execution; always updates with result metrics afterward.
  */
 // deno-lint-ignore no-explicit-any
 export function withMcpLogging(
@@ -117,9 +148,17 @@ export function withMcpLogging(
 
     const result = await handler(...args);
 
-    if (result.isError && logId) {
-      const errorText = result.content?.[0]?.text || "Unknown error";
-      await logger.logError(logId, errorText);
+    if (logId) {
+      const contentEntries = result.content || [];
+      const recordsReturned = contentEntries.length;
+      const responseCharacters = contentEntries.reduce(
+        (total: number, entry: { text?: string }) => total + (entry.text?.length || 0),
+        0,
+      );
+      const errorText = result.isError
+        ? (contentEntries[0]?.text || "Unknown error")
+        : null;
+      await logger.logResult(logId, recordsReturned, responseCharacters, errorText);
     }
 
     return result;

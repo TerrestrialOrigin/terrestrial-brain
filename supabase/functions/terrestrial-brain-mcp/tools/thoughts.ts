@@ -148,15 +148,18 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         project_id: z.string().optional().describe("Filter by project UUID — matches thoughts whose metadata.references.projects array contains this UUID"),
         author: z.string().optional().describe("Filter by the model that authored the thought, e.g. 'claude-sonnet-4-6' or 'gpt-4o-mini'"),
         reliability: z.string().optional().describe("Filter by reliability level, e.g. 'reliable' or 'less reliable'"),
+        include_archived: z.boolean().optional().default(false).describe("Include archived thoughts in results (default: false)"),
       },
     },
-    withMcpLogging("list_thoughts", async ({ limit, type, topic, person, days, project_id, author, reliability }) => {
+    withMcpLogging("list_thoughts", async ({ limit, type, topic, person, days, project_id, author, reliability, include_archived }) => {
       try {
         let q = supabase
           .from("thoughts")
           .select("id, content, metadata, created_at, updated_at, reliability, author")
           .order("created_at", { ascending: false })
           .limit(limit);
+
+        if (!include_archived) q = q.is("archived_at", null);
 
         if (type) q = q.contains("metadata", { type });
         if (topic) q = q.contains("metadata", { topics: [topic] });
@@ -253,13 +256,15 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       try {
         let countQuery = supabase
           .from("thoughts")
-          .select("*", { count: "exact", head: true });
+          .select("*", { count: "exact", head: true })
+          .is("archived_at", null);
         if (project_id) countQuery = countQuery.contains("metadata", { references: { projects: [project_id] } });
         const { count } = await countQuery;
 
         let dataQuery = supabase
           .from("thoughts")
           .select("metadata, created_at")
+          .is("archived_at", null)
           .order("created_at", { ascending: false });
         if (project_id) dataQuery = dataQuery.contains("metadata", { references: { projects: [project_id] } });
         const { data } = await dataQuery;
@@ -688,6 +693,60 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
     }, logger)
   );
 
+  // Tool 8: Archive Thought
+  server.registerTool(
+    "archive_thought",
+    {
+      title: "Archive Thought",
+      description:
+        "Archive a thought by setting its archived_at timestamp. " +
+        "Archived thoughts are hidden from search, listing, and stats by default — they are not deleted and can still be retrieved with include_archived. " +
+        "Use this when a thought is outdated, incorrect, or no longer relevant. Confirm with the user before archiving.",
+      inputSchema: {
+        id: z.string().uuid().describe("UUID of the thought to archive"),
+      },
+    },
+    withMcpLogging("archive_thought", async ({ id }) => {
+      try {
+        const { data: thought, error: fetchError } = await supabase
+          .from("thoughts")
+          .select("id, content")
+          .eq("id", id)
+          .is("archived_at", null)
+          .single();
+
+        if (fetchError || !thought) {
+          return {
+            content: [{ type: "text" as const, text: `Thought not found or already archived: ${fetchError?.message || "unknown"}` }],
+            isError: true,
+          };
+        }
+
+        const { error: archiveError } = await supabase
+          .from("thoughts")
+          .update({ archived_at: new Date().toISOString() })
+          .eq("id", id);
+
+        if (archiveError) {
+          return {
+            content: [{ type: "text" as const, text: `Archive failed: ${archiveError.message}` }],
+            isError: true,
+          };
+        }
+
+        const preview = thought.content.length > 80 ? thought.content.slice(0, 80) + "…" : thought.content;
+        return {
+          content: [{ type: "text" as const, text: `Archived thought: "${preview}"` }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }, logger)
+  );
+
 }
 
 // ─── Standalone ingest_note handler (called via direct HTTP route, not MCP) ──
@@ -742,6 +801,7 @@ export async function handleIngestNote(
         .from("thoughts")
         .select("id, content, created_at")
         .eq("reference_id", note_id)
+        .is("archived_at", null)
         .order("created_at", { ascending: true });
 
       if (error) throw new Error(`Failed to fetch existing thoughts: ${error.message}`);

@@ -277,9 +277,10 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         }
 
         // Fetch project names for markdown headings
+        const typedTasks = tasks as TaskInput[];
         const projectIds = [
           ...new Set(
-            tasks.filter((task) => task.project_id).map((task) => task.project_id!),
+            typedTasks.filter((task) => task.project_id).map((task) => task.project_id!),
           ),
         ];
         let projectNameMap: Record<string, string> = {};
@@ -299,7 +300,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         // Fetch person names for markdown assignee labels
         const personIds = [
           ...new Set(
-            tasks.filter((task) => task.assigned_to).map((task) => task.assigned_to!),
+            typedTasks.filter((task) => task.assigned_to).map((task) => task.assigned_to!),
           ),
         ];
         let personNameMap: Record<string, string> = {};

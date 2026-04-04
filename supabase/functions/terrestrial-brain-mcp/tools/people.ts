@@ -142,7 +142,8 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .from("tasks")
           .select("*", { count: "exact", head: true })
           .eq("assigned_to", id)
-          .in("status", ["open", "in_progress"]);
+          .in("status", ["open", "in_progress"])
+          .is("archived_at", null);
 
         const lines = [
           `Name: ${person.name}`,

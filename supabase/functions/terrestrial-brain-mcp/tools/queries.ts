@@ -86,12 +86,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .from("thoughts")
             .select("id, content, metadata, note_snapshot_id, created_at")
             .contains("metadata", { references: { projects: [id] } })
+            .is("archived_at", null)
             .order("created_at", { ascending: false })
             .limit(10),
           supabase
             .from("thoughts")
             .select("id, content, metadata, note_snapshot_id, created_at")
             .contains("metadata", { references: { project_id: id } })
+            .is("archived_at", null)
             .order("created_at", { ascending: false })
             .limit(10),
         ]);
@@ -284,6 +286,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data: thoughts } = await supabase
           .from("thoughts")
           .select("id, content, metadata, created_at")
+          .is("archived_at", null)
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false })
           .limit(20);
@@ -292,6 +295,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data: tasksCreated } = await supabase
           .from("tasks")
           .select("content, status, project_id, created_at")
+          .is("archived_at", null)
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false });
 
@@ -300,6 +304,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .from("tasks")
           .select("content, project_id, updated_at")
           .eq("status", "done")
+          .is("archived_at", null)
           .gte("updated_at", sinceIso)
           .order("updated_at", { ascending: false });
 
@@ -307,12 +312,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data: projectsCreated } = await supabase
           .from("projects")
           .select("name, type, created_at")
+          .is("archived_at", null)
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false });
 
         const { data: projectsUpdated } = await supabase
           .from("projects")
           .select("name, type, updated_at")
+          .is("archived_at", null)
           .gte("updated_at", sinceIso)
           .order("updated_at", { ascending: false });
 
@@ -343,12 +350,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data: peopleCreated } = await supabase
           .from("people")
           .select("name, type, created_at")
+          .is("archived_at", null)
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false });
 
         const { data: peopleUpdated } = await supabase
           .from("people")
           .select("name, type, updated_at")
+          .is("archived_at", null)
           .gte("updated_at", sinceIso)
           .order("updated_at", { ascending: false });
 

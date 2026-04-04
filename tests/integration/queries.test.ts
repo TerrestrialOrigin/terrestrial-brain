@@ -170,3 +170,158 @@ Deno.test("get_recent_activity shows tasks with project names", async () => {
   // At least the tasks section should have project associations
   assertStringIncludes(result, "Terrestrial Brain");
 });
+
+// ─── Archived record exclusion tests ──────────────────────────────────────
+
+const SUPABASE_URL = "http://localhost:54321";
+const SUPABASE_SERVICE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+
+const ARCHIVE_QUERY_CLEANUP_IDS: { table: string; id: string }[] = [];
+
+Deno.test("get_recent_activity excludes archived thoughts", async () => {
+  // Capture a thought, archive it, then verify it doesn't appear in recent activity
+  const uniqueContent = `Archived activity exclusion test ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent, author: "test-archived-activity" });
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  const thoughtId = thoughts[0].id;
+  ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "thoughts", id: thoughtId });
+
+  // Archive it
+  await callTool("archive_thought", { id: thoughtId });
+
+  // Check get_recent_activity
+  const result = await callTool("get_recent_activity", { days: 1 });
+  assertEquals(
+    result.includes(uniqueContent),
+    false,
+    `Archived thought should not appear in get_recent_activity. Got: ${result.substring(0, 500)}`,
+  );
+});
+
+Deno.test("get_recent_activity excludes archived tasks", async () => {
+  // Create a task, archive it, verify exclusion
+  const taskContent = `Archived task activity test ${Date.now()}`;
+  const createResult = await callTool("create_task", {
+    content: taskContent,
+    project_id: TERRESTRIAL_BRAIN_ID,
+  });
+  const taskMatch = createResult.match(/ID: ([0-9a-f-]+)/i) || createResult.match(/id: ([0-9a-f-]+)/i);
+  assertExists(taskMatch, `Should have created a task. Got: ${createResult}`);
+  const taskId = taskMatch![1];
+  ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "tasks", id: taskId });
+
+  // Archive it
+  await callTool("archive_task", { id: taskId });
+
+  const result = await callTool("get_recent_activity", { days: 1 });
+  assertEquals(
+    result.includes(taskContent),
+    false,
+    `Archived task should not appear in get_recent_activity. Got: ${result.substring(0, 800)}`,
+  );
+});
+
+Deno.test("get_recent_activity excludes archived projects", async () => {
+  const projectName = `Archived project activity test ${Date.now()}`;
+  const createResult = await callTool("create_project", {
+    name: projectName,
+    type: "personal",
+  });
+  const projectMatch = createResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(projectMatch, `Should have created a project. Got: ${createResult}`);
+  const projectId = projectMatch![1];
+  ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "projects", id: projectId });
+
+  // Archive it
+  await callTool("archive_project", { id: projectId });
+
+  const result = await callTool("get_recent_activity", { days: 1 });
+  assertEquals(
+    result.includes(projectName),
+    false,
+    `Archived project should not appear in get_recent_activity. Got: ${result.substring(0, 800)}`,
+  );
+});
+
+Deno.test("get_recent_activity excludes archived people", async () => {
+  const personName = `Archived person activity test ${Date.now()}`;
+  const createResult = await callTool("create_person", {
+    name: personName,
+    type: "human",
+  });
+  const personMatch = createResult.match(/id: ([0-9a-f-]+)/i) || createResult.match(/ID: ([0-9a-f-]+)/i);
+  assertExists(personMatch, `Should have created a person. Got: ${createResult}`);
+  const personId = personMatch![1];
+  ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "people", id: personId });
+
+  // Archive it
+  await callTool("archive_person", { id: personId });
+
+  const result = await callTool("get_recent_activity", { days: 1 });
+  assertEquals(
+    result.includes(personName),
+    false,
+    `Archived person should not appear in get_recent_activity. Got: ${result.substring(0, 800)}`,
+  );
+});
+
+Deno.test("get_project_summary excludes archived thoughts", async () => {
+  // Capture a thought linked to TB project, archive it, verify it's excluded from summary
+  const uniqueContent = `Archived summary exclusion test ${Date.now()}`;
+  await callTool("capture_thought", {
+    content: uniqueContent,
+    author: "test-archived-summary",
+    project_ids: [TERRESTRIAL_BRAIN_ID],
+  });
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "thoughts", id: thoughts[0].id });
+
+  // Archive it
+  await callTool("archive_thought", { id: thoughts[0].id });
+
+  const result = await callTool("get_project_summary", { id: TERRESTRIAL_BRAIN_ID });
+  assertEquals(
+    result.includes(uniqueContent),
+    false,
+    `Archived thought should not appear in get_project_summary. Got: ${result.substring(0, 800)}`,
+  );
+});
+
+Deno.test("cleanup archive query test data", async () => {
+  for (const entry of ARCHIVE_QUERY_CLEANUP_IDS) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/${entry.table}?id=eq.${entry.id}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    assertEquals(response.ok, true, `Cleanup of ${entry.table}/${entry.id} should succeed`);
+  }
+});

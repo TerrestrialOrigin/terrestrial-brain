@@ -73,7 +73,7 @@ app.all("*", async (c) => {
       const logId = await logger.logCall("ingest-note", "http", body || {}, ipAddress);
       const content = body?.content;
       if (!content || typeof content !== "string" || content.trim().length === 0) {
-        if (logId) await logger.logError(logId, "content is required");
+        if (logId) await logger.logResult(logId, 0, 0, "content is required");
         return c.json({ success: false, error: "content is required" }, 400);
       }
 
@@ -84,9 +84,11 @@ app.all("*", async (c) => {
       });
 
       if (result.success) {
+        const responseText = result.message || "";
+        if (logId) await logger.logResult(logId, 1, responseText.length);
         return c.json({ success: true, message: result.message });
       } else {
-        if (logId) await logger.logError(logId, result.error || "Unknown error");
+        if (logId) await logger.logResult(logId, 0, 0, result.error || "Unknown error");
         return c.json({ success: false, error: result.error }, 500);
       }
     } catch (err: unknown) {
@@ -100,9 +102,12 @@ app.all("*", async (c) => {
       const logId = await logger.logCall("get-pending-ai-output", "http", {}, ipAddress);
       const result = await handleGetPendingAIOutput(supabase);
       if (result.error) {
-        if (logId) await logger.logError(logId, result.error);
+        if (logId) await logger.logResult(logId, 0, 0, result.error);
         return c.json({ success: false, error: result.error }, 500);
       }
+      const responseJson = JSON.stringify(result.data);
+      const recordCount = Array.isArray(result.data) ? result.data.length : 1;
+      if (logId) await logger.logResult(logId, recordCount, responseJson.length);
       return c.json({ success: true, data: result.data });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -115,9 +120,12 @@ app.all("*", async (c) => {
       const logId = await logger.logCall("get-pending-ai-output-metadata", "http", {}, ipAddress);
       const result = await handleGetPendingAIOutputMetadata(supabase);
       if (result.error) {
-        if (logId) await logger.logError(logId, result.error);
+        if (logId) await logger.logResult(logId, 0, 0, result.error);
         return c.json({ success: false, error: result.error }, 500);
       }
+      const responseJson = JSON.stringify(result.data);
+      const recordCount = Array.isArray(result.data) ? result.data.length : 1;
+      if (logId) await logger.logResult(logId, recordCount, responseJson.length);
       return c.json({ success: true, data: result.data });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -131,14 +139,17 @@ app.all("*", async (c) => {
       const logId = await logger.logCall("fetch-ai-output-content", "http", body || {}, ipAddress);
       const ids = body?.ids;
       if (!ids || !Array.isArray(ids)) {
-        if (logId) await logger.logError(logId, "ids array is required");
+        if (logId) await logger.logResult(logId, 0, 0, "ids array is required");
         return c.json({ success: false, error: "ids array is required" }, 400);
       }
       const result = await handleFetchAIOutputContent(supabase, ids);
       if (result.error) {
-        if (logId) await logger.logError(logId, result.error);
+        if (logId) await logger.logResult(logId, 0, 0, result.error);
         return c.json({ success: false, error: result.error }, 500);
       }
+      const responseJson = JSON.stringify(result.data);
+      const recordCount = Array.isArray(result.data) ? result.data.length : 1;
+      if (logId) await logger.logResult(logId, recordCount, responseJson.length);
       return c.json({ success: true, data: result.data });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -152,14 +163,16 @@ app.all("*", async (c) => {
       const logId = await logger.logCall("mark-ai-output-picked-up", "http", body || {}, ipAddress);
       const ids = body?.ids;
       if (!ids || !Array.isArray(ids)) {
-        if (logId) await logger.logError(logId, "ids array is required");
+        if (logId) await logger.logResult(logId, 0, 0, "ids array is required");
         return c.json({ success: false, error: "ids array is required" }, 400);
       }
       const result = await handleMarkAIOutputPickedUp(supabase, ids);
       if (result.error) {
-        if (logId) await logger.logError(logId, result.error);
+        if (logId) await logger.logResult(logId, 0, 0, result.error);
         return c.json({ success: false, error: result.error }, 500);
       }
+      const responseText = result.message || "";
+      if (logId) await logger.logResult(logId, ids.length, responseText.length);
       return c.json({ success: true, message: result.message });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
@@ -173,14 +186,16 @@ app.all("*", async (c) => {
       const logId = await logger.logCall("reject-ai-output", "http", body || {}, ipAddress);
       const ids = body?.ids;
       if (!ids || !Array.isArray(ids)) {
-        if (logId) await logger.logError(logId, "ids array is required");
+        if (logId) await logger.logResult(logId, 0, 0, "ids array is required");
         return c.json({ success: false, error: "ids array is required" }, 400);
       }
       const result = await handleRejectAIOutput(supabase, ids);
       if (result.error) {
-        if (logId) await logger.logError(logId, result.error);
+        if (logId) await logger.logResult(logId, 0, 0, result.error);
         return c.json({ success: false, error: result.error }, 500);
       }
+      const responseText = result.message || "";
+      if (logId) await logger.logResult(logId, ids.length, responseText.length);
       return c.json({ success: true, message: result.message });
     } catch (err: unknown) {
       return c.json({ success: false, error: (err as Error).message }, 500);
