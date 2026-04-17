@@ -28,7 +28,8 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       title: "Get Project Summary",
       description:
         "Get a comprehensive summary of a project in a single call: project details (name, type, description), child projects, " +
-        "all open tasks (with assigned person names), recent thoughts referencing this project, and source notes from Obsidian. " +
+        "all open tasks (with assigned person names), the 25 most recent thoughts referencing this project, and a list of " +
+        "referenced Obsidian source notes (titles and reference IDs only — not the note bodies). " +
         "This is the best starting point when the user asks about a specific project — it gives you the full picture " +
         "so you can answer follow-up questions without additional calls. Prefer this over get_project for richer context.",
       inputSchema: {
@@ -88,14 +89,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .contains("metadata", { references: { projects: [id] } })
             .is("archived_at", null)
             .order("created_at", { ascending: false })
-            .limit(10),
+            .limit(25),
           supabase
             .from("thoughts")
             .select("id, content, metadata, note_snapshot_id, created_at")
             .contains("metadata", { references: { project_id: id } })
             .is("archived_at", null)
             .order("created_at", { ascending: false })
-            .limit(10),
+            .limit(25),
         ]);
 
         // Merge and deduplicate by ID, then take top 10 by date
@@ -108,7 +109,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             return true;
           })
           .sort((thoughtA, thoughtB) => new Date(thoughtB.created_at).getTime() - new Date(thoughtA.created_at).getTime())
-          .slice(0, 10);
+          .slice(0, 25);
 
         // 6. Fetch source note snapshots for matching thoughts
         const snapshotIds = [
@@ -489,6 +490,75 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
 
         return {
           content: [{ type: "text" as const, text: sections.join("\n") }],
+        };
+      } catch (err: unknown) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }, logger)
+  );
+
+  // ─── get_note_snapshot ───────────────────────────────────────────────────
+
+  server.registerTool(
+    "get_note_snapshot",
+    {
+      title: "Get Note Snapshot",
+      description:
+        "Fetch the full body of an Obsidian source note by snapshot id or reference_id. " +
+        "USE SPARINGLY. The thought's own `content` is almost always sufficient — prefer it. " +
+        "Only call this tool when you genuinely need the surrounding note context, for example: " +
+        "(a) the thought content is ambiguous, truncated, or does not make sense on its own, or " +
+        "(b) the user explicitly asks to see the original note, or " +
+        "(c) answering the user's question provably requires material that is not in the thought. " +
+        "Do NOT call this routinely, in bulk, or 'just in case' — note bodies are long and pollute the context window. " +
+        "If `get_project_summary` or a thought record already answers the question, stop there.",
+      inputSchema: {
+        id: z.string().optional().describe("Snapshot UUID (preferred when known, e.g. from a thought's note_snapshot_id)"),
+        reference_id: z.string().optional().describe("Obsidian reference_id (e.g. vault-relative path), used when the UUID is not known"),
+      },
+    },
+    withMcpLogging("get_note_snapshot", async ({ id, reference_id }) => {
+      try {
+        if (!id && !reference_id) {
+          return {
+            content: [{ type: "text" as const, text: "Must provide either `id` or `reference_id`." }],
+            isError: true,
+          };
+        }
+
+        let query = supabase
+          .from("note_snapshots")
+          .select("id, reference_id, title, content, source, captured_at");
+
+        query = id ? query.eq("id", id) : query.eq("reference_id", reference_id!);
+
+        const { data: snapshot, error } = await query.single();
+
+        if (error || !snapshot) {
+          return {
+            content: [{ type: "text" as const, text: `Note snapshot not found: ${error?.message || "unknown"}` }],
+            isError: true,
+          };
+        }
+
+        const header = [
+          `# ${snapshot.title || snapshot.reference_id}`,
+          "",
+          `**Reference ID:** ${snapshot.reference_id}`,
+          `**Source:** ${snapshot.source || "—"}`,
+          `**Captured:** ${formatDate(snapshot.captured_at)}`,
+          `**Snapshot ID:** ${snapshot.id}`,
+          "",
+          "---",
+          "",
+          snapshot.content,
+        ].join("\n");
+
+        return {
+          content: [{ type: "text" as const, text: header }],
         };
       } catch (err: unknown) {
         return {
