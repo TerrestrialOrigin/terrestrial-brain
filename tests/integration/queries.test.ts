@@ -165,9 +165,14 @@ Deno.test("get_recent_activity clamps zero days to 1", async () => {
 });
 
 Deno.test("get_recent_activity shows tasks with project names", async () => {
-  // Seed tasks are linked to Terrestrial Brain project
+  // Create a fresh task linked to Terrestrial Brain so it always appears in the 1-day window
+  const TB_PROJECT_ID = "00000000-0000-0000-0000-000000000002";
+  await callTool("create_task", {
+    content: `recent-activity-project-name-test-${Date.now()}`,
+    project_id: TB_PROJECT_ID,
+  });
+
   const result = await callTool("get_recent_activity", { days: 1 });
-  // At least the tasks section should have project associations
   assertStringIncludes(result, "Terrestrial Brain");
 });
 

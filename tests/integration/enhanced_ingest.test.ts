@@ -249,6 +249,86 @@ Deno.test("ingest_note: re-sync updates snapshot, no duplicates", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// 5.4b — ingest_note skips processing when content is unchanged
+// ---------------------------------------------------------------------------
+
+Deno.test("ingest_note: unchanged content is skipped (no duplicate thoughts)", async () => {
+  const noteId = `test/enhanced-ingest/unchanged-${Date.now()}.md`;
+  testNoteIds.push(noteId);
+
+  const noteContent = "Obsidian Sync should not cause duplicate ingestion of unchanged notes.";
+
+  // First ingest — should process normally
+  const firstResult = await callIngestNote({
+    content: noteContent,
+    title: "Unchanged Test",
+    note_id: noteId,
+  });
+  assertExists(firstResult);
+
+  // Count thoughts after first ingest
+  const { data: thoughtsBefore } = await supabase
+    .from("thoughts")
+    .select("id")
+    .eq("reference_id", noteId)
+    .is("archived_at", null);
+  assertExists(thoughtsBefore);
+  const countBefore = thoughtsBefore.length;
+  assertEquals(countBefore > 0, true, "First ingest should create at least one thought");
+
+  // Second ingest with identical content — should be skipped
+  const secondResult = await callIngestNote({
+    content: noteContent,
+    title: "Unchanged Test",
+    note_id: noteId,
+  });
+  assertExists(secondResult);
+  assertEquals(
+    secondResult.includes("unchanged") || secondResult.includes("skipped"),
+    true,
+    `Expected skip message, got: ${secondResult}`,
+  );
+
+  // Count thoughts after second ingest — should be the same
+  const { data: thoughtsAfter } = await supabase
+    .from("thoughts")
+    .select("id")
+    .eq("reference_id", noteId)
+    .is("archived_at", null);
+  assertExists(thoughtsAfter);
+  assertEquals(
+    thoughtsAfter.length,
+    countBefore,
+    `Thought count should remain ${countBefore} after unchanged re-ingest, got ${thoughtsAfter.length}`,
+  );
+});
+
+Deno.test("ingest_note: changed content is NOT skipped", async () => {
+  const noteId = `test/enhanced-ingest/changed-${Date.now()}.md`;
+  testNoteIds.push(noteId);
+
+  // First ingest
+  await callIngestNote({
+    content: "Version 1 of a note about content change detection.",
+    title: "Changed Test",
+    note_id: noteId,
+  });
+
+  // Second ingest with different content — should NOT be skipped
+  const secondResult = await callIngestNote({
+    content: "Version 2 of the note — completely rewritten with new information.",
+    title: "Changed Test",
+    note_id: noteId,
+  });
+  assertExists(secondResult);
+  assertEquals(
+    secondResult.includes("skipped"),
+    false,
+    `Changed content should NOT be skipped, got: ${secondResult}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // 5.5 — ingest_note re-sync with checkbox state change updates task status
 // ---------------------------------------------------------------------------
 

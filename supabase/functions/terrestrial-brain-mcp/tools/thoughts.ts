@@ -758,6 +758,19 @@ export async function handleIngestNote(
   { content, title, note_id }: { content: string; title?: string; note_id?: string },
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   try {
+    // Step 0: Skip if content is unchanged (prevents duplicate ingestion from Obsidian Sync)
+    if (note_id) {
+      const { data: existing } = await supabase
+        .from("note_snapshots")
+        .select("content")
+        .eq("reference_id", note_id)
+        .single();
+
+      if (existing && existing.content === content) {
+        return { success: true, message: "Note unchanged — skipped." };
+      }
+    }
+
     // Step 1: Upsert note snapshot
     let noteSnapshotId: string | null = null;
     if (note_id) {
