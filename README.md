@@ -337,6 +337,13 @@ Once connected, your AI agent has access to 31 MCP tools:
 | AI Output | `create_ai_output`, `create_tasks_with_output` |
 | Queries | `get_project_summary`, `get_recent_activity` |
 
+### Usefulness feedback loop
+
+`search_thoughts` returns a `⚠️ REQUIRED BEFORE NEXT USER RESPONSE:` header listing candidate thought IDs and instructing the model to call `record_useful_thoughts` before its next user-facing reply.
+
+- `record_useful_thoughts` accepts an empty `thought_ids` array — pass `[]` when no returned thought contributed to your answer. Skipping the call is not the correct response to "nothing was useful"; passing `[]` is.
+- `capture_thought` accepts an optional `builds_on: string[]` parameter. When provided, each listed thought's `usefulness_score` is incremented by 1 after the insert succeeds. This is additive to `record_useful_thoughts` for synthesis flows, not a replacement.
+
 ---
 
 ## Local Development
