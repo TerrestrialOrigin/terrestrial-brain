@@ -330,3 +330,89 @@ Deno.test("cleanup archive query test data", async () => {
     assertEquals(response.ok, true, `Cleanup of ${entry.table}/${entry.id} should succeed`);
   }
 });
+
+// ─── get_note_snapshot Tests ──────────────────────────────────────────────
+
+const NOTE_SNAPSHOT_CLEANUP_IDS: string[] = [];
+
+async function createNoteSnapshot(overrides: Partial<{ reference_id: string; title: string; content: string }> = {}): Promise<{ id: string; reference_id: string; title: string; content: string }> {
+  const ts = Date.now() + Math.floor(Math.random() * 1000);
+  const payload = {
+    reference_id: overrides.reference_id ?? `test-snapshot-${ts}.md`,
+    title: overrides.title ?? `Test Snapshot ${ts}`,
+    content: overrides.content ?? `# Test Note\n\nBody content for snapshot test ${ts}.`,
+    source: "obsidian",
+  };
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/note_snapshots`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to seed note_snapshot: ${response.status} ${await response.text()}`);
+  }
+  const rows: { id: string; reference_id: string; title: string; content: string }[] = await response.json();
+  NOTE_SNAPSHOT_CLEANUP_IDS.push(rows[0].id);
+  return rows[0];
+}
+
+Deno.test("get_note_snapshot fetches by id", async () => {
+  const snapshot = await createNoteSnapshot();
+  const result = await callTool("get_note_snapshot", { id: snapshot.id });
+  assertStringIncludes(result, snapshot.title);
+  assertStringIncludes(result, snapshot.reference_id);
+  assertStringIncludes(result, snapshot.content);
+  assertStringIncludes(result, snapshot.id);
+});
+
+Deno.test("get_note_snapshot fetches by reference_id", async () => {
+  const snapshot = await createNoteSnapshot();
+  const result = await callTool("get_note_snapshot", { reference_id: snapshot.reference_id });
+  assertStringIncludes(result, snapshot.title);
+  assertStringIncludes(result, snapshot.content);
+  assertStringIncludes(result, snapshot.reference_id);
+});
+
+Deno.test("get_note_snapshot prefers id over reference_id when both provided", async () => {
+  const s1 = await createNoteSnapshot({ content: "Content AAA unique marker" });
+  const s2 = await createNoteSnapshot({ content: "Content BBB unique marker" });
+  const result = await callTool("get_note_snapshot", { id: s1.id, reference_id: s2.reference_id });
+  assertStringIncludes(result, "Content AAA unique marker");
+  assertEquals(result.includes("Content BBB unique marker"), false);
+});
+
+Deno.test("get_note_snapshot returns error when neither id nor reference_id provided", async () => {
+  const result = await callToolRaw("get_note_snapshot", {});
+  assertEquals(result.isError, true);
+  assertStringIncludes(result.text, "Must provide");
+});
+
+Deno.test("get_note_snapshot returns error for non-existent id", async () => {
+  const result = await callToolRaw("get_note_snapshot", { id: "00000000-0000-0000-0000-999999999999" });
+  assertEquals(result.isError, true);
+  assertStringIncludes(result.text, "not found");
+});
+
+Deno.test("get_note_snapshot returns error for non-existent reference_id", async () => {
+  const result = await callToolRaw("get_note_snapshot", { reference_id: `does-not-exist-${Date.now()}.md` });
+  assertEquals(result.isError, true);
+  assertStringIncludes(result.text, "not found");
+});
+
+Deno.test("cleanup note snapshot test data", async () => {
+  for (const id of NOTE_SNAPSHOT_CLEANUP_IDS) {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/note_snapshots?id=eq.${id}`, {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    });
+    assertEquals(response.ok, true, `Cleanup of note_snapshots/${id} should succeed`);
+  }
+});
