@@ -892,3 +892,262 @@ Deno.test("cleanup archive_thought test data", async () => {
     assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
   }
 });
+
+// ─── Usefulness Feedback Loop Tests ─────────────────────────────────────────
+
+const USEFULNESS_CLEANUP_IDS: string[] = [];
+
+async function captureAndGetId(content: string, author = "test-usefulness"): Promise<string> {
+  await callTool("capture_thought", { content, author });
+  return await lookupThoughtId(content);
+}
+
+async function lookupThoughtId(content: string): Promise<string> {
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(content)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const rows: { id: string }[] = await response.json();
+  assertEquals(rows.length, 1, `Should find exactly one thought with content "${content}"`);
+  return rows[0].id;
+}
+
+async function getUsefulnessScore(thoughtId: string): Promise<number> {
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=usefulness_score`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true);
+  const rows: { usefulness_score: number }[] = await response.json();
+  assertEquals(rows.length, 1, `Should find thought ${thoughtId}`);
+  return rows[0].usefulness_score;
+}
+
+Deno.test("record_useful_thoughts bumps scores for real UUIDs", async () => {
+  const idA = await captureAndGetId(`Usefulness real A ${Date.now()}`);
+  const idB = await captureAndGetId(`Usefulness real B ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(idA, idB);
+
+  const baselineA = await getUsefulnessScore(idA);
+  const baselineB = await getUsefulnessScore(idB);
+
+  const result = await callTool("record_useful_thoughts", { thought_ids: [idA, idB] });
+  assertEquals(
+    result,
+    "Recorded usefulness for 2 thought(s) out of 2 provided.",
+    `Expected standard confirmation. Got: ${result}`,
+  );
+
+  assertEquals(await getUsefulnessScore(idA), baselineA + 1);
+  assertEquals(await getUsefulnessScore(idB), baselineB + 1);
+});
+
+Deno.test("record_useful_thoughts accepts empty array without error", async () => {
+  const result = await callTool("record_useful_thoughts", { thought_ids: [] });
+  assertEquals(
+    result,
+    "Recorded usefulness for 0 thought(s) out of 0 provided.",
+    `Empty array should return zero-count confirmation. Got: ${result}`,
+  );
+});
+
+Deno.test("record_useful_thoughts with mix of real and unknown UUIDs bumps only real", async () => {
+  const realId = await captureAndGetId(`Usefulness mix real ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(realId);
+  const unknownId = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+
+  const baseline = await getUsefulnessScore(realId);
+
+  const result = await callTool("record_useful_thoughts", {
+    thought_ids: [realId, unknownId],
+  });
+  assertEquals(
+    result,
+    "Recorded usefulness for 1 thought(s) out of 2 provided.",
+    `Expected 1-of-2 confirmation. Got: ${result}`,
+  );
+
+  assertEquals(await getUsefulnessScore(realId), baseline + 1);
+});
+
+Deno.test("search_thoughts payload starts with usefulness header and omits legacy footer", async () => {
+  const uniqueContent = `Usefulness header search marker quokka ${Date.now()}`;
+  const newId = await captureAndGetId(uniqueContent, "test-usefulness-header");
+  USEFULNESS_CLEANUP_IDS.push(newId);
+
+  const result = await callTool("search_thoughts", {
+    query: uniqueContent,
+    limit: 5,
+    threshold: 0.3,
+  });
+  assertExists(result);
+
+  if (result.includes("No thoughts found")) {
+    throw new Error(
+      `Expected to find the just-captured thought "${uniqueContent}" but got "No thoughts found".`,
+    );
+  }
+
+  assertEquals(
+    result.startsWith("⚠️ REQUIRED BEFORE NEXT USER RESPONSE:"),
+    true,
+    `Payload must start with the header prefix. Got: ${result.substring(0, 200)}`,
+  );
+  assertEquals(
+    result.includes("Candidate IDs from this search:"),
+    true,
+    `Payload must include the Candidate IDs line. Got: ${result.substring(0, 400)}`,
+  );
+  assertEquals(
+    result.includes(`"${newId}"`),
+    true,
+    `Candidate IDs JSON must include the captured id ${newId}. Got: ${result.substring(0, 400)}`,
+  );
+  const separatorIndex = result.indexOf("--- Results ---");
+  const firstResultIndex = result.indexOf("--- Result 1 ");
+  assertEquals(
+    separatorIndex !== -1 && firstResultIndex !== -1 && separatorIndex < firstResultIndex,
+    true,
+    `'--- Results ---' separator must appear before first '--- Result 1 ...' block. Separator at ${separatorIndex}, first result at ${firstResultIndex}. Got: ${result.substring(0, 600)}`,
+  );
+  assertEquals(
+    result.includes("Reminder: If any of these thoughts were useful"),
+    false,
+    `Legacy footer reminder must be absent. Got tail: ${result.substring(Math.max(0, result.length - 400))}`,
+  );
+});
+
+Deno.test("capture_thought with builds_on bumps prior thoughts and reports credit", async () => {
+  const priorA = await captureAndGetId(`Usefulness builds_on prior A ${Date.now()}`);
+  const priorB = await captureAndGetId(`Usefulness builds_on prior B ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(priorA, priorB);
+
+  const baselineA = await getUsefulnessScore(priorA);
+  const baselineB = await getUsefulnessScore(priorB);
+
+  const synthContent = `Usefulness builds_on synthesized thought ${Date.now()}`;
+  const confirmation = await callTool("capture_thought", {
+    content: synthContent,
+    author: "test-usefulness-builds-on",
+    builds_on: [priorA, priorB],
+  });
+  assertExists(confirmation);
+  assertEquals(
+    confirmation.includes("credited 2 prior thought(s) as sources."),
+    true,
+    `Confirmation should report 2 credited sources. Got: ${confirmation}`,
+  );
+
+  const synthId = await lookupThoughtId(synthContent);
+  USEFULNESS_CLEANUP_IDS.push(synthId);
+
+  assertEquals(await getUsefulnessScore(priorA), baselineA + 1);
+  assertEquals(await getUsefulnessScore(priorB), baselineB + 1);
+});
+
+Deno.test("capture_thought without builds_on does not touch other scores", async () => {
+  const sentinelId = await captureAndGetId(`Usefulness sentinel ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(sentinelId);
+  const baseline = await getUsefulnessScore(sentinelId);
+
+  const neutralContent = `Usefulness no-builds_on neutral ${Date.now()}`;
+  const confirmation = await callTool("capture_thought", {
+    content: neutralContent,
+    author: "test-usefulness-no-builds-on",
+  });
+  assertExists(confirmation);
+  assertEquals(
+    confirmation.includes("credited") && confirmation.includes("prior thought(s) as sources."),
+    false,
+    `Confirmation must NOT include a credited-sources note when builds_on is omitted. Got: ${confirmation}`,
+  );
+
+  const neutralId = await lookupThoughtId(neutralContent);
+  USEFULNESS_CLEANUP_IDS.push(neutralId);
+
+  assertEquals(
+    await getUsefulnessScore(sentinelId),
+    baseline,
+    "Sentinel score must be unchanged when a different thought is captured without builds_on",
+  );
+});
+
+Deno.test("capture_thought with builds_on containing unknown UUID still inserts and reports partial credit", async () => {
+  const priorId = await captureAndGetId(`Usefulness partial prior ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(priorId);
+  const unknownId = "11111111-1111-4111-8111-111111111111";
+  const baseline = await getUsefulnessScore(priorId);
+
+  const synthContent = `Usefulness partial synth ${Date.now()}`;
+  const confirmation = await callTool("capture_thought", {
+    content: synthContent,
+    author: "test-usefulness-partial",
+    builds_on: [priorId, unknownId],
+  });
+  assertExists(confirmation);
+  assertEquals(
+    confirmation.includes("credited 1 prior thought(s) as sources."),
+    true,
+    `Confirmation should report 1 credited source. Got: ${confirmation}`,
+  );
+
+  const synthId = await lookupThoughtId(synthContent);
+  USEFULNESS_CLEANUP_IDS.push(synthId);
+
+  assertEquals(await getUsefulnessScore(priorId), baseline + 1);
+});
+
+Deno.test("capture_thought with empty builds_on array inserts without credit note", async () => {
+  const sentinelId = await captureAndGetId(`Usefulness empty-builds_on sentinel ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(sentinelId);
+  const baseline = await getUsefulnessScore(sentinelId);
+
+  const newContent = `Usefulness empty-builds_on new ${Date.now()}`;
+  const confirmation = await callTool("capture_thought", {
+    content: newContent,
+    author: "test-usefulness-empty-builds-on",
+    builds_on: [],
+  });
+  assertExists(confirmation);
+  assertEquals(
+    confirmation.includes("credited") && confirmation.includes("prior thought(s) as sources."),
+    false,
+    `Confirmation must NOT include a credited-sources note for empty builds_on. Got: ${confirmation}`,
+  );
+
+  const newId = await lookupThoughtId(newContent);
+  USEFULNESS_CLEANUP_IDS.push(newId);
+
+  assertEquals(
+    await getUsefulnessScore(sentinelId),
+    baseline,
+    "Sentinel score must be unchanged when builds_on is empty",
+  );
+});
+
+Deno.test("cleanup usefulness feedback loop test data", async () => {
+  for (const thoughtId of USEFULNESS_CLEANUP_IDS) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
+  }
+});

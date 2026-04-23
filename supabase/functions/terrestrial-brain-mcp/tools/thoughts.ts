@@ -12,6 +12,19 @@ import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
+function buildUsefulnessHeader(thoughtIds: string[]): string {
+  return [
+    "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
+    "1. Call record_useful_thoughts with IDs that contributed (or empty array).",
+    "2. Scan these results for contradictions/outdated data — surface to user, do NOT archive silently.",
+    "",
+    `Candidate IDs from this search: ${JSON.stringify(thoughtIds)}`,
+    "",
+    "--- Results ---",
+    "",
+  ].join("\n");
+}
+
 export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
   // Tool 1: Semantic Search
   server.registerTool(
@@ -23,7 +36,10 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Use this when the user asks about a topic, person, idea, or decision — even if they phrase it differently from how it was originally captured. " +
         "Returns the most relevant thoughts ranked by similarity. " +
         "Optionally filter results by author (model identifier) or reliability level. " +
-        "Prefer this over list_thoughts when the user has a specific question; use list_thoughts for browsing or filtering by type/date.",
+        "Prefer this over list_thoughts when the user has a specific question; use list_thoughts for browsing or filtering by type/date. " +
+        "CRITICAL: Before your next user-facing response, you MUST call record_useful_thoughts with the IDs of any thoughts that contributed to your answer. " +
+        "If none contributed, call it with an empty array to acknowledge the scan. " +
+        "Also scan the returned thoughts for contradictions or clearly outdated information — if you notice any, flag them to the user in your response (do NOT archive silently).",
       inputSchema: {
         query: z.string().describe("Natural language description of what to search for — works best as a phrase or sentence, not single keywords"),
         limit: z.number().optional().default(10),
@@ -112,12 +128,12 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         );
 
         const thoughtIds = data.map((t: { id: string }) => t.id);
+        const header = buildUsefulnessHeader(thoughtIds);
 
         return {
           content: [{
             type: "text" as const,
-            text: `Found ${data.length} thought(s):\n\n${results.join("\n\n")}` +
-              `\n\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${JSON.stringify(thoughtIds)}`,
+            text: `${header}Found ${data.length} thought(s):\n\n${results.join("\n\n")}`,
           }],
         };
       } catch (err: unknown) {
@@ -401,15 +417,25 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Each thought should be a clear, self-contained statement. " +
         "Pass your model name as author (e.g. 'claude-sonnet-4-6') and any known project_ids to link projects explicitly. " +
         "If this thought was derived from a document stored via write_document, pass the document UUID as document_ids to create a bidirectional link. " +
+        "If this thought was synthesized from prior thoughts you retrieved via search_thoughts, pass their UUIDs as builds_on — each listed thought's usefulness score is incremented as a side effect, which closes the feedback loop inside this call. " +
+        "builds_on is additive to record_useful_thoughts, not a replacement: a thought that both answered the user's question AND became a source for this new thought is genuinely worth crediting twice. " +
         "Reliability is hardcoded to 'reliable' for all calls to this function.",
       inputSchema: {
         content: z.string().describe("The thought to capture — a clear, standalone statement that will make sense when retrieved later by any AI"),
         author: z.string().optional().describe("Model identifier of the AI writing this thought, e.g. 'claude-sonnet-4-6'. Stored for provenance — informational only."),
         project_ids: z.string().array().optional().describe("UUIDs of projects to explicitly associate with this thought, merged with any projects the extractor finds."),
         document_ids: z.string().array().optional().describe("UUIDs of source documents this thought was derived from (e.g. from write_document). Stored in metadata.references.documents for traceability."),
+        builds_on: z
+          .string()
+          .uuid()
+          .array()
+          .optional()
+          .describe(
+            "UUIDs of prior thoughts this new thought was synthesized from. Each listed thought's usefulness_score is incremented by 1 as a side effect after the insert succeeds. Additive to record_useful_thoughts.",
+          ),
       },
     },
-    withMcpLogging("capture_thought", async ({ content, author, project_ids, document_ids }) => {
+    withMcpLogging("capture_thought", async ({ content, author, project_ids, document_ids, builds_on }) => {
       try {
         // Run structural parser + extractor pipeline
         let references: Record<string, string[]> = {};
@@ -458,6 +484,20 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           };
         }
 
+        let buildsOnNote = "";
+        if (builds_on && builds_on.length > 0) {
+          const { data: creditedCount, error: buildsOnError } = await supabase.rpc(
+            "increment_usefulness",
+            { thought_ids: builds_on },
+          );
+          if (buildsOnError) {
+            console.error(`capture_thought builds_on error: ${buildsOnError.message}`);
+            buildsOnNote = ` — failed to credit sources: ${buildsOnError.message}`;
+          } else {
+            buildsOnNote = ` — credited ${creditedCount} prior thought(s) as sources.`;
+          }
+        }
+
         const meta = metadata as Record<string, unknown>;
         let confirmation = `Captured as ${meta.type || "thought"}`;
         if (Array.isArray(meta.topics) && meta.topics.length)
@@ -466,6 +506,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
         if (Array.isArray(meta.action_items) && meta.action_items.length)
           confirmation += ` | Actions: ${(meta.action_items as string[]).join("; ")}`;
+        confirmation += buildsOnNote;
 
         return {
           content: [{ type: "text" as const, text: confirmation }],
@@ -658,11 +699,19 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       title: "Record Useful Thoughts",
       description:
         "Record which thoughts were useful during this interaction by incrementing their usefulness score. " +
-        "Call this with the IDs of thoughts that helped you answer the user's question or accomplish their task. " +
+        "Call this after every search_thoughts call — it is required, not optional. " +
+        "Pass the IDs of thoughts that contributed to your answer. " +
+        "If none of the returned thoughts contributed, pass an empty array to acknowledge the scan — an empty array is the correct input in that case, not a reason to skip the call. " +
         "This feedback loop helps surface the most valuable thoughts in future queries. " +
         "Each call increments the score by 1 for every thought ID provided.",
       inputSchema: {
-        thought_ids: z.string().uuid().array().min(1).describe("Array of thought UUIDs that were useful in this interaction"),
+        thought_ids: z
+          .string()
+          .uuid()
+          .array()
+          .describe(
+            "Array of thought UUIDs that were useful in this interaction. Pass [] if no returned thought contributed — that is the correct value, not a reason to skip the call.",
+          ),
       },
     },
     withMcpLogging("record_useful_thoughts", async ({ thought_ids }) => {

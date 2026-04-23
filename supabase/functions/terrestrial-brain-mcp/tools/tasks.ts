@@ -292,8 +292,8 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           };
         }
 
-        const foundIds = new Set((data || []).map(task => task.id));
-        const missingIds = ids.filter(requestedId => !foundIds.has(requestedId));
+        const foundIds = new Set((data || []).map((task: { id: string }) => task.id));
+        const missingIds = ids.filter((requestedId: string) => !foundIds.has(requestedId));
 
         if (!data || data.length === 0) {
           return {
