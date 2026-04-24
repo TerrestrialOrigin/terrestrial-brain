@@ -11,18 +11,42 @@ import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
+const USEFULNESS_REMINDER_LINES = [
+  "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
+  "1. Call record_useful_thoughts with IDs that contributed (or empty array).",
+  "2. Scan these results for contradictions/outdated data — surface to user, do NOT archive silently.",
+  "",
+  "NEVER skip the record_useful_thoughts step (if no thoughts were found useful, pass in an empty array)! ALWAYS do the record_useful_thoughts step (if no thoughts were found useful, pass in an empty array)!!!",
+];
+
+const USEFULNESS_REMINDER_LINES_SOFT = [
+  "⚠️ BEFORE NEXT USER RESPONSE:",
+  "If any of these thoughts contributed to your response, call record_useful_thoughts with their IDs.",
+  "If none contributed (e.g. you were just browsing), call record_useful_thoughts with an empty array to acknowledge the scan.",
+  "",
+  "Also scan for contradictions/outdated data — surface to user, do NOT archive silently.",
+];
+
+function buildUsefulnessReminder(thoughtIds: string[]): string {
+  return [
+    ...USEFULNESS_REMINDER_LINES,
+    `Candidate IDs from this search: ${JSON.stringify(thoughtIds)}`,
+  ].join("\n");
+}
 
 function buildUsefulnessHeader(thoughtIds: string[]): string {
+  return `${buildUsefulnessReminder(thoughtIds)}\n\n--- Results ---\n\n`;
+}
+
+function buildUsefulnessReminderSoft(thoughtIds: string[]): string {
   return [
-    "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
-    "1. Call record_useful_thoughts with IDs that contributed (or empty array).",
-    "2. Scan these results for contradictions/outdated data — surface to user, do NOT archive silently.",
-    "",
-    `Candidate IDs from this search: ${JSON.stringify(thoughtIds)}`,
-    "",
-    "--- Results ---",
-    "",
+    ...USEFULNESS_REMINDER_LINES_SOFT,
+    `Candidate IDs from this list: ${JSON.stringify(thoughtIds)}`,
   ].join("\n");
+}
+
+function buildUsefulnessHeaderSoft(thoughtIds: string[]): string {
+  return `${buildUsefulnessReminderSoft(thoughtIds)}\n\n--- Results ---\n\n`;
 }
 
 export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
@@ -129,11 +153,12 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
 
         const thoughtIds = data.map((t: { id: string }) => t.id);
         const header = buildUsefulnessHeader(thoughtIds);
+        const footer = buildUsefulnessReminder(thoughtIds);
 
         return {
           content: [{
             type: "text" as const,
-            text: `${header}Found ${data.length} thought(s):\n\n${results.join("\n\n")}`,
+            text: `${header}Found ${data.length} thought(s):\n\n${results.join("\n\n")}\n\n${footer}`,
           }],
         };
       } catch (err: unknown) {
@@ -154,7 +179,10 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Browse recent thoughts chronologically with optional filters. " +
         "Use this when the user wants to see what's been captured lately, review thoughts by category, or check activity for a time period. " +
         "Supports filtering by type, topic, person, time window, project, author (model identifier), or reliability level. " +
-        "Prefer search_thoughts when the user has a specific question; use this for open-ended browsing like 'what did I capture this week?' or 'show me all person_notes'.",
+        "Prefer search_thoughts when the user has a specific question; use this for open-ended browsing like 'what did I capture this week?' or 'show me all person_notes'. " +
+        "CRITICAL: Before your next user-facing response, you MUST call record_useful_thoughts with the IDs of any thoughts that contributed to your answer. " +
+        "If none contributed (common when browsing), call it with an empty array to acknowledge the scan. " +
+        "Also scan the returned thoughts for contradictions or clearly outdated information — if you notice any, flag them to the user in your response (do NOT archive silently).",
       inputSchema: {
         limit: z.number().optional().default(10),
         type: z.string().optional().describe("Filter by type: observation, task, idea, reference, person_note"),
@@ -238,12 +266,13 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         );
 
         const thoughtIds = data.map((t: { id: string }) => t.id);
+        const header = buildUsefulnessHeaderSoft(thoughtIds);
+        const footer = buildUsefulnessReminderSoft(thoughtIds);
 
         return {
           content: [{
             type: "text" as const,
-            text: `${data.length} recent thought(s):\n\n${results.join("\n\n")}` +
-              `\n\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${JSON.stringify(thoughtIds)}`,
+            text: `${header}${data.length} recent thought(s):\n\n${results.join("\n\n")}\n\n${footer}`,
           }],
         };
       } catch (err: unknown) {
@@ -365,6 +394,16 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             content: [{ type: "text" as const, text: message }],
             isError: error.code !== "PGRST116",
           };
+        }
+
+        // A fetch by ID implies the caller found the thought useful — auto-record
+        // so the model doesn't need to make a separate record_useful_thoughts call.
+        // Failures here must not break the fetch itself.
+        const { error: usefulnessError } = await supabase.rpc("increment_usefulness", {
+          thought_ids: [data.id],
+        });
+        if (usefulnessError) {
+          console.error(`get_thought_by_id auto-record error: ${usefulnessError.message}`);
         }
 
         const metadata = (data.metadata || {}) as Record<string, unknown>;

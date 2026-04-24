@@ -1028,6 +1028,48 @@ Deno.test("search_thoughts payload starts with usefulness header and omits legac
   );
 });
 
+Deno.test("search_thoughts payload ends with a trailing usefulness reminder footer", async () => {
+  const uniqueContent = `Usefulness footer search marker wombat ${Date.now()}`;
+  const newId = await captureAndGetId(uniqueContent, "test-usefulness-footer");
+  USEFULNESS_CLEANUP_IDS.push(newId);
+
+  const result = await callTool("search_thoughts", {
+    query: uniqueContent,
+    limit: 5,
+    threshold: 0.3,
+  });
+  assertExists(result);
+
+  if (result.includes("No thoughts found")) {
+    throw new Error(
+      `Expected to find the just-captured thought "${uniqueContent}" but got "No thoughts found".`,
+    );
+  }
+
+  const reminderPrefix = "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:";
+  const firstReminderIndex = result.indexOf(reminderPrefix);
+  const lastReminderIndex = result.lastIndexOf(reminderPrefix);
+  assertEquals(
+    firstReminderIndex !== -1 && lastReminderIndex !== -1 && firstReminderIndex < lastReminderIndex,
+    true,
+    `Payload must include the reminder in both the header and the footer (distinct positions). First at ${firstReminderIndex}, last at ${lastReminderIndex}. Got: ${result.substring(0, 600)} ... ${result.substring(Math.max(0, result.length - 400))}`,
+  );
+
+  const firstResultIndex = result.indexOf("--- Result 1 ");
+  assertEquals(
+    firstResultIndex !== -1 && firstResultIndex < lastReminderIndex,
+    true,
+    `Footer reminder must appear AFTER the results block. First result at ${firstResultIndex}, footer reminder at ${lastReminderIndex}.`,
+  );
+
+  const tail = result.substring(lastReminderIndex);
+  assertEquals(
+    tail.includes(`"${newId}"`),
+    true,
+    `Footer must include the Candidate IDs JSON with the captured id ${newId}. Got tail: ${tail}`,
+  );
+});
+
 Deno.test("capture_thought with builds_on bumps prior thoughts and reports credit", async () => {
   const priorA = await captureAndGetId(`Usefulness builds_on prior A ${Date.now()}`);
   const priorB = await captureAndGetId(`Usefulness builds_on prior B ${Date.now()}`);
@@ -1133,6 +1175,112 @@ Deno.test("capture_thought with empty builds_on array inserts without credit not
     await getUsefulnessScore(sentinelId),
     baseline,
     "Sentinel score must be unchanged when builds_on is empty",
+  );
+});
+
+Deno.test("list_thoughts payload is wrapped with soft usefulness header and footer", async () => {
+  const uniqueContent = `Usefulness list header marker echidna ${Date.now()}`;
+  const newId = await captureAndGetId(uniqueContent, "test-list-usefulness-header");
+  USEFULNESS_CLEANUP_IDS.push(newId);
+
+  const result = await callTool("list_thoughts", {
+    author: "test-list-usefulness-header",
+    limit: 5,
+  });
+  assertExists(result);
+
+  const softPrefix = "⚠️ BEFORE NEXT USER RESPONSE:";
+  const firstIndex = result.indexOf(softPrefix);
+  const lastIndex = result.lastIndexOf(softPrefix);
+  assertEquals(
+    firstIndex !== -1 && lastIndex !== -1 && firstIndex < lastIndex,
+    true,
+    `list_thoughts payload must include the soft reminder both as header and footer. First at ${firstIndex}, last at ${lastIndex}. Got: ${result.substring(0, 600)}`,
+  );
+  assertEquals(
+    result.includes("Candidate IDs from this list:"),
+    true,
+    `list_thoughts payload must include the Candidate IDs line. Got: ${result.substring(0, 400)}`,
+  );
+  assertEquals(
+    result.includes(`"${newId}"`),
+    true,
+    `Candidate IDs JSON must include the captured id ${newId}. Got: ${result.substring(0, 400)}`,
+  );
+  assertEquals(
+    result.includes("--- Results ---"),
+    true,
+    `list_thoughts payload must include the results separator. Got: ${result.substring(0, 400)}`,
+  );
+  assertEquals(
+    result.includes("Reminder: If any of these thoughts were useful"),
+    false,
+    `Legacy footer reminder must be absent. Got tail: ${result.substring(Math.max(0, result.length - 400))}`,
+  );
+});
+
+Deno.test("list_thoughts returns plain 'No thoughts found' without reminder when empty", async () => {
+  const result = await callTool("list_thoughts", {
+    author: `nonexistent-author-${Date.now()}`,
+    limit: 5,
+  });
+  assertExists(result);
+  assertEquals(result.includes("No thoughts found"), true);
+  assertEquals(
+    result.includes("⚠️ BEFORE NEXT USER RESPONSE:"),
+    false,
+    `Empty list_thoughts response must not include a usefulness reminder. Got: ${result}`,
+  );
+  assertEquals(
+    result.includes("Candidate IDs"),
+    false,
+    `Empty list_thoughts response must not include a candidate IDs line. Got: ${result}`,
+  );
+});
+
+Deno.test("get_thought_by_id auto-increments usefulness score by exactly 1", async () => {
+  const targetId = await captureAndGetId(`Usefulness get-by-id target ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(targetId);
+  const baseline = await getUsefulnessScore(targetId);
+
+  const result = await callTool("get_thought_by_id", { id: targetId });
+  assertExists(result);
+  assertEquals(
+    result.includes(`ID: ${targetId}`),
+    true,
+    `get_thought_by_id should return the thought. Got: ${result.substring(0, 300)}`,
+  );
+  assertEquals(
+    result.includes("⚠️"),
+    false,
+    `get_thought_by_id output must not include a usefulness reminder. Got: ${result.substring(0, 400)}`,
+  );
+
+  assertEquals(
+    await getUsefulnessScore(targetId),
+    baseline + 1,
+    "get_thought_by_id should bump usefulness by exactly 1",
+  );
+});
+
+Deno.test("get_thought_by_id for unknown UUID does not increment any score", async () => {
+  const sentinelId = await captureAndGetId(`Usefulness get-by-id sentinel ${Date.now()}`);
+  USEFULNESS_CLEANUP_IDS.push(sentinelId);
+  const baseline = await getUsefulnessScore(sentinelId);
+
+  const unknownId = "22222222-2222-4222-8222-222222222222";
+  const result = await callTool("get_thought_by_id", { id: unknownId });
+  assertExists(result);
+  assertEquals(
+    result.includes("No thought found"),
+    true,
+    `Expected 'No thought found' message for unknown id. Got: ${result}`,
+  );
+
+  assertEquals(
+    await getUsefulnessScore(sentinelId),
+    baseline,
+    "Unrelated thought's score must not change when get_thought_by_id misses",
   );
 });
 
