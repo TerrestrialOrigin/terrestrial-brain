@@ -353,13 +353,27 @@ This watches for changes and rebuilds the plugin. The dev build is configured to
 
 ### Run tests
 
+The backend suite is written for [Deno](https://deno.com/). Deterministic unit
+tests need nothing running; the integration tests require the local Supabase
+stack (`npx supabase start`) and, until the LLM stub lands, an
+`OPENROUTER_API_KEY` in `supabase/functions/.env`.
+
 ```bash
 # Plugin unit tests
 cd obsidian-plugin && npm test
 
-# Integration tests (requires local Supabase emulator running)
-cd tests && npx vitest run
+# Backend unit tests only (no stack needed)
+deno task test:unit
+
+# Backend integration tests (requires local Supabase stack running)
+deno task test:integration
+
+# Everything (unit + integration)
+deno task test
 ```
+
+Each task maps to `deno test --allow-net --allow-env <dir>`, so you can also run
+a single file directly, e.g. `deno test --allow-net --allow-env tests/integration/projects.test.ts`.
 
 ### Create a new database migration
 

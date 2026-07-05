@@ -1,94 +1,135 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
-
-const BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
-
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args }
-    })
-  });
-
-  const text = await res.text();
-
-  // Handle SSE response
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(l => l.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-    return parsed.result?.content?.[0]?.text || "";
-  }
-
-  // Handle JSON response
-  const parsed = JSON.parse(text);
-  if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-  return parsed.result?.content?.[0]?.text || "";
-}
+import {
+  callTool,
+  restUrl,
+  serviceHeaders,
+  uniqueName,
+} from "../helpers/mcp-client.ts";
 
 // ─── Project Tests ───────────────────────────────────────────────────────────
+//
+// Each test owns its own uniquely-named fixtures and deletes them in `finally`
+// so tests are order-independent, run standalone via --filter, and never leave
+// rows accumulating across runs.
 
-let testProjectId: string;
-
-Deno.test("create_project creates a project", async () => {
-  const result = await callTool("create_project", {
-    name: "Integration Test Project",
-    type: "personal",
-    description: "Created by integration tests",
-  });
-  assertExists(result);
+function projectIdFrom(result: string): string {
   const match = result.match(/id: ([0-9a-f-]+)/);
   assertExists(match, "Should contain project id");
-  testProjectId = match![1];
+  return match![1];
+}
+
+async function deleteProjects(ids: string[]): Promise<void> {
+  // Delete children before parents to respect any FK ordering.
+  for (const id of [...ids].reverse()) {
+    await fetch(restUrl(`projects?id=eq.${id}`), {
+      method: "DELETE",
+      headers: serviceHeaders(),
+    });
+  }
+}
+
+Deno.test("create_project creates a project and list_projects shows it", async () => {
+  const name = uniqueName("Integration Test Project");
+  const created: string[] = [];
+  try {
+    const result = await callTool("create_project", {
+      name,
+      type: "personal",
+      description: "Created by integration tests",
+    });
+    assertExists(result);
+    created.push(projectIdFrom(result));
+
+    const list = await callTool("list_projects", {});
+    assertExists(list);
+    assertEquals(list.includes(name), true);
+  } finally {
+    await deleteProjects(created);
+  }
 });
 
-Deno.test("list_projects shows the new project", async () => {
-  const result = await callTool("list_projects", {});
-  assertExists(result);
-  assertEquals(result.includes("Integration Test Project"), true);
+Deno.test("create_project with parent_id works and get_project shows children", async () => {
+  const parentName = uniqueName("Parent Test Project");
+  const childName = uniqueName("Child Test Project");
+  const created: string[] = [];
+  try {
+    const parentResult = await callTool("create_project", {
+      name: parentName,
+      type: "personal",
+    });
+    const parentId = projectIdFrom(parentResult);
+    created.push(parentId);
+
+    const childResult = await callTool("create_project", {
+      name: childName,
+      type: "personal",
+      parent_id: parentId,
+    });
+    assertExists(childResult);
+    assertEquals(childResult.includes(childName), true);
+    created.push(projectIdFrom(childResult));
+
+    const parent = await callTool("get_project", { id: parentId });
+    assertExists(parent);
+    assertEquals(parent.includes(childName), true);
+    assertEquals(parent.includes(parentName), true);
+  } finally {
+    await deleteProjects(created);
+  }
 });
 
-Deno.test("create_project with parent_id works", async () => {
-  const result = await callTool("create_project", {
-    name: "Child Test Project",
-    type: "personal",
-    parent_id: testProjectId,
-  });
-  assertExists(result);
-  assertEquals(result.includes("Child Test Project"), true);
+Deno.test("update_project changes description", async () => {
+  const name = uniqueName("Update Test Project");
+  const created: string[] = [];
+  try {
+    const createResult = await callTool("create_project", {
+      name,
+      type: "personal",
+    });
+    const projectId = projectIdFrom(createResult);
+    created.push(projectId);
+
+    const result = await callTool("update_project", {
+      id: projectId,
+      description: "Updated by integration test",
+    });
+    assertExists(result);
+    assertEquals(result.includes("description"), true);
+  } finally {
+    await deleteProjects(created);
+  }
 });
 
-Deno.test("get_project shows children", async () => {
-  const result = await callTool("get_project", { id: testProjectId });
-  assertExists(result);
-  assertEquals(result.includes("Child Test Project"), true);
-  assertEquals(result.includes("Integration Test Project"), true);
-});
+Deno.test("archive_project archives project and children; archived hidden from list by default", async () => {
+  const parentName = uniqueName("Archive Test Project");
+  const childName = uniqueName("Archive Child Project");
+  const created: string[] = [];
+  try {
+    const parentResult = await callTool("create_project", {
+      name: parentName,
+      type: "personal",
+    });
+    const parentId = projectIdFrom(parentResult);
+    created.push(parentId);
 
-Deno.test("update_project changes name", async () => {
-  const result = await callTool("update_project", {
-    id: testProjectId,
-    description: "Updated by integration test",
-  });
-  assertExists(result);
-  assertEquals(result.includes("description"), true);
-});
+    const childResult = await callTool("create_project", {
+      name: childName,
+      type: "personal",
+      parent_id: parentId,
+    });
+    created.push(projectIdFrom(childResult));
 
-Deno.test("archive_project archives project and children", async () => {
-  const result = await callTool("archive_project", { id: testProjectId });
-  assertExists(result);
-  assertEquals(result.includes("Archived"), true);
-});
+    const archived = await callTool("archive_project", { id: parentId });
+    assertExists(archived);
+    assertEquals(archived.includes("Archived"), true);
 
-Deno.test("list_projects hides archived by default", async () => {
-  const result = await callTool("list_projects", {});
-  assertEquals(result.includes("Integration Test Project"), false);
+    const list = await callTool("list_projects", {});
+    assertEquals(
+      list.includes(parentName),
+      false,
+      "Archived project should be hidden from list_projects by default",
+    );
+  } finally {
+    await deleteProjects(created);
+  }
 });

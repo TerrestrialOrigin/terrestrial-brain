@@ -1,60 +1,10 @@
 import { assertEquals, assertExists, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-
-const BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
-
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args }
-    })
-  });
-
-  const text = await res.text();
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(line => line.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-    return parsed.result?.content?.[0]?.text || "";
-  }
-  const parsed = JSON.parse(text);
-  if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-  return parsed.result?.content?.[0]?.text || "";
-}
-
-async function callToolRaw(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args }
-    })
-  });
-
-  const text = await res.text();
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(line => line.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    return { text: parsed.result?.content?.[0]?.text || "", isError: !!parsed.result?.isError };
-  }
-  const parsed = JSON.parse(text);
-  return { text: parsed.result?.content?.[0]?.text || "", isError: !!parsed.result?.isError };
-}
+import {
+  callTool,
+  callToolRaw,
+  SUPABASE_SERVICE_KEY,
+  SUPABASE_URL,
+} from "../helpers/mcp-client.ts";
 
 // Seed data IDs from supabase/seed.sql
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
@@ -177,10 +127,6 @@ Deno.test("get_recent_activity shows tasks with project names", async () => {
 });
 
 // ─── Archived record exclusion tests ──────────────────────────────────────
-
-const SUPABASE_URL = "http://localhost:54321";
-const SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
 const ARCHIVE_QUERY_CLEANUP_IDS: { table: string; id: string }[] = [];
 
