@@ -74,12 +74,20 @@ read -rp "  Do you want to set secrets now? [Y/n] " REPLY
 REPLY=${REPLY:-Y}
 
 if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-  read -rp "  OPENROUTER_API_KEY: " OPENROUTER_API_KEY
-  read -rp "  MCP_ACCESS_KEY: " MCP_ACCESS_KEY
+  # -s so secrets are not echoed to the terminal; print the newline -s swallows.
+  read -rsp "  OPENROUTER_API_KEY: " OPENROUTER_API_KEY
+  echo ""
+  read -rsp "  MCP_ACCESS_KEY: " MCP_ACCESS_KEY
+  echo ""
 
-  SECRETS="OPENROUTER_API_KEY=$OPENROUTER_API_KEY MCP_ACCESS_KEY=$MCP_ACCESS_KEY"
+  # Pass as a quoted array so each KEY=value stays one argument even if a value
+  # contains spaces or shell metacharacters (no word-splitting / globbing).
+  SECRETS=(
+    "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
+    "MCP_ACCESS_KEY=$MCP_ACCESS_KEY"
+  )
 
-  npx supabase secrets set $SECRETS --project-ref "$PROJECT_REF"
+  npx supabase secrets set "${SECRETS[@]}" --project-ref "$PROJECT_REF"
   echo ""
   echo "  Secrets set."
 else
@@ -106,4 +114,4 @@ echo "  MCP endpoint: https://$PROJECT_REF.supabase.co/functions/v1/terrestrial-
 echo ""
 echo "  Next steps:"
 echo "    - Configure your Obsidian plugin to point at the MCP endpoint"
-echo "    - Use deploy-prod.sh for future updates"
+echo "    - Use deploy-update-prod.sh for future updates"
