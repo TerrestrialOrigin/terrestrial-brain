@@ -11,7 +11,11 @@ import type {
 
 // Unit tests for TaskExtractor re-ingest MERGE SEMANTICS (finding C6, Step 8).
 // Drives the REAL TaskExtractor.extract against a fake Supabase context and a
-// stubbed global fetch — no DB, no network, no real OpenRouter key.
+// stubbed global fetch — no DB, no network, no real OpenRouter key. A throwaway
+// key must be present so the fail-fast `requireEnv` guard (Step 10) passes
+// before the stubbed fetch is reached.
+
+Deno.env.set("OPENROUTER_API_KEY", "test-openrouter-key");
 
 const NOTE_REF = "notes/re-ingest.md";
 

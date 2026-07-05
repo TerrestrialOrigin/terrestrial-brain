@@ -131,14 +131,20 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           };
         }
 
-        // Resolve project name
+        // Resolve project name. Log + raw-id fallback on error (finding C9) so a
+        // failed lookup is not indistinguishable from "unknown project".
         let projectName = "unknown";
-        const { data: project } = await supabase
+        const { data: project, error: projectError } = await supabase
           .from("projects")
           .select("name")
           .eq("id", data.project_id)
           .single();
-        if (project) projectName = project.name;
+        if (projectError) {
+          console.error(`get_document project-name lookup failed: ${projectError.message}`);
+          projectName = data.project_id;
+        } else if (project) {
+          projectName = project.name;
+        }
 
         const refs = (data.references || {}) as Record<string, string[]>;
         const lines: string[] = [
@@ -209,15 +215,21 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           return { content: [{ type: "text" as const, text: "No documents found." }] };
         }
 
-        // Resolve project names
+        // Resolve project names. Log + raw-id fallback on error (finding C9).
         const projectIds = [...new Set(data.map(document => document.project_id))];
-        const { data: projects } = await supabase
+        const { data: projects, error: projectsError } = await supabase
           .from("projects")
           .select("id, name")
           .in("id", projectIds);
-        const projectMap: Record<string, string> = Object.fromEntries(
-          (projects || []).map(project => [project.id, project.name]),
-        );
+        let projectMap: Record<string, string>;
+        if (projectsError) {
+          console.error(`list_documents project-name lookup failed: ${projectsError.message}`);
+          projectMap = Object.fromEntries(projectIds.map(pid => [pid, pid]));
+        } else {
+          projectMap = Object.fromEntries(
+            (projects || []).map(project => [project.id, project.name]),
+          );
+        }
 
         const lines = data.map((document, index) => {
           const refs = (document.references || {}) as Record<string, string[]>;

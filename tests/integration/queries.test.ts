@@ -69,6 +69,13 @@ Deno.test("get_project_summary handles project with no tasks or thoughts", async
   assertStringIncludes(result, "Empty Test Project");
   assertStringIncludes(result, "No open tasks");
   assertStringIncludes(result, "No recent thoughts");
+  // Empty-vs-broken (finding C9): a genuinely-empty section renders empty-state
+  // prose, NOT the "(section unavailable: …)" marker reserved for query errors.
+  assertEquals(
+    result.includes("section unavailable"),
+    false,
+    `genuine-empty summary must not show the unavailable marker. Got: ${result.substring(0, 800)}`,
+  );
 
   // Clean up
   await callTool("archive_project", { id: emptyProjectId });

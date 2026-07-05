@@ -6,9 +6,13 @@ import {
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts";
 
 // Pure/deterministic project-extractor unit tests. The LLM path is exercised
-// with a stubbed global fetch, so no network or real OpenRouter key is needed.
+// with a stubbed global fetch, so no network or real OpenRouter key is needed —
+// but a throwaway key must be present so the fail-fast `requireEnv` guard
+// (Step 10) passes before the stubbed fetch is reached.
 // Relocated from the in-source vitest file (Step 5 test-suite split); the old
 // `(globalThis as any).Deno` shim is unnecessary under a native Deno runner.
+
+Deno.env.set("OPENROUTER_API_KEY", "test-openrouter-key");
 
 // ─── extractProjectFromConventionalPath ─────────────────────────────────────
 

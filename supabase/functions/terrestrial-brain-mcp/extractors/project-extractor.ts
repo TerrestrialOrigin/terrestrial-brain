@@ -14,9 +14,9 @@ import type {
   ExtractionResult,
   Extractor,
 } from "./pipeline.ts";
+import { requireEnv } from "../env.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
 // ---------------------------------------------------------------------------
 // Signal 1a: Conventional path detection (case-insensitive, any depth)
@@ -67,11 +67,12 @@ export function pathContainsProjectKeyword(
 export async function extractProjectNameFromPath(
   referenceId: string,
 ): Promise<{ isProject: boolean; projectName: string | null }> {
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   try {
     const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -204,11 +205,12 @@ async function detectProjectsByContent(
 
   const validIds = new Set(knownProjects.map((project) => project.id));
 
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   try {
     const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

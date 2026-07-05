@@ -1,7 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { requireEnv } from "./env.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
 // ---------------------------------------------------------------------------
 // Backwards-compatible references reader
@@ -52,10 +52,11 @@ export async function resolveProjectNames(
 }
 
 export async function getEmbedding(text: string): Promise<number[]> {
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   const r = await fetch(`${OPENROUTER_BASE}/embeddings`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -71,11 +72,14 @@ export async function getEmbedding(text: string): Promise<number[]> {
   return d.data[0].embedding;
 }
 
+const UNCATEGORIZED_METADATA = { topics: ["uncategorized"], type: "observation" };
+
 export async function extractMetadata(text: string): Promise<Record<string, unknown>> {
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   const r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -96,11 +100,22 @@ Only extract what's explicitly there.`,
       ],
     }),
   });
+  // Metadata is best-effort enrichment: a failure must NOT abort ingestion, but
+  // it must be observable — otherwise an LLM outage renders identically to a
+  // genuinely uncategorizable thought (finding C9). Log, then degrade.
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    console.warn(`extractMetadata: OpenRouter returned ${r.status}, falling back to uncategorized. ${body}`);
+    return { ...UNCATEGORIZED_METADATA };
+  }
   const d = await r.json();
   try {
     return JSON.parse(d.choices[0].message.content);
-  } catch {
-    return { topics: ["uncategorized"], type: "observation" };
+  } catch (parseError) {
+    console.warn(
+      `extractMetadata: could not parse LLM response, falling back to uncategorized. ${(parseError as Error).message}`,
+    );
+    return { ...UNCATEGORIZED_METADATA };
   }
 }
 
@@ -113,10 +128,11 @@ export async function freshIngest(
   references?: Record<string, string[]>,
   provenance?: { reliability: string; author: string },
 ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   const splitResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({

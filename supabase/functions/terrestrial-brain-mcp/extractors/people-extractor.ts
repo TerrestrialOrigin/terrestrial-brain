@@ -13,9 +13,9 @@ import type {
   Extractor,
 } from "./pipeline.ts";
 import { findPersonByName } from "./name-matching.ts";
+import { requireEnv } from "../env.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
 // ---------------------------------------------------------------------------
 // LLM-based person detection
@@ -42,11 +42,12 @@ async function detectAllPeople(
 
   const validIds = new Set(knownPeople.map((person) => person.id));
 
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   try {
     const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
