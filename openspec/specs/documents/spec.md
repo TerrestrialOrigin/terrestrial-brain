@@ -1,3 +1,11 @@
+# documents
+
+## Purpose
+
+Provide a `documents` capability for storing full long-form markdown content linked to projects, with MCP tools to write, retrieve, and list documents, extract references, and link captured thoughts back to their source documents.
+
+## Requirements
+
 ### Requirement: Documents table stores full long-form content linked to a project
 
 The system SHALL provide a `documents` table in Supabase that stores full markdown documents verbatim. Each document SHALL have a required `project_id` foreign key referencing the `projects` table. The table SHALL include columns: `id` (uuid, primary key), `project_id` (uuid, not null, FK), `title` (text, not null), `content` (text, not null), `file_path` (text, nullable), `references` (jsonb, default `{"people": [], "tasks": []}`), `created_at` (timestamptz), `updated_at` (timestamptz). The table SHALL have RLS enabled with a service_role full-access policy. An `updated_at` trigger SHALL auto-update on row modification. An index SHALL exist on `project_id`.

@@ -2,9 +2,13 @@
 
 Direct HTTP endpoints for AI output operations, used by the Obsidian plugin instead of MCP tools. These endpoints bypass the MCP transport and return standard JSON responses.
 
+## Purpose
+
+Define the direct HTTP endpoints for AI output operations used by the Obsidian plugin instead of MCP tools. These endpoints bypass the MCP transport and return standard JSON responses.
+
 ---
 
-## Scenarios
+## Requirements
 
 ### Requirement: get-pending-ai-output HTTP endpoint
 

@@ -1,5 +1,11 @@
 # update_thought
 
+## Purpose
+
+Provide an `update_thought` MCP tool that lets clients modify existing thoughts — editing content (with embedding and metadata regeneration), adjusting reliability/author, and replacing project/document references — while preserving provenance fields.
+
+## Requirements
+
 ### Requirement: update_thought MCP tool
 
 The MCP server SHALL expose an `update_thought` tool that allows clients to modify existing thoughts. The tool SHALL accept a required `id` (UUID) and one or more optional fields: `content` (string), `reliability` (string), `author` (string), `project_ids` (string array), `document_ids` (string array).

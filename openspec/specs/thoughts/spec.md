@@ -2,6 +2,12 @@
 
 The core knowledge unit in Terrestrial Brain. Thoughts are self-contained, 1-3 sentence statements extracted from notes or captured directly via MCP.
 
+## Purpose
+
+Define how thoughts — the core knowledge unit — are captured, stored, embedded,
+reconciled on re-ingest, mutated, and surfaced, so knowledge is retained and
+retrievable rather than silently lost.
+
 ## Data Model
 
 - **Table:** `thoughts`
@@ -156,6 +162,8 @@ THEN falls back to `freshIngest()` (treats it as a new note), still with pipelin
 
 ---
 
+## Requirements
+
 ### Requirement: ingest_note reconciliation soft-archives removed thoughts
 
 During `ingest_note` reconciliation, thoughts in the LLM plan's `delete` list SHALL be soft-archived by setting `archived_at = now()`, and SHALL NOT be removed from the database with a SQL `DELETE`. This prevents a hallucinated or incorrect LLM-produced ID from permanently destroying captured knowledge. Archived thoughts remain retrievable (consistent with `archive_thought`) and, because the reconciliation fetch filters `archived_at IS NULL`, are excluded from subsequent reconciliations so they do not resurface as spurious existing thoughts.
@@ -175,7 +183,7 @@ During `ingest_note` reconciliation, thoughts in the LLM plan's `delete` list SH
 
 ---
 
-### search_thoughts
+### Requirement: search_thoughts
 
 The `search_thoughts` MCP tool SHALL accept a required `query` string, an optional `limit` (default 10), an optional `threshold` (default 0.5), an optional `author` filter, and an optional `reliability` filter.
 
@@ -250,7 +258,7 @@ When no thoughts exceed the similarity threshold, the tool SHALL return the stri
 
 ---
 
-### list_thoughts
+### Requirement: list_thoughts
 
 The `list_thoughts` MCP tool SHALL accept optional filters: `limit` (default 10), `type`, `topic`, `person`, `days`, `project_id`, `author`, `reliability`, and `include_archived`.
 
@@ -328,15 +336,13 @@ When **no** thoughts match the filter, the tool SHALL return the plain string `"
 
 ---
 
-### thought_stats
+### Requirement: thought_stats
 
-GIVEN the MCP server is running
-WHEN a client calls `thought_stats` with optional `project_id` filter
-THEN the system:
-  1. Gets total thought count (scoped to project if `project_id` provided)
-  2. Fetches all metadata and created_at values (scoped to project if `project_id` provided)
-  3. Aggregates: type counts, top 10 topics, top 10 people mentioned
-  4. Returns formatted summary with total count, date range, type breakdown, top topics, and people
+The `thought_stats` MCP tool SHALL accept an optional `project_id` filter. When invoked, the tool SHALL:
+  1. Get the total thought count (scoped to project if `project_id` provided)
+  2. Fetch all metadata and created_at values (scoped to project if `project_id` provided)
+  3. Aggregate: type counts, top 10 topics, top 10 people mentioned
+  4. Return a formatted summary with total count, date range, type breakdown, top topics, and people
 
 #### Scenario: thought_stats with project_id filter
 - **WHEN** `thought_stats` is called with `project_id = 'uuid-A'`
@@ -352,7 +358,7 @@ THEN the system:
 
 ---
 
-### Thought data model — note_snapshot_id
+### Requirement: note_snapshot_id column links a thought to its source note
 
 The `note_snapshot_id` column links a thought to the full source note it was extracted from. It SHALL be:
 - Nullable — NULL for thoughts from direct capture, chat, or if the snapshot was purged
@@ -381,7 +387,7 @@ The `note_snapshot_id` column links a thought to the full source note it was ext
 
 ---
 
-### match_thoughts RPC returns reliability and author
+### Requirement: match_thoughts RPC returns reliability and author
 
 The `match_thoughts` database function SHALL include `reliability` and `author` columns in its return type and SELECT clause, so that callers can access provenance information without a second query.
 
@@ -391,7 +397,7 @@ The `match_thoughts` database function SHALL include `reliability` and `author` 
 
 ---
 
-### Project name resolution in thought output
+### Requirement: Project name resolution in thought output
 
 When rendering thought results for `list_thoughts` or `search_thoughts`, the system SHALL resolve project UUIDs from `metadata.references.projects` to human-readable project names by querying the `projects` table. Resolution SHALL be done in a single batch query per tool call, not per-thought.
 
