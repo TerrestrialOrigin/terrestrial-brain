@@ -2,8 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { errorResult, textResult } from "../mcp-response.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
+export function register(
+  server: McpServer,
+  supabase: SupabaseClient,
+  logger: FunctionCallLogger,
+) {
   server.registerTool(
     "create_task",
     {
@@ -16,15 +21,26 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "it creates structured task rows AND delivers a markdown checklist to the user's Obsidian vault in one call.",
       inputSchema: {
         content: z.string().describe("Task description"),
-        project_id: z.string().optional().describe("UUID of the project this task belongs to"),
-        parent_id: z.string().optional().describe("UUID of parent task for sub-tasks"),
+        project_id: z.string().optional().describe(
+          "UUID of the project this task belongs to",
+        ),
+        parent_id: z.string().optional().describe(
+          "UUID of parent task for sub-tasks",
+        ),
         due_by: z.string().optional().describe("Due date as ISO 8601 string"),
-        status: z.string().optional().default("open").describe("Status: open, in_progress, done, deferred"),
-        assigned_to: z.string().optional().describe("UUID of the person this task is assigned to"),
+        status: z.string().optional().default("open").describe(
+          "Status: open, in_progress, done, deferred",
+        ),
+        assigned_to: z.string().optional().describe(
+          "UUID of the person this task is assigned to",
+        ),
       },
     },
-    withMcpLogging("create_task", async ({ content, project_id, parent_id, due_by, status, assigned_to }) => {
-      try {
+    withMcpLogging(
+      "create_task",
+      async (
+        { content, project_id, parent_id, due_by, status, assigned_to },
+      ) => {
         const { data, error } = await supabase
           .from("tasks")
           .insert({
@@ -39,47 +55,46 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .single();
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to create task: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Failed to create task: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Created task (id: ${data.id}): "${content}"` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(`Created task (id: ${data.id}): "${content}"`);
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
     "list_tasks",
     {
       title: "List Tasks",
-      description:
-        "List tasks with optional filters. Common uses: " +
+      description: "List tasks with optional filters. Common uses: " +
         "filter by project_id to see a project's task list, " +
         "filter by status='open' to see what needs doing, " +
         "set overdue_only=true to find tasks past their due date. " +
         "Results include project names and assigned person names for context.",
       inputSchema: {
         project_id: z.string().optional().describe("Filter by project UUID"),
-        status: z.string().optional().describe("Filter by status: open, in_progress, done, deferred"),
-        overdue_only: z.boolean().optional().default(false).describe("Only show overdue tasks"),
-        include_archived: z.boolean().optional().default(false).describe("Include archived tasks"),
+        status: z.string().optional().describe(
+          "Filter by status: open, in_progress, done, deferred",
+        ),
+        overdue_only: z.boolean().optional().default(false).describe(
+          "Only show overdue tasks",
+        ),
+        include_archived: z.boolean().optional().default(false).describe(
+          "Include archived tasks",
+        ),
         limit: z.number().optional().default(20).describe("Max results"),
       },
     },
-    withMcpLogging("list_tasks", async ({ project_id, status, overdue_only, include_archived, limit }) => {
-      try {
+    withMcpLogging(
+      "list_tasks",
+      async ({ project_id, status, overdue_only, include_archived, limit }) => {
         let q = supabase
           .from("tasks")
-          .select("id, content, status, due_by, project_id, assigned_to, archived_at, created_at")
+          .select(
+            "id, content, status, due_by, project_id, assigned_to, archived_at, created_at",
+          )
           .order("created_at", { ascending: false })
           .limit(limit);
 
@@ -93,19 +108,18 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data, error } = await q;
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Error: ${error.message}`);
         }
 
         if (!data || data.length === 0) {
-          return { content: [{ type: "text" as const, text: "No tasks found." }] };
+          return textResult("No tasks found.");
         }
 
         // Get project names. On lookup error, log and fall back to raw ids
         // (never a silently-empty map that would hide the failure) — finding C9.
-        const projectIds = [...new Set(data.filter(t => t.project_id).map(t => t.project_id))];
+        const projectIds = [
+          ...new Set(data.filter((t) => t.project_id).map((t) => t.project_id)),
+        ];
         let projectMap: Record<string, string> = {};
         if (projectIds.length > 0) {
           const { data: projects, error: projectsError } = await supabase
@@ -113,15 +127,25 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .select("id, name")
             .in("id", projectIds);
           if (projectsError) {
-            console.error(`list_tasks project-name lookup failed: ${projectsError.message}`);
-            projectMap = Object.fromEntries(projectIds.map(pid => [pid, pid]));
+            console.error(
+              `list_tasks project-name lookup failed: ${projectsError.message}`,
+            );
+            projectMap = Object.fromEntries(
+              projectIds.map((pid) => [pid, pid]),
+            );
           } else {
-            projectMap = Object.fromEntries((projects || []).map(p => [p.id, p.name]));
+            projectMap = Object.fromEntries(
+              (projects || []).map((p) => [p.id, p.name]),
+            );
           }
         }
 
         // Get assigned person names (same log-and-fall-back-to-raw-id policy).
-        const personIds = [...new Set(data.filter(t => t.assigned_to).map(t => t.assigned_to))];
+        const personIds = [
+          ...new Set(
+            data.filter((t) => t.assigned_to).map((t) => t.assigned_to),
+          ),
+        ];
         let personMap: Record<string, string> = {};
         if (personIds.length > 0) {
           const { data: people, error: peopleError } = await supabase
@@ -129,39 +153,47 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .select("id, name")
             .in("id", personIds);
           if (peopleError) {
-            console.error(`list_tasks assignee lookup failed: ${peopleError.message}`);
-            personMap = Object.fromEntries(personIds.map(pid => [pid, pid]));
+            console.error(
+              `list_tasks assignee lookup failed: ${peopleError.message}`,
+            );
+            personMap = Object.fromEntries(personIds.map((pid) => [pid, pid]));
           } else {
-            personMap = Object.fromEntries((people || []).map(p => [p.id, p.name]));
+            personMap = Object.fromEntries(
+              (people || []).map((p) => [p.id, p.name]),
+            );
           }
         }
 
         const lines = data.map((t, i) => {
-          const statusIcon = t.status === "done" ? "[x]" : t.status === "in_progress" ? "[~]" : "[ ]";
+          const statusIcon = t.status === "done"
+            ? "[x]"
+            : t.status === "in_progress"
+            ? "[~]"
+            : "[ ]";
           const parts = [`${i + 1}. ${statusIcon} ${t.content}`];
           parts.push(`   ID: ${t.id} | Status: ${t.status}`);
-          if (t.project_id && projectMap[t.project_id])
+          if (t.project_id && projectMap[t.project_id]) {
             parts.push(`   Project: ${projectMap[t.project_id]}`);
-          if (t.assigned_to && personMap[t.assigned_to])
+          }
+          if (t.assigned_to && personMap[t.assigned_to]) {
             parts.push(`   Assigned to: ${personMap[t.assigned_to]}`);
+          }
           if (t.due_by) {
             const due = new Date(t.due_by);
             const overdue = due < new Date() && t.status !== "done";
-            parts.push(`   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`);
+            parts.push(
+              `   Due: ${due.toLocaleDateString()}${
+                overdue ? " (OVERDUE)" : ""
+              }`,
+            );
           }
           return parts.join("\n");
         });
 
-        return {
-          content: [{ type: "text" as const, text: `${data.length} task(s):\n\n${lines.join("\n\n")}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(`${data.length} task(s):\n\n${lines.join("\n\n")}`);
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
@@ -176,14 +208,23 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       inputSchema: {
         id: z.string().describe("Task UUID"),
         content: z.string().optional().describe("New task description"),
-        status: z.string().optional().describe("New status: open, in_progress, done, deferred"),
-        due_by: z.string().nullable().optional().describe("New due date (ISO 8601), or null to clear"),
-        project_id: z.string().nullable().optional().describe("New project UUID, or null to unlink"),
-        assigned_to: z.string().nullable().optional().describe("Person UUID to assign, or null to unassign"),
+        status: z.string().optional().describe(
+          "New status: open, in_progress, done, deferred",
+        ),
+        due_by: z.string().nullable().optional().describe(
+          "New due date (ISO 8601), or null to clear",
+        ),
+        project_id: z.string().nullable().optional().describe(
+          "New project UUID, or null to unlink",
+        ),
+        assigned_to: z.string().nullable().optional().describe(
+          "Person UUID to assign, or null to unassign",
+        ),
       },
     },
-    withMcpLogging("update_task", async ({ id, content, status, due_by, project_id, assigned_to }) => {
-      try {
+    withMcpLogging(
+      "update_task",
+      async ({ id, content, status, due_by, project_id, assigned_to }) => {
         const updates: Record<string, unknown> = {};
         if (content !== undefined) updates.content = content;
         if (status !== undefined) updates.status = status;
@@ -197,7 +238,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         }
 
         if (Object.keys(updates).length === 0) {
-          return { content: [{ type: "text" as const, text: "No fields to update." }] };
+          return textResult("No fields to update.");
         }
 
         const { error } = await supabase
@@ -206,30 +247,22 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .eq("id", id);
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Update failed: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Update failed: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Task ${id} updated: ${Object.keys(updates).join(", ")}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `Task ${id} updated: ${Object.keys(updates).join(", ")}`,
+        );
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
     "archive_task",
     {
       title: "Archive Task",
-      description:
-        "Archive a task without changing its status. " +
+      description: "Archive a task without changing its status. " +
         "Use this to hide tasks that are no longer relevant but weren't completed (e.g. cancelled or superseded). " +
         "For tasks the user actually finished, prefer update_task with status='done' — that both marks completion and archives in one step.",
       inputSchema: {
@@ -237,29 +270,17 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       },
     },
     withMcpLogging("archive_task", async ({ id }) => {
-      try {
-        const { error } = await supabase
-          .from("tasks")
-          .update({ archived_at: new Date().toISOString() })
-          .eq("id", id);
+      const { error } = await supabase
+        .from("tasks")
+        .update({ archived_at: new Date().toISOString() })
+        .eq("id", id);
 
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Archive failed: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: `Task ${id} archived.` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (error) {
+        return errorResult(`Archive failed: ${error.message}`);
       }
-    }, logger)
+
+      return textResult(`Task ${id} archived.`);
+    }, logger),
   );
 
   server.registerTool(
@@ -272,128 +293,158 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Use this when you already have task IDs (e.g. from create_task, get_project_summary, or prior conversation) " +
         "and need to check their current state. Archived tasks are included — if you ask for an ID, you get it.",
       inputSchema: {
-        ids: z.array(z.string()).describe("Array of task UUIDs to retrieve (max 50)"),
+        ids: z.array(z.string()).describe(
+          "Array of task UUIDs to retrieve (max 50)",
+        ),
       },
     },
     withMcpLogging("get_tasks", async ({ ids }) => {
-      try {
-        if (ids.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "Error: At least one task ID is required." }],
-            isError: true,
-          };
-        }
-
-        if (ids.length > 50) {
-          return {
-            content: [{ type: "text" as const, text: "Error: Maximum 50 task IDs per request." }],
-            isError: true,
-          };
-        }
-
-        const { data, error } = await supabase
-          .from("tasks")
-          .select("id, content, status, due_by, project_id, parent_id, assigned_to, archived_at, created_at")
-          .in("id", ids);
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        const foundIds = new Set((data || []).map((task: { id: string }) => task.id));
-        const missingIds = ids.filter((requestedId: string) => !foundIds.has(requestedId));
-
-        if (!data || data.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: `No tasks found. Missing IDs: ${missingIds.join(", ")}` }],
-          };
-        }
-
-        // Batch-resolve project names. Log + raw-id fallback on error (finding C9).
-        const projectIds = [...new Set(data.filter(task => task.project_id).map(task => task.project_id))];
-        let projectMap: Record<string, string> = {};
-        if (projectIds.length > 0) {
-          const { data: projects, error: projectsError } = await supabase
-            .from("projects")
-            .select("id, name")
-            .in("id", projectIds);
-          if (projectsError) {
-            console.error(`get_tasks project-name lookup failed: ${projectsError.message}`);
-            projectMap = Object.fromEntries(projectIds.map(pid => [pid, pid]));
-          } else {
-            projectMap = Object.fromEntries((projects || []).map(project => [project.id, project.name]));
-          }
-        }
-
-        // Batch-resolve assigned person names (same policy).
-        const personIds = [...new Set(data.filter(task => task.assigned_to).map(task => task.assigned_to))];
-        let personMap: Record<string, string> = {};
-        if (personIds.length > 0) {
-          const { data: people, error: peopleError } = await supabase
-            .from("people")
-            .select("id, name")
-            .in("id", personIds);
-          if (peopleError) {
-            console.error(`get_tasks assignee lookup failed: ${peopleError.message}`);
-            personMap = Object.fromEntries(personIds.map(pid => [pid, pid]));
-          } else {
-            personMap = Object.fromEntries((people || []).map(person => [person.id, person.name]));
-          }
-        }
-
-        // Batch-resolve parent task content (same policy).
-        const parentIds = [...new Set(data.filter(task => task.parent_id).map(task => task.parent_id))];
-        let parentMap: Record<string, string> = {};
-        if (parentIds.length > 0) {
-          const { data: parents, error: parentsError } = await supabase
-            .from("tasks")
-            .select("id, content")
-            .in("id", parentIds);
-          if (parentsError) {
-            console.error(`get_tasks parent-task lookup failed: ${parentsError.message}`);
-            parentMap = Object.fromEntries(parentIds.map(pid => [pid, pid]));
-          } else {
-            parentMap = Object.fromEntries((parents || []).map(parent => [parent.id, parent.content]));
-          }
-        }
-
-        const lines = data.map((task, index) => {
-          const statusIcon = task.status === "done" ? "[x]" : task.status === "in_progress" ? "[~]" : "[ ]";
-          const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
-          parts.push(`   ID: ${task.id} | Status: ${task.status}`);
-          if (task.project_id && projectMap[task.project_id])
-            parts.push(`   Project: ${projectMap[task.project_id]}`);
-          if (task.assigned_to && personMap[task.assigned_to])
-            parts.push(`   Assigned to: ${personMap[task.assigned_to]}`);
-          if (task.parent_id && parentMap[task.parent_id])
-            parts.push(`   Parent task: ${parentMap[task.parent_id]}`);
-          if (task.due_by) {
-            const due = new Date(task.due_by);
-            const overdue = due < new Date() && task.status !== "done";
-            parts.push(`   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`);
-          }
-          if (task.archived_at)
-            parts.push(`   Archived: ${new Date(task.archived_at).toLocaleDateString()}`);
-          return parts.join("\n");
-        });
-
-        let result = `${data.length} task(s):\n\n${lines.join("\n\n")}`;
-        if (missingIds.length > 0) {
-          result += `\n\nNot found (${missingIds.length}): ${missingIds.join(", ")}`;
-        }
-
-        return {
-          content: [{ type: "text" as const, text: result }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (ids.length === 0) {
+        return errorResult("Error: At least one task ID is required.");
       }
-    }, logger)
+
+      if (ids.length > 50) {
+        return errorResult("Error: Maximum 50 task IDs per request.");
+      }
+
+      const { data, error } = await supabase
+        .from("tasks")
+        .select(
+          "id, content, status, due_by, project_id, parent_id, assigned_to, archived_at, created_at",
+        )
+        .in("id", ids);
+
+      if (error) {
+        return errorResult(`Error: ${error.message}`);
+      }
+
+      const foundIds = new Set(
+        (data || []).map((task: { id: string }) => task.id),
+      );
+      const missingIds = ids.filter((requestedId: string) =>
+        !foundIds.has(requestedId)
+      );
+
+      if (!data || data.length === 0) {
+        return textResult(
+          `No tasks found. Missing IDs: ${missingIds.join(", ")}`,
+        );
+      }
+
+      // Batch-resolve project names. Log + raw-id fallback on error (finding C9).
+      const projectIds = [
+        ...new Set(
+          data.filter((task) => task.project_id).map((task) => task.project_id),
+        ),
+      ];
+      let projectMap: Record<string, string> = {};
+      if (projectIds.length > 0) {
+        const { data: projects, error: projectsError } = await supabase
+          .from("projects")
+          .select("id, name")
+          .in("id", projectIds);
+        if (projectsError) {
+          console.error(
+            `get_tasks project-name lookup failed: ${projectsError.message}`,
+          );
+          projectMap = Object.fromEntries(projectIds.map((pid) => [pid, pid]));
+        } else {
+          projectMap = Object.fromEntries(
+            (projects || []).map((project) => [project.id, project.name]),
+          );
+        }
+      }
+
+      // Batch-resolve assigned person names (same policy).
+      const personIds = [
+        ...new Set(
+          data.filter((task) => task.assigned_to).map((task) =>
+            task.assigned_to
+          ),
+        ),
+      ];
+      let personMap: Record<string, string> = {};
+      if (personIds.length > 0) {
+        const { data: people, error: peopleError } = await supabase
+          .from("people")
+          .select("id, name")
+          .in("id", personIds);
+        if (peopleError) {
+          console.error(
+            `get_tasks assignee lookup failed: ${peopleError.message}`,
+          );
+          personMap = Object.fromEntries(personIds.map((pid) => [pid, pid]));
+        } else {
+          personMap = Object.fromEntries(
+            (people || []).map((person) => [person.id, person.name]),
+          );
+        }
+      }
+
+      // Batch-resolve parent task content (same policy).
+      const parentIds = [
+        ...new Set(
+          data.filter((task) => task.parent_id).map((task) => task.parent_id),
+        ),
+      ];
+      let parentMap: Record<string, string> = {};
+      if (parentIds.length > 0) {
+        const { data: parents, error: parentsError } = await supabase
+          .from("tasks")
+          .select("id, content")
+          .in("id", parentIds);
+        if (parentsError) {
+          console.error(
+            `get_tasks parent-task lookup failed: ${parentsError.message}`,
+          );
+          parentMap = Object.fromEntries(parentIds.map((pid) => [pid, pid]));
+        } else {
+          parentMap = Object.fromEntries(
+            (parents || []).map((parent) => [parent.id, parent.content]),
+          );
+        }
+      }
+
+      const lines = data.map((task, index) => {
+        const statusIcon = task.status === "done"
+          ? "[x]"
+          : task.status === "in_progress"
+          ? "[~]"
+          : "[ ]";
+        const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
+        parts.push(`   ID: ${task.id} | Status: ${task.status}`);
+        if (task.project_id && projectMap[task.project_id]) {
+          parts.push(`   Project: ${projectMap[task.project_id]}`);
+        }
+        if (task.assigned_to && personMap[task.assigned_to]) {
+          parts.push(`   Assigned to: ${personMap[task.assigned_to]}`);
+        }
+        if (task.parent_id && parentMap[task.parent_id]) {
+          parts.push(`   Parent task: ${parentMap[task.parent_id]}`);
+        }
+        if (task.due_by) {
+          const due = new Date(task.due_by);
+          const overdue = due < new Date() && task.status !== "done";
+          parts.push(
+            `   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`,
+          );
+        }
+        if (task.archived_at) {
+          parts.push(
+            `   Archived: ${new Date(task.archived_at).toLocaleDateString()}`,
+          );
+        }
+        return parts.join("\n");
+      });
+
+      let result = `${data.length} task(s):\n\n${lines.join("\n\n")}`;
+      if (missingIds.length > 0) {
+        result += `\n\nNot found (${missingIds.length}): ${
+          missingIds.join(", ")
+        }`;
+      }
+
+      return textResult(result);
+    }, logger),
   );
 }

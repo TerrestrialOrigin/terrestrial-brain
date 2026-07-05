@@ -1,5 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { getRequestIp } from "./requestContext.ts";
+import { errorResult, type McpToolResult } from "./mcp-response.ts";
 
 // ─── IP extraction from HTTP headers ────────────────────────────────────────
 
@@ -42,9 +43,16 @@ export interface FunctionCallLogger {
   ): Promise<void>;
 }
 
-export function createFunctionCallLogger(supabase: SupabaseClient): FunctionCallLogger {
+export function createFunctionCallLogger(
+  supabase: SupabaseClient,
+): FunctionCallLogger {
   return {
-    async logCall(functionName, functionType, input, ipAddress): Promise<string | null> {
+    async logCall(
+      functionName,
+      functionType,
+      input,
+      ipAddress,
+    ): Promise<string | null> {
       try {
         const { data, error } = await supabase
           .from("function_call_logs")
@@ -79,11 +87,18 @@ export function createFunctionCallLogger(supabase: SupabaseClient): FunctionCall
           console.error(`Function call error logging failed: ${error.message}`);
         }
       } catch (err) {
-        console.error(`Function call error logging error: ${(err as Error).message}`);
+        console.error(
+          `Function call error logging error: ${(err as Error).message}`,
+        );
       }
     },
 
-    async logResult(logId, recordsReturned, responseCharacters, errorDetails): Promise<void> {
+    async logResult(
+      logId,
+      recordsReturned,
+      responseCharacters,
+      errorDetails,
+    ): Promise<void> {
       try {
         const updatePayload: Record<string, unknown> = {
           records_returned: recordsReturned,
@@ -99,10 +114,14 @@ export function createFunctionCallLogger(supabase: SupabaseClient): FunctionCall
           .eq("id", logId);
 
         if (error) {
-          console.error(`Function call result logging failed: ${error.message}`);
+          console.error(
+            `Function call result logging failed: ${error.message}`,
+          );
         }
       } catch (err) {
-        console.error(`Function call result logging error: ${(err as Error).message}`);
+        console.error(
+          `Function call result logging error: ${(err as Error).message}`,
+        );
       }
     },
   };
@@ -110,43 +129,48 @@ export function createFunctionCallLogger(supabase: SupabaseClient): FunctionCall
 
 // ─── MCP tool handler wrapper ───────────────────────────────────────────────
 
-interface McpToolResult {
-  [key: string]: unknown;
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-}
-
 /**
  * Wraps an MCP tool handler with fire-and-forget logging.
  * Logs input before execution; always updates with result metrics afterward.
+ * Owns the outer try/catch: a throwing handler is caught, logged, and returned
+ * as a proper MCP error envelope (`Error: <message>`) rather than propagating —
+ * so no per-handler catch block is needed (finding X1). Generic over the
+ * handler's argument tuple, so no `no-explicit-any` suppression is required.
  */
-// deno-lint-ignore no-explicit-any
-export function withMcpLogging(
+export function withMcpLogging<Args extends unknown[]>(
   toolName: string,
-  // deno-lint-ignore no-explicit-any
-  handler: (...args: any[]) => Promise<McpToolResult>,
+  handler: (...args: Args) => Promise<McpToolResult>,
   logger: FunctionCallLogger,
-  // deno-lint-ignore no-explicit-any
-): (...args: any[]) => Promise<McpToolResult> {
-  // deno-lint-ignore no-explicit-any
-  return async (...args: any[]): Promise<McpToolResult> => {
-    const params = args[0] || {};
+): (...args: Args) => Promise<McpToolResult> {
+  return async (...args: Args): Promise<McpToolResult> => {
+    const params = (args[0] as Record<string, unknown>) || {};
     const ipAddress = getRequestIp();
     const logId = await logger.logCall(toolName, "mcp", params, ipAddress);
 
-    const result = await handler(...args);
+    let result: McpToolResult;
+    try {
+      result = await handler(...args);
+    } catch (err) {
+      result = errorResult(`Error: ${(err as Error).message}`);
+    }
 
     if (logId) {
       const contentEntries = result.content || [];
       const recordsReturned = contentEntries.length;
       const responseCharacters = contentEntries.reduce(
-        (total: number, entry: { text?: string }) => total + (entry.text?.length || 0),
+        (total: number, entry: { text?: string }) =>
+          total + (entry.text?.length || 0),
         0,
       );
       const errorText = result.isError
         ? (contentEntries[0]?.text || "Unknown error")
         : null;
-      await logger.logResult(logId, recordsReturned, responseCharacters, errorText);
+      await logger.logResult(
+        logId,
+        recordsReturned,
+        responseCharacters,
+        errorText,
+      );
     }
 
     return result;

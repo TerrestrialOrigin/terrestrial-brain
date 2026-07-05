@@ -2,8 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { errorResult, textResult } from "../mcp-response.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
+export function register(
+  server: McpServer,
+  supabase: SupabaseClient,
+  logger: FunctionCallLogger,
+) {
   server.registerTool(
     "create_person",
     {
@@ -16,11 +21,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         name: z.string().describe("Person's name (must be unique)"),
         type: z.string().optional().describe("Person type: 'human' or 'ai'"),
         email: z.string().optional().describe("Email address"),
-        description: z.string().optional().describe("Notes about this person — role, relationship, context"),
+        description: z.string().optional().describe(
+          "Notes about this person — role, relationship, context",
+        ),
       },
     },
-    withMcpLogging("create_person", async ({ name, type, email, description }) => {
-      try {
+    withMcpLogging(
+      "create_person",
+      async ({ name, type, email, description }) => {
         const { data, error } = await supabase
           .from("people")
           .insert({
@@ -33,83 +41,68 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .single();
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to create person: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Failed to create person: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Created person "${data.name}" (id: ${data.id})` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(`Created person "${data.name}" (id: ${data.id})`);
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
     "list_people",
     {
       title: "List People",
-      description:
-        "List all known people with optional filters. " +
+      description: "List all known people with optional filters. " +
         "Use this to find a person by name before assigning tasks or to answer 'who do I work with?'. " +
         "Filter by type to see only humans or AI agents.",
       inputSchema: {
         type: z.string().optional().describe("Filter by type: 'human' or 'ai'"),
-        include_archived: z.boolean().optional().default(false).describe("Include archived people"),
+        include_archived: z.boolean().optional().default(false).describe(
+          "Include archived people",
+        ),
       },
     },
     withMcpLogging("list_people", async ({ type, include_archived }) => {
-      try {
-        let query = supabase
-          .from("people")
-          .select("id, name, type, email, description, archived_at, created_at")
-          .order("name");
+      let query = supabase
+        .from("people")
+        .select("id, name, type, email, description, archived_at, created_at")
+        .order("name");
 
-        if (!include_archived) query = query.is("archived_at", null);
-        if (type) query = query.eq("type", type);
+      if (!include_archived) query = query.is("archived_at", null);
+      if (type) query = query.eq("type", type);
 
-        const { data, error } = await query;
+      const { data, error } = await query;
 
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        if (!data || data.length === 0) {
-          return { content: [{ type: "text" as const, text: "No people found." }] };
-        }
-
-        const lines = data.map((person, index) => {
-          const parts = [
-            `${index + 1}. ${person.name}`,
-            `   ID: ${person.id}`,
-            `   Type: ${person.type || "—"}`,
-          ];
-          if (person.email) parts.push(`   Email: ${person.email}`);
-          if (person.description) parts.push(`   Description: ${person.description}`);
-          if (person.archived_at)
-            parts.push(`   Archived: ${new Date(person.archived_at).toLocaleDateString()}`);
-          return parts.join("\n");
-        });
-
-        return {
-          content: [{ type: "text" as const, text: `${data.length} person(s):\n\n${lines.join("\n\n")}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (error) {
+        return errorResult(`Error: ${error.message}`);
       }
-    }, logger)
+
+      if (!data || data.length === 0) {
+        return textResult("No people found.");
+      }
+
+      const lines = data.map((person, index) => {
+        const parts = [
+          `${index + 1}. ${person.name}`,
+          `   ID: ${person.id}`,
+          `   Type: ${person.type || "—"}`,
+        ];
+        if (person.email) parts.push(`   Email: ${person.email}`);
+        if (person.description) {
+          parts.push(`   Description: ${person.description}`);
+        }
+        if (person.archived_at) {
+          parts.push(
+            `   Archived: ${new Date(person.archived_at).toLocaleDateString()}`,
+          );
+        }
+        return parts.join("\n");
+      });
+
+      return textResult(`${data.length} person(s):\n\n${lines.join("\n\n")}`);
+    }, logger),
   );
 
   server.registerTool(
@@ -124,70 +117,65 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       },
     },
     withMcpLogging("get_person", async ({ id }) => {
-      try {
-        const { data: person, error } = await supabase
-          .from("people")
-          .select("*")
-          .eq("id", id)
-          .single();
+      const { data: person, error } = await supabase
+        .from("people")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-        if (error || !person) {
-          return {
-            content: [{ type: "text" as const, text: `Person not found: ${error?.message || "unknown"}` }],
-            isError: true,
-          };
-        }
-
-        const { count: taskCount } = await supabase
-          .from("tasks")
-          .select("*", { count: "exact", head: true })
-          .eq("assigned_to", id)
-          .in("status", ["open", "in_progress"])
-          .is("archived_at", null);
-
-        const lines = [
-          `Name: ${person.name}`,
-          `ID: ${person.id}`,
-          `Type: ${person.type || "—"}`,
-          `Email: ${person.email || "—"}`,
-          `Description: ${person.description || "—"}`,
-          `Open tasks assigned: ${taskCount || 0}`,
-          `Created: ${new Date(person.created_at).toLocaleDateString()}`,
-          `Updated: ${new Date(person.updated_at).toLocaleDateString()}`,
-        ];
-        if (person.archived_at)
-          lines.push(`Archived: ${new Date(person.archived_at).toLocaleDateString()}`);
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (error || !person) {
+        return errorResult(`Person not found: ${error?.message || "unknown"}`);
       }
-    }, logger)
+
+      const { count: taskCount } = await supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("assigned_to", id)
+        .in("status", ["open", "in_progress"])
+        .is("archived_at", null);
+
+      const lines = [
+        `Name: ${person.name}`,
+        `ID: ${person.id}`,
+        `Type: ${person.type || "—"}`,
+        `Email: ${person.email || "—"}`,
+        `Description: ${person.description || "—"}`,
+        `Open tasks assigned: ${taskCount || 0}`,
+        `Created: ${new Date(person.created_at).toLocaleDateString()}`,
+        `Updated: ${new Date(person.updated_at).toLocaleDateString()}`,
+      ];
+      if (person.archived_at) {
+        lines.push(
+          `Archived: ${new Date(person.archived_at).toLocaleDateString()}`,
+        );
+      }
+
+      return textResult(lines.join("\n"));
+    }, logger),
   );
 
   server.registerTool(
     "update_person",
     {
       title: "Update Person",
-      description:
-        "Update a person's name, type, email, or description. " +
+      description: "Update a person's name, type, email, or description. " +
         "When the user mentions facts about a person — role changes, new contact info, context — " +
         "proactively call this to keep the person record current.",
       inputSchema: {
         id: z.string().describe("Person UUID"),
         name: z.string().optional().describe("New name"),
         type: z.string().optional().describe("New type: 'human' or 'ai'"),
-        email: z.string().nullable().optional().describe("New email, or null to clear"),
-        description: z.string().optional().describe("New or updated description"),
+        email: z.string().nullable().optional().describe(
+          "New email, or null to clear",
+        ),
+        description: z.string().optional().describe(
+          "New or updated description",
+        ),
       },
     },
-    withMcpLogging("update_person", async ({ id, name, type, email, description }) => {
-      try {
+    withMcpLogging(
+      "update_person",
+      async ({ id, name, type, email, description }) => {
         const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
         if (type !== undefined) updates.type = type;
@@ -195,7 +183,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         if (description !== undefined) updates.description = description;
 
         if (Object.keys(updates).length === 0) {
-          return { content: [{ type: "text" as const, text: "No fields to update." }] };
+          return textResult("No fields to update.");
         }
 
         const { error } = await supabase
@@ -204,22 +192,15 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .eq("id", id);
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Update failed: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Update failed: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Person ${id} updated: ${Object.keys(updates).join(", ")}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `Person ${id} updated: ${Object.keys(updates).join(", ")}`,
+        );
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
@@ -235,41 +216,28 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       },
     },
     withMcpLogging("archive_person", async ({ id }) => {
-      try {
-        const { data: person, error: fetchError } = await supabase
-          .from("people")
-          .select("name")
-          .eq("id", id)
-          .single();
+      const { data: person, error: fetchError } = await supabase
+        .from("people")
+        .select("name")
+        .eq("id", id)
+        .single();
 
-        if (fetchError || !person) {
-          return {
-            content: [{ type: "text" as const, text: `Person not found: ${fetchError?.message || "unknown"}` }],
-            isError: true,
-          };
-        }
-
-        const { error } = await supabase
-          .from("people")
-          .update({ archived_at: new Date().toISOString() })
-          .eq("id", id);
-
-        if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Archive failed: ${error.message}` }],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [{ type: "text" as const, text: `Archived person "${person.name}"` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (fetchError || !person) {
+        return errorResult(
+          `Person not found: ${fetchError?.message || "unknown"}`,
+        );
       }
-    }, logger)
+
+      const { error } = await supabase
+        .from("people")
+        .update({ archived_at: new Date().toISOString() })
+        .eq("id", id);
+
+      if (error) {
+        return errorResult(`Archive failed: ${error.message}`);
+      }
+
+      return textResult(`Archived person "${person.name}"`);
+    }, logger),
   );
 }

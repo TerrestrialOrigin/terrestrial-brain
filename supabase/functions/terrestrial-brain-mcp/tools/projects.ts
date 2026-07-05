@@ -2,8 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { errorResult, textResult } from "../mcp-response.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
+export function register(
+  server: McpServer,
+  supabase: SupabaseClient,
+  logger: FunctionCallLogger,
+) {
   server.registerTool(
     "create_project",
     {
@@ -15,13 +20,20 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Use type to categorize: 'client' for client work, 'personal' for personal projects, 'research' for research/learning, 'internal' for internal tooling.",
       inputSchema: {
         name: z.string().describe("Project name"),
-        type: z.string().optional().describe("Project type: client, personal, research, internal"),
-        parent_id: z.string().optional().describe("UUID of parent project for nesting"),
-        description: z.string().optional().describe("Project description — include client name, purpose, location, key contacts, or any context that helps understand this project at a glance"),
+        type: z.string().optional().describe(
+          "Project type: client, personal, research, internal",
+        ),
+        parent_id: z.string().optional().describe(
+          "UUID of parent project for nesting",
+        ),
+        description: z.string().optional().describe(
+          "Project description — include client name, purpose, location, key contacts, or any context that helps understand this project at a glance",
+        ),
       },
     },
-    withMcpLogging("create_project", async ({ name, type, parent_id, description }) => {
-      try {
+    withMcpLogging(
+      "create_project",
+      async ({ name, type, parent_id, description }) => {
         const { data, error } = await supabase
           .from("projects")
           .insert({
@@ -34,22 +46,13 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .single();
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to create project: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Failed to create project: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Created project "${data.name}" (id: ${data.id})` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(`Created project "${data.name}" (id: ${data.id})`);
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
@@ -61,13 +64,18 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Use this to find a project by name before creating tasks or updating project details. " +
         "Also useful for answering 'what projects are active?' or 'what client projects do I have?'",
       inputSchema: {
-        include_archived: z.boolean().optional().default(false).describe("Include archived projects"),
-        parent_id: z.string().optional().describe("List only children of this project"),
+        include_archived: z.boolean().optional().default(false).describe(
+          "Include archived projects",
+        ),
+        parent_id: z.string().optional().describe(
+          "List only children of this project",
+        ),
         type: z.string().optional().describe("Filter by project type"),
       },
     },
-    withMcpLogging("list_projects", async ({ include_archived, parent_id, type }) => {
-      try {
+    withMcpLogging(
+      "list_projects",
+      async ({ include_archived, parent_id, type }) => {
         let q = supabase
           .from("projects")
           .select("id, name, type, parent_id, archived_at, created_at")
@@ -80,29 +88,30 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data, error } = await q;
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Error: ${error.message}`);
         }
 
         if (!data || data.length === 0) {
-          return { content: [{ type: "text" as const, text: "No projects found." }] };
+          return textResult("No projects found.");
         }
 
         // Get parent names for display
-        const parentIds = [...new Set(data.filter(p => p.parent_id).map(p => p.parent_id))];
+        const parentIds = [
+          ...new Set(data.filter((p) => p.parent_id).map((p) => p.parent_id)),
+        ];
         let parentMap: Record<string, string> = {};
         if (parentIds.length > 0) {
           const { data: parents } = await supabase
             .from("projects")
             .select("id, name")
             .in("id", parentIds);
-          parentMap = Object.fromEntries((parents || []).map(p => [p.id, p.name]));
+          parentMap = Object.fromEntries(
+            (parents || []).map((p) => [p.id, p.name]),
+          );
         }
 
         // Get child counts
-        const projectIds = data.map(p => p.id);
+        const projectIds = data.map((p) => p.id);
         const { data: children } = await supabase
           .from("projects")
           .select("parent_id")
@@ -119,26 +128,29 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             `   ID: ${p.id}`,
             `   Type: ${p.type || "—"}`,
           ];
-          if (p.parent_id && parentMap[p.parent_id])
+          if (p.parent_id && parentMap[p.parent_id]) {
             parts.push(`   Parent: ${parentMap[p.parent_id]}`);
-          if (childCounts[p.id])
+          }
+          if (childCounts[p.id]) {
             parts.push(`   Children: ${childCounts[p.id]}`);
-          parts.push(`   Created: ${new Date(p.created_at).toLocaleDateString()}`);
-          if (p.archived_at)
-            parts.push(`   Archived: ${new Date(p.archived_at).toLocaleDateString()}`);
+          }
+          parts.push(
+            `   Created: ${new Date(p.created_at).toLocaleDateString()}`,
+          );
+          if (p.archived_at) {
+            parts.push(
+              `   Archived: ${new Date(p.archived_at).toLocaleDateString()}`,
+            );
+          }
           return parts.join("\n");
         });
 
-        return {
-          content: [{ type: "text" as const, text: `${data.length} project(s):\n\n${lines.join("\n\n")}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `${data.length} project(s):\n\n${lines.join("\n\n")}`,
+        );
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
@@ -154,79 +166,79 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       },
     },
     withMcpLogging("get_project", async ({ id }) => {
-      try {
-        const { data: project, error } = await supabase
-          .from("projects")
-          .select("*")
-          .eq("id", id)
-          .single();
+      const { data: project, error } = await supabase
+        .from("projects")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-        if (error || !project) {
-          return {
-            content: [{ type: "text" as const, text: `Project not found: ${error?.message || "unknown"}` }],
-            isError: true,
-          };
-        }
-
-        // Get parent name
-        let parentName = null;
-        if (project.parent_id) {
-          const { data: parent } = await supabase
-            .from("projects")
-            .select("name")
-            .eq("id", project.parent_id)
-            .single();
-          parentName = parent?.name;
-        }
-
-        // Get children
-        const { data: children } = await supabase
-          .from("projects")
-          .select("id, name, type")
-          .eq("parent_id", id)
-          .is("archived_at", null);
-
-        // Get open task count
-        const { count: taskCount } = await supabase
-          .from("tasks")
-          .select("*", { count: "exact", head: true })
-          .eq("project_id", id)
-          .in("status", ["open", "in_progress"]);
-
-        const lines = [
-          `Name: ${project.name}`,
-          `ID: ${project.id}`,
-          `Type: ${project.type || "—"}`,
-          `Description: ${project.description || "—"}`,
-        ];
-        if (parentName) lines.push(`Parent: ${parentName} (${project.parent_id})`);
-        if (children && children.length > 0) {
-          lines.push(`Children: ${children.map(c => `${c.name} (${c.type || "—"})`).join(", ")}`);
-        }
-        lines.push(`Open tasks: ${taskCount || 0}`);
-        lines.push(`Created: ${new Date(project.created_at).toLocaleDateString()}`);
-        lines.push(`Updated: ${new Date(project.updated_at).toLocaleDateString()}`);
-        if (project.archived_at)
-          lines.push(`Archived: ${new Date(project.archived_at).toLocaleDateString()}`);
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (error || !project) {
+        return errorResult(`Project not found: ${error?.message || "unknown"}`);
       }
-    }, logger)
+
+      // Get parent name
+      let parentName = null;
+      if (project.parent_id) {
+        const { data: parent } = await supabase
+          .from("projects")
+          .select("name")
+          .eq("id", project.parent_id)
+          .single();
+        parentName = parent?.name;
+      }
+
+      // Get children
+      const { data: children } = await supabase
+        .from("projects")
+        .select("id, name, type")
+        .eq("parent_id", id)
+        .is("archived_at", null);
+
+      // Get open task count
+      const { count: taskCount } = await supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("project_id", id)
+        .in("status", ["open", "in_progress"]);
+
+      const lines = [
+        `Name: ${project.name}`,
+        `ID: ${project.id}`,
+        `Type: ${project.type || "—"}`,
+        `Description: ${project.description || "—"}`,
+      ];
+      if (parentName) {
+        lines.push(`Parent: ${parentName} (${project.parent_id})`);
+      }
+      if (children && children.length > 0) {
+        lines.push(
+          `Children: ${
+            children.map((c) => `${c.name} (${c.type || "—"})`).join(", ")
+          }`,
+        );
+      }
+      lines.push(`Open tasks: ${taskCount || 0}`);
+      lines.push(
+        `Created: ${new Date(project.created_at).toLocaleDateString()}`,
+      );
+      lines.push(
+        `Updated: ${new Date(project.updated_at).toLocaleDateString()}`,
+      );
+      if (project.archived_at) {
+        lines.push(
+          `Archived: ${new Date(project.archived_at).toLocaleDateString()}`,
+        );
+      }
+
+      return textResult(lines.join("\n"));
+    }, logger),
   );
 
   server.registerTool(
     "update_project",
     {
       title: "Update Project",
-      description:
-        "Update a project's name, type, parent, or description. " +
+      description: "Update a project's name, type, parent, or description. " +
         "IMPORTANT: When the user mentions facts about a project — client name, location, purpose, key people, deadlines, or any contextual detail — " +
         "proactively call this tool to store that information in the project's description. " +
         "This makes the project self-documenting so that any AI querying it later has the full picture without needing to search through individual thoughts. " +
@@ -235,12 +247,17 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         id: z.string().describe("Project UUID"),
         name: z.string().optional().describe("New name"),
         type: z.string().optional().describe("New type"),
-        parent_id: z.string().nullable().optional().describe("New parent UUID, or null to remove parent"),
-        description: z.string().optional().describe("New or updated description — include client name, purpose, location, key contacts, or any context. Append to existing description unless correcting outdated info"),
+        parent_id: z.string().nullable().optional().describe(
+          "New parent UUID, or null to remove parent",
+        ),
+        description: z.string().optional().describe(
+          "New or updated description — include client name, purpose, location, key contacts, or any context. Append to existing description unless correcting outdated info",
+        ),
       },
     },
-    withMcpLogging("update_project", async ({ id, name, type, parent_id, description }) => {
-      try {
+    withMcpLogging(
+      "update_project",
+      async ({ id, name, type, parent_id, description }) => {
         const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
         if (type !== undefined) updates.type = type;
@@ -248,7 +265,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         if (description !== undefined) updates.description = description;
 
         if (Object.keys(updates).length === 0) {
-          return { content: [{ type: "text" as const, text: "No fields to update." }] };
+          return textResult("No fields to update.");
         }
 
         const { error } = await supabase
@@ -257,22 +274,15 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .eq("id", id);
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Update failed: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Update failed: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Project ${id} updated: ${Object.keys(updates).join(", ")}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `Project ${id} updated: ${Object.keys(updates).join(", ")}`,
+        );
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
@@ -288,79 +298,77 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       },
     },
     withMcpLogging("archive_project", async ({ id }) => {
-      try {
-        // Get the project name
-        const { data: project, error: fetchErr } = await supabase
+      // Get the project name
+      const { data: project, error: fetchErr } = await supabase
+        .from("projects")
+        .select("name")
+        .eq("id", id)
+        .single();
+
+      if (fetchErr || !project) {
+        return errorResult(
+          `Project not found: ${fetchErr?.message || "unknown"}`,
+        );
+      }
+
+      // Recursively collect all descendant project IDs
+      const allProjectIds: string[] = [id];
+      let frontier = [id];
+      while (frontier.length > 0) {
+        const { data: kids } = await supabase
           .from("projects")
-          .select("name")
-          .eq("id", id)
-          .single();
-
-        if (fetchErr || !project) {
-          return {
-            content: [{ type: "text" as const, text: `Project not found: ${fetchErr?.message || "unknown"}` }],
-            isError: true,
-          };
-        }
-
-        // Recursively collect all descendant project IDs
-        const allProjectIds: string[] = [id];
-        let frontier = [id];
-        while (frontier.length > 0) {
-          const { data: kids } = await supabase
-            .from("projects")
-            .select("id")
-            .in("parent_id", frontier)
-            .is("archived_at", null);
-
-          frontier = (kids || []).map(k => k.id);
-          allProjectIds.push(...frontier);
-        }
-
-        const childCount = allProjectIds.length - 1;
-
-        // Archive all projects
-        const { error: archiveErr } = await supabase
-          .from("projects")
-          .update({ archived_at: new Date().toISOString() })
-          .in("id", allProjectIds)
+          .select("id")
+          .in("parent_id", frontier)
           .is("archived_at", null);
 
-        if (archiveErr) throw new Error(`Archive projects failed: ${archiveErr.message}`);
-
-        // Archive open tasks for all these projects
-        const { data: tasks } = await supabase
-          .from("tasks")
-          .select("id")
-          .in("project_id", allProjectIds)
-          .is("archived_at", null)
-          .in("status", ["open", "in_progress"]);
-
-        let taskCount = 0;
-        if (tasks && tasks.length > 0) {
-          const taskIds = tasks.map(t => t.id);
-          const { error: taskErr } = await supabase
-            .from("tasks")
-            .update({ archived_at: new Date().toISOString() })
-            .in("id", taskIds);
-
-          if (taskErr) throw new Error(`Archive tasks failed: ${taskErr.message}`);
-          taskCount = tasks.length;
-        }
-
-        const parts = [`Archived project "${project.name}"`];
-        if (childCount > 0) parts.push(`${childCount} child project${childCount > 1 ? "s" : ""}`);
-        if (taskCount > 0) parts.push(`${taskCount} task${taskCount > 1 ? "s" : ""}`);
-
-        return {
-          content: [{ type: "text" as const, text: parts.join(" and ") }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+        frontier = (kids || []).map((k) => k.id);
+        allProjectIds.push(...frontier);
       }
-    }, logger)
+
+      const childCount = allProjectIds.length - 1;
+
+      // Archive all projects
+      const { error: archiveErr } = await supabase
+        .from("projects")
+        .update({ archived_at: new Date().toISOString() })
+        .in("id", allProjectIds)
+        .is("archived_at", null);
+
+      if (archiveErr) {
+        throw new Error(`Archive projects failed: ${archiveErr.message}`);
+      }
+
+      // Archive open tasks for all these projects
+      const { data: tasks } = await supabase
+        .from("tasks")
+        .select("id")
+        .in("project_id", allProjectIds)
+        .is("archived_at", null)
+        .in("status", ["open", "in_progress"]);
+
+      let taskCount = 0;
+      if (tasks && tasks.length > 0) {
+        const taskIds = tasks.map((t) => t.id);
+        const { error: taskErr } = await supabase
+          .from("tasks")
+          .update({ archived_at: new Date().toISOString() })
+          .in("id", taskIds);
+
+        if (taskErr) {
+          throw new Error(`Archive tasks failed: ${taskErr.message}`);
+        }
+        taskCount = tasks.length;
+      }
+
+      const parts = [`Archived project "${project.name}"`];
+      if (childCount > 0) {
+        parts.push(`${childCount} child project${childCount > 1 ? "s" : ""}`);
+      }
+      if (taskCount > 0) {
+        parts.push(`${taskCount} task${taskCount > 1 ? "s" : ""}`);
+      }
+
+      return textResult(parts.join(" and "));
+    }, logger),
   );
 }
