@@ -2,6 +2,10 @@
 
 The reverse data path: AI-generated content delivered to the user's Obsidian vault. Replaces the previous `ai_notes` system with explicit file paths and picked-up tracking.
 
+## Purpose
+
+Define the reverse data path — AI-generated content delivered to the user's Obsidian vault — including its storage model, picked-up and rejection tracking, and the MCP tools that create it. Replaces the previous `ai_notes` system with explicit file paths and picked-up tracking.
+
 ## Data Model
 
 - **Table:** `ai_output`
@@ -10,7 +14,7 @@ The reverse data path: AI-generated content delivered to the user's Obsidian vau
 
 ---
 
-## Scenarios
+## Requirements
 
 ### Requirement: AI output storage
 

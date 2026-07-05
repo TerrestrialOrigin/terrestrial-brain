@@ -2,9 +2,11 @@
 
 Server-side validation of file paths in `create_ai_output` and `create_tasks_with_output`, rejecting OS-invalid paths with descriptive errors. Uses Windows as the most restrictive baseline.
 
----
+## Purpose
 
-## Scenarios
+Provide server-side validation of file paths in `create_ai_output` and `create_tasks_with_output`, rejecting OS-invalid paths with descriptive errors, using Windows as the most restrictive baseline to ensure cross-platform compatibility.
+
+## Requirements
 
 ### Requirement: File path validation for AI output
 

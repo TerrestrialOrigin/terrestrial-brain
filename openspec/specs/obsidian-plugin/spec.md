@@ -2,6 +2,10 @@
 
 The Obsidian plugin (`terrestrial-brain-sync`) watches the vault for markdown file changes and syncs them to the Terrestrial Brain MCP endpoint. It also polls for AI-generated output and writes it to the vault.
 
+## Purpose
+
+The Obsidian plugin (`terrestrial-brain-sync`) watches the vault for markdown file changes and syncs them to the Terrestrial Brain MCP endpoint, and polls for AI-generated output to write back into the vault.
+
 ## Settings
 
 | Setting | Default | Description |
@@ -21,28 +25,30 @@ Settings and `syncedHashes` (Record<filePath, hash>) are saved together via `thi
 
 ---
 
-## Scenarios
+## Requirements
 
-### Auto-sync on edit
+### Requirement: Auto-sync on edit
 
-GIVEN the plugin is loaded and `tbEndpointUrl` is configured
-WHEN a markdown file is modified in the vault
-THEN the plugin starts (or resets) a per-file debounce timer using the sync delay converted to milliseconds (`syncDelayMinutes * 60000`)
+The plugin SHALL start (or reset) a per-file debounce timer when a markdown file is modified, and on timer fire SHALL sync the file to the `/ingest-note` endpoint only when the file is not excluded and its content hash differs from the last synced hash.
 
-GIVEN the debounce timer fires for a file
-AND the file is not excluded
-AND the file's content hash differs from the last synced hash
-WHEN the timer callback runs
-THEN the plugin:
-  1. Reads the file content
-  2. Strips YAML frontmatter
-  3. Calls the `/ingest-note` HTTP endpoint directly with `{ content, title (basename), note_id (vault-relative path) }` as a plain JSON POST
-  4. Stores the new content hash in syncedHashes
-  5. Persists syncedHashes to disk
+#### Scenario: Modify starts debounce timer
+- **WHEN** the plugin is loaded, `tbEndpointUrl` is configured, and a markdown file is modified in the vault
+- **THEN** the plugin SHALL start (or reset) a per-file debounce timer using the sync delay converted to milliseconds (`syncDelayMinutes * 60000`)
 
-GIVEN the file's content hash matches the last synced hash
-WHEN the timer fires
-THEN no sync occurs (duplicate prevention)
+#### Scenario: Timer fire syncs changed file
+- **WHEN** the debounce timer fires for a file
+- **AND** the file is not excluded
+- **AND** the file's content hash differs from the last synced hash
+- **THEN** the plugin SHALL read the file content
+- **AND** strip YAML frontmatter
+- **AND** call the `/ingest-note` HTTP endpoint directly with `{ content, title (basename), note_id (vault-relative path) }` as a plain JSON POST
+- **AND** store the new content hash in `syncedHashes`
+- **AND** persist `syncedHashes` to disk
+
+#### Scenario: Matching hash skips sync
+- **WHEN** the file's content hash matches the last synced hash
+- **AND** the timer fires
+- **THEN** no sync SHALL occur (duplicate prevention)
 
 #### Scenario: Timer uses minutes-to-ms conversion
 - **WHEN** the plugin schedules a sync timer
@@ -69,42 +75,41 @@ THEN no sync occurs (duplicate prevention)
 
 ---
 
-### Manual sync — current note
+### Requirement: Manual sync — current note
 
-GIVEN the plugin is loaded
-WHEN the user triggers "Sync current note to Terrestrial Brain" (command or ribbon context menu)
-THEN the plugin:
-  1. Cancels any pending debounce timer for this file
-  2. Calls `processNote` with force=true (bypasses hash check)
-  3. Shows a Notice with the result
+The plugin SHALL sync the current note on demand when the user triggers "Sync current note to Terrestrial Brain", bypassing the hash check.
 
----
-
-### Manual sync — entire vault
-
-GIVEN the plugin is loaded
-WHEN the user triggers "Sync entire vault to Terrestrial Brain"
-THEN the plugin:
-  1. Gets all markdown files in the vault
-  2. Filters out excluded files
-  3. For each eligible file (sequentially):
-     a. Cancels any pending timer
-     b. Calls `processNote` with force=true and silent=true
-  4. Shows a progress Notice during sync
-  5. Shows a final Notice with success/failure counts
+#### Scenario: User syncs current note
+- **WHEN** the plugin is loaded and the user triggers "Sync current note to Terrestrial Brain" (command or ribbon context menu)
+- **THEN** the plugin SHALL cancel any pending debounce timer for this file
+- **AND** call `processNote` with force=true (bypasses hash check)
+- **AND** show a Notice with the result
 
 ---
 
-### Exclusion check
+### Requirement: Manual sync — entire vault
 
-GIVEN a file is being considered for sync
-WHEN `isExcluded(file)` is called
-THEN the plugin SHALL check, in order:
-  1. Standalone frontmatter boolean: if `cache.frontmatter?.[excludeTag] === true`, return true
-  2. Inline tags from Obsidian's metadata cache (e.g. `#terrestrialBrainExclude`)
-  3. Frontmatter `tags` array (supports both array and single-value format)
-  4. Comparison is case-insensitive, leading `#` is stripped
-  5. Returns true if the excludeTag is found in any of the above checks
+The plugin SHALL sync every eligible markdown file in the vault on demand when the user triggers "Sync entire vault to Terrestrial Brain".
+
+#### Scenario: User syncs entire vault
+- **WHEN** the plugin is loaded and the user triggers "Sync entire vault to Terrestrial Brain"
+- **THEN** the plugin SHALL get all markdown files in the vault
+- **AND** filter out excluded files
+- **AND** for each eligible file (sequentially) cancel any pending timer and call `processNote` with force=true and silent=true
+- **AND** show a progress Notice during sync
+- **AND** show a final Notice with success/failure counts
+
+---
+
+### Requirement: Exclusion check
+
+The plugin SHALL determine whether a file is excluded from sync via `isExcluded(file)`, checking the standalone frontmatter boolean, inline tags, and the frontmatter `tags` array, with case-insensitive comparison and a stripped leading `#`.
+
+#### Scenario: isExcluded evaluation order
+- **WHEN** `isExcluded(file)` is called for a file being considered for sync
+- **THEN** the plugin SHALL check, in order: (1) standalone frontmatter boolean — if `cache.frontmatter?.[excludeTag] === true`, return true; (2) inline tags from Obsidian's metadata cache (e.g. `#terrestrialBrainExclude`); (3) frontmatter `tags` array (supports both array and single-value format)
+- **AND** comparison SHALL be case-insensitive with the leading `#` stripped
+- **AND** the plugin SHALL return true if the excludeTag is found in any of the above checks
 
 #### Scenario: Frontmatter boolean exclusion
 - **WHEN** a file has `terrestrialBrainExclude: true` as a standalone frontmatter boolean (not in the `tags` array)
@@ -124,7 +129,7 @@ THEN the plugin SHALL check, in order:
 
 ---
 
-### Copy path generation for conflicting AI output
+### Requirement: Copy path generation for conflicting AI output
 
 The plugin SHALL provide a `generateCopyPath` function that computes an alternative file path when the original target already exists in the vault. The function takes a vault-relative file path and returns a path with a numeric suffix appended before the file extension.
 
@@ -161,46 +166,40 @@ The plugin SHALL provide a `generateCopyPath` function that computes an alternat
 
 ---
 
-### AI output polling
+### Requirement: AI output polling
 
-The plugin SHALL poll for pending AI output on startup and at each poll interval.
+The plugin SHALL poll for pending AI output on startup and at each poll interval, and on returned output SHALL run conflict detection, present an accept/reject confirmation dialog, and deliver or reject the outputs accordingly.
 
-GIVEN the plugin is loaded and `tbEndpointUrl` is configured
-WHEN the plugin starts
-THEN it SHALL immediately poll for pending AI output
+#### Scenario: Poll on startup
+- **WHEN** the plugin is loaded, `tbEndpointUrl` is configured, and the plugin starts
+- **THEN** it SHALL immediately poll for pending AI output
 
-GIVEN the poll interval elapses
-WHEN the interval callback fires
-THEN the plugin SHALL poll for pending AI output
+#### Scenario: Poll on interval
+- **WHEN** the poll interval elapses and the interval callback fires
+- **THEN** the plugin SHALL poll for pending AI output
 
-GIVEN pending AI output is returned
-WHEN the plugin polls
-THEN the plugin SHALL:
-  1. Check which pending outputs target existing vault files (conflict detection)
-  2. Display a confirmation dialog (modal) listing all pending outputs with file path, character count, and conflict status
-  3. Wait for the user to click "Accept All" or "Reject All"
+#### Scenario: Pending output presented for confirmation
+- **WHEN** the plugin polls and pending AI output is returned
+- **THEN** the plugin SHALL check which pending outputs target existing vault files (conflict detection)
+- **AND** display a confirmation dialog (modal) listing all pending outputs with file path, character count, and conflict status
+- **AND** wait for the user to click "Accept All" or "Reject All"
 
-GIVEN the user clicks "Accept All"
-THEN the plugin SHALL for each output:
-  1. Creates parent folders if they don't exist
-  2. If the user chose "Save as copy" for this output, computes the copy path via `generateCopyPath` and writes to the copy path instead
-  3. Otherwise writes the file content to the original path (overwrites if exists)
-  4. Computes the content hash using `simpleHash(stripFrontmatter(content).trim())` and stores it in `syncedHashes[actualWrittenPath]`
-  5. Collects the output ID
-After all outputs are written:
-  6. Calls the `/mark-ai-output-picked-up` HTTP endpoint with the collected IDs
-  7. Persists `syncedHashes` to disk via `saveSettings()`
-  8. Shows a Notice: "{N} AI output(s) delivered to vault"
+#### Scenario: Accept All delivers outputs
+- **WHEN** the user clicks "Accept All"
+- **THEN** the plugin SHALL, for each output: create parent folders if they don't exist; if the user chose "Save as copy" for this output, compute the copy path via `generateCopyPath` and write to the copy path instead, otherwise write the file content to the original path (overwrites if exists); compute the content hash using `simpleHash(stripFrontmatter(content).trim())` and store it in `syncedHashes[actualWrittenPath]`; and collect the output ID
+- **AND** after all outputs are written, call the `/mark-ai-output-picked-up` HTTP endpoint with the collected IDs
+- **AND** persist `syncedHashes` to disk via `saveSettings()`
+- **AND** show a Notice: "{N} AI output(s) delivered to vault"
 
-GIVEN the user clicks "Reject All"
-THEN the plugin SHALL handle rejection:
-  1. Call the `/reject-ai-output` HTTP endpoint with all pending output IDs
-  2. Show a Notice: "{N} AI output(s) rejected"
-  3. NOT write any files to the vault
+#### Scenario: Reject All discards outputs
+- **WHEN** the user clicks "Reject All"
+- **THEN** the plugin SHALL call the `/reject-ai-output` HTTP endpoint with all pending output IDs
+- **AND** show a Notice: "{N} AI output(s) rejected"
+- **AND** NOT write any files to the vault
 
-GIVEN no pending AI output exists
-WHEN the plugin polls
-THEN the plugin SHALL take no action (silent)
+#### Scenario: No pending output is silent
+- **WHEN** the plugin polls and no pending AI output exists
+- **THEN** the plugin SHALL take no action (silent)
 
 #### Scenario: AI output write does not trigger re-ingestion
 - **WHEN** an AI output file is written to the vault by `pollAIOutput()` after user acceptance
@@ -248,27 +247,28 @@ THEN the plugin SHALL take no action (silent)
 
 ---
 
-### Manual AI output poll
+### Requirement: Manual AI output poll
 
-GIVEN the plugin is loaded
-WHEN the user triggers "Pull AI output from Terrestrial Brain"
-THEN the plugin SHALL run `pollAIOutput()` immediately
+The plugin SHALL run `pollAIOutput()` immediately when the user triggers "Pull AI output from Terrestrial Brain".
+
+#### Scenario: User pulls AI output
+- **WHEN** the plugin is loaded and the user triggers "Pull AI output from Terrestrial Brain"
+- **THEN** the plugin SHALL run `pollAIOutput()` immediately
 
 ---
 
-### MCP communication
+### Requirement: MCP communication
 
-GIVEN the plugin needs to call a direct HTTP endpoint on the edge function
-WHEN `callHTTP(endpointName, body?)` is called
-THEN the plugin:
-  1. Constructs the URL using `buildEndpointUrl(tbEndpointUrl, endpointName)`
-  2. Sends a POST request with `Content-Type: application/json` header, plus `x-brain-key: <accessKey>` when `accessKey` is non-empty
-  3. If `body` is provided, serializes it as JSON in the request body
-  4. Parses the JSON response
-  5. If `response.success` is false, throws an error with `response.error`
-  6. Returns the parsed response object
+The plugin SHALL call direct HTTP endpoints on the edge function via `callHTTP(endpointName, body?)`, and the `callMCP` method SHALL be removed since no operations use MCP JSON-RPC from the plugin.
 
-The `callMCP` method SHALL be removed since no operations use MCP JSON-RPC from the plugin.
+#### Scenario: callHTTP request flow
+- **WHEN** the plugin needs to call a direct HTTP endpoint on the edge function and `callHTTP(endpointName, body?)` is called
+- **THEN** the plugin SHALL construct the URL using `buildEndpointUrl(tbEndpointUrl, endpointName)`
+- **AND** send a POST request with `Content-Type: application/json` header, plus `x-brain-key: <accessKey>` when `accessKey` is non-empty
+- **AND** if `body` is provided, serialize it as JSON in the request body
+- **AND** parse the JSON response
+- **AND** if `response.success` is false, throw an error with `response.error`
+- **AND** otherwise return the parsed response object
 
 #### Scenario: Successful HTTP call with data
 - **WHEN** `callHTTP("get-pending-ai-output-metadata")` is called
@@ -290,7 +290,7 @@ The `callMCP` method SHALL be removed since no operations use MCP JSON-RPC from 
 
 ---
 
-### Generic endpoint URL construction
+### Requirement: Generic endpoint URL construction
 
 The plugin SHALL provide a `buildEndpointUrl(tbEndpointUrl, endpointName)` function that constructs a direct HTTP endpoint URL from the base MCP endpoint URL. The function inserts `/<endpointName>` before the query string. This replaces the specific `buildIngestNoteUrl` function.
 
@@ -308,9 +308,7 @@ The plugin SHALL provide a `buildEndpointUrl(tbEndpointUrl, endpointName)` funct
 
 ---
 
-### Header-based authentication (change: header-based-auth)
-
-#### Requirement: Dedicated access-key setting sent as request header
+### Requirement: Dedicated access-key setting sent as request header
 
 The plugin SHALL store the access key in a dedicated `accessKey` setting (default `""`), separate from the endpoint URL. Every HTTP request the plugin makes to the brain (`callHTTP`, `callIngestNote`) SHALL send the key in an `x-brain-key` request header when `accessKey` is non-empty, and SHALL NOT append the key to the request URL.
 
@@ -327,7 +325,7 @@ The plugin SHALL store the access key in a dedicated `accessKey` setting (defaul
 - **WHEN** `accessKey` is `""`
 - **THEN** no `x-brain-key` header is added (the server responds 401 and the existing error path surfaces it)
 
-#### Requirement: Legacy key-in-URL settings migration
+### Requirement: Legacy key-in-URL settings migration
 
 On settings load, and on endpoint-URL entry in the settings tab, the plugin SHALL detect a `key` query parameter in the stored/entered endpoint URL, move its value into the `accessKey` setting when `accessKey` is empty, and strip the `key` parameter from the URL (removing the `?` entirely when no other parameters remain). When `accessKey` is already non-empty, the URL is still stripped but the existing `accessKey` value is kept.
 
@@ -347,7 +345,7 @@ On settings load, and on endpoint-URL entry in the settings tab, the plugin SHAL
 - **WHEN** the user enters a URL containing `?key=abc` in the endpoint-URL setting
 - **THEN** the key is moved to the access-key setting (if empty) and the persisted URL contains no `key` parameter
 
-#### Requirement: Non-HTTPS endpoint warning
+### Requirement: Non-HTTPS endpoint warning
 
 The settings tab SHALL display a persistent warning beneath the endpoint-URL setting whenever the configured endpoint uses plain `http://` and the host is not `localhost` or `127.0.0.1`. The plugin SHALL still allow such endpoints (no hard block). An exported helper `isInsecureEndpoint(url)` SHALL implement the check.
 
@@ -365,22 +363,23 @@ The settings tab SHALL display a persistent warning beneath the endpoint-URL set
 
 ---
 
-### Plugin lifecycle
+### Requirement: Plugin lifecycle
 
-GIVEN Obsidian loads the plugin
-WHEN `onload()` runs
-THEN:
-  1. Loads settings and syncedHashes from disk
-  2. Registers file modify event handler
-  3. Registers commands: sync current note, sync vault, poll AI output
-  4. Adds ribbon icon (brain icon) with context menu
-  5. Adds settings tab
-  6. Runs initial AI output poll
-  7. Starts poll interval timer
+On load the plugin SHALL initialize settings, event handlers, commands, UI, and timers, and on unload SHALL clear all pending debounce timers.
 
-GIVEN Obsidian unloads the plugin
-WHEN `onunload()` runs
-THEN all pending debounce timers are cleared
+#### Scenario: onload initialization
+- **WHEN** Obsidian loads the plugin and `onload()` runs
+- **THEN** the plugin SHALL load settings and `syncedHashes` from disk
+- **AND** register the file modify event handler
+- **AND** register commands: sync current note, sync vault, poll AI output
+- **AND** add the ribbon icon (brain icon) with context menu
+- **AND** add the settings tab
+- **AND** run the initial AI output poll
+- **AND** start the poll interval timer
+
+#### Scenario: onunload clears timers
+- **WHEN** Obsidian unloads the plugin and `onunload()` runs
+- **THEN** all pending debounce timers SHALL be cleared
 
 #### Scenario: Ribbon icon shows context menu
 - **WHEN** the user clicks the brain ribbon icon

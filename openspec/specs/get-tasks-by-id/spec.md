@@ -2,7 +2,10 @@
 
 Bulk task retrieval by UUID array with full resolved metadata.
 
----
+## Purpose
+
+Bulk task retrieval by UUID array with full resolved metadata, so callers can
+resolve many task references in a single round-trip.
 
 ## Requirements
 

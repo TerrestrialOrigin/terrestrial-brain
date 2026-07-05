@@ -1,3 +1,11 @@
+# update_document
+
+## Purpose
+
+Provide an `update_document` MCP tool that updates an existing document's title, content, or project assignment, re-running extraction and soft-archiving linked thoughts when content changes, while ensuring a failed document update never destroys linked thoughts.
+
+## Requirements
+
 ### Requirement: update_document MCP tool updates an existing document
 
 The system SHALL expose an `update_document` MCP tool that accepts `id` (string, required), `title` (string, optional), `content` (string, optional), and `project_id` (string, optional). At least one of `title`, `content`, or `project_id` MUST be provided. The tool SHALL update the specified document row and return confirmation of which fields were updated.

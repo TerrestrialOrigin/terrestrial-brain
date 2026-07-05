@@ -1,4 +1,10 @@
-## ADDED Requirements
+# Function Call Logging
+
+## Purpose
+
+Record every MCP tool and HTTP endpoint invocation in a service-role-only `function_call_logs` table, capturing the function name, type, input, timestamp, client IP, and any error, without letting logging failures affect normal responses.
+
+## Requirements
 
 ### Requirement: Function call log table exists
 The system SHALL maintain a `function_call_logs` table with columns: `id` (uuid PK), `function_name` (text, not null), `function_type` (text, not null), `input` (text), `called_at` (timestamptz, not null, default now()), `error_details` (text, nullable), `ip_address` (text, nullable). RLS SHALL be enabled with service-role-only access.
