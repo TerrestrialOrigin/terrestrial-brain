@@ -28,6 +28,9 @@ Living document. Each OpenSpec change with security impact records its analysis 
 | T6 | Brute-forcing the access key | **Accepted (low risk)** | Key is operator-generated high entropy (README setup instructs a random string). No rate limiting at the edge — revisit if abuse is observed (function-call logs record caller IPs) |
 | T7 | Cross-origin browser calls (CORS is `origin: "*"`) | **Accepted by design** | Auth is a non-ambient explicit header, not cookies — a cross-origin page without the key gets 401. Wildcard CORS is what lets arbitrary MCP web clients connect |
 | T8 | Prompt injection via ingested note content into the LLM extraction pipeline | **Partially addressed** | The Slack ingest surface was removed (`remove-slack-integration`); remaining ingest paths all require the access key. LLM-driven destructive writes are being removed separately (fix-plan Step 4: soft-archive instead of hard delete) |
+| T9 | Missing required secret silently degrades the function (`Bearer undefined`, broken auth) | **Mitigated** (fail-fast-env-and-errors) | `requireEnv` throws at cold start naming the missing variable; the function refuses to boot rather than run with an undefined secret |
+| T10 | Secret disclosure through surfaced error text | **Mitigated** (fail-fast-env-and-errors) | `requireEnv` throws with the variable *name* only, never its value; the `(section unavailable: <reason>)` marker echoes only the Supabase error message (schema/constraint text), no secret material |
+| T11 | Surfaced DB error messages leak internal schema detail to a caller | **Accepted (low risk)** (fail-fast-env-and-errors) | Caller is already past the shared-secret gate; the marker exposes no more than the existing top-level `catch`/`console.error`. No new external surface |
 
 ## Out of scope (accepted for a single-tenant personal system)
 

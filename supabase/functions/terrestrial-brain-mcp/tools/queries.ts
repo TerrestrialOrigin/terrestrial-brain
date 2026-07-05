@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { renderSectionBody } from "./section-format.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,16 +56,19 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         // 2. Fetch parent name
         let parentName: string | null = null;
         if (project.parent_id) {
-          const { data: parent } = await supabase
+          const { data: parent, error: parentError } = await supabase
             .from("projects")
             .select("name")
             .eq("id", project.parent_id)
             .single();
+          if (parentError) {
+            console.error(`get_project_summary parent lookup failed: ${parentError.message}`);
+          }
           parentName = parent?.name || null;
         }
 
         // 3. Fetch children
-        const { data: children } = await supabase
+        const { data: children, error: childrenError } = await supabase
           .from("projects")
           .select("id, name, type")
           .eq("parent_id", id)
@@ -72,7 +76,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .order("name");
 
         // 4. Fetch open tasks
-        const { data: tasks } = await supabase
+        const { data: tasks, error: tasksError } = await supabase
           .from("tasks")
           .select("id, content, status, due_by, assigned_to, created_at")
           .eq("project_id", id)
@@ -82,7 +86,10 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
 
         // 5. Fetch recent thoughts that reference this project (DB-side filtering)
         // Query both metadata formats in parallel: new (projects array) and old (project_id string)
-        const [{ data: newFormatThoughts }, { data: oldFormatThoughts }] = await Promise.all([
+        const [
+          { data: newFormatThoughts, error: newFormatThoughtsError },
+          { data: oldFormatThoughts, error: oldFormatThoughtsError },
+        ] = await Promise.all([
           supabase
             .from("thoughts")
             .select("id, content, metadata, note_snapshot_id, created_at")
@@ -98,6 +105,9 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .order("created_at", { ascending: false })
             .limit(25),
         ]);
+        // If either format query fails the thoughts view is incomplete — surface it
+        // rather than silently showing a partial (or empty) list.
+        const thoughtsError = newFormatThoughtsError ?? oldFormatThoughtsError;
 
         // Merge and deduplicate by ID, then take top 10 by date
         const allProjectThoughts = [...(newFormatThoughts || []), ...(oldFormatThoughts || [])];
@@ -122,11 +132,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
 
         let snapshotMap: Record<string, { title: string | null; reference_id: string }> = {};
         if (snapshotIds.length > 0) {
-          const { data: snapshots } = await supabase
+          const { data: snapshots, error: snapshotsError } = await supabase
             .from("note_snapshots")
             .select("id, title, reference_id")
             .in("id", snapshotIds);
 
+          if (snapshotsError) {
+            console.error(`get_project_summary source-note lookup failed: ${snapshotsError.message}`);
+          }
           snapshotMap = Object.fromEntries(
             (snapshots || []).map((snapshot: { id: string; title: string | null; reference_id: string }) => [
               snapshot.id,
@@ -145,10 +158,13 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         ];
         let personMap: Record<string, string> = {};
         if (taskPersonIds.length > 0) {
-          const { data: people } = await supabase
+          const { data: people, error: peopleError } = await supabase
             .from("people")
             .select("id, name")
             .in("id", taskPersonIds);
+          if (peopleError) {
+            console.error(`get_project_summary assignee lookup failed: ${peopleError.message}`);
+          }
           personMap = Object.fromEntries(
             (people || []).map((person: { id: string; name: string }) => [person.id, person.name])
           );
@@ -177,55 +193,71 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         );
         sections.push(detailLines.join("\n"));
 
-        // Children
-        if (children && children.length > 0) {
-          const childLines = [
-            "",
-            `## Child Projects (${children.length})`,
-            "",
-            ...children.map(
-              (child: { name: string; type: string | null; id: string }) =>
-                `- ${child.name} (${child.type || "—"}) — ${child.id}`
-            ),
-          ];
-          sections.push(childLines.join("\n"));
+        // Children — only render a section when there are children OR the lookup
+        // failed (a failure must not be indistinguishable from "no children").
+        if (childrenError || (children && children.length > 0)) {
+          const childBody = renderSectionBody(
+            { data: children, error: childrenError },
+            "", // never reached: section is skipped entirely on success-empty above
+            (rows) =>
+              rows
+                .map(
+                  (child: { name: string; type: string | null; id: string }) =>
+                    `- ${child.name} (${child.type || "—"}) — ${child.id}`
+                )
+                .join("\n"),
+            "get_project_summary children",
+          );
+          const childCount = childrenError ? "?" : (children?.length ?? 0);
+          sections.push(["", `## Child Projects (${childCount})`, "", childBody].join("\n"));
         }
 
         // Open tasks
         const taskList = tasks || [];
-        const taskLines = ["", `## Open Tasks (${taskList.length})`];
-        if (taskList.length === 0) {
-          taskLines.push("", "No open tasks.");
-        } else {
-          taskLines.push("");
-          for (const task of taskList) {
-            const statusIcon = task.status === "in_progress" ? "[~]" : "[ ]";
-            const duePart = task.due_by
-              ? ` — due ${formatDate(task.due_by)}${new Date(task.due_by) < new Date() ? " (OVERDUE)" : ""}`
-              : "";
-            const assigneePart = task.assigned_to && personMap[task.assigned_to]
-              ? ` (${personMap[task.assigned_to]})`
-              : "";
-            taskLines.push(`- ${statusIcon} ${task.content}${assigneePart}${duePart}`);
-          }
-        }
-        sections.push(taskLines.join("\n"));
+        const openTasksBody = renderSectionBody(
+          { data: tasks, error: tasksError },
+          "No open tasks.",
+          (rows) =>
+            rows
+              .map((task) => {
+                const statusIcon = task.status === "in_progress" ? "[~]" : "[ ]";
+                const duePart = task.due_by
+                  ? ` — due ${formatDate(task.due_by)}${new Date(task.due_by) < new Date() ? " (OVERDUE)" : ""}`
+                  : "";
+                const assigneePart = task.assigned_to && personMap[task.assigned_to]
+                  ? ` (${personMap[task.assigned_to]})`
+                  : "";
+                return `- ${statusIcon} ${task.content}${assigneePart}${duePart}`;
+              })
+              .join("\n"),
+          "get_project_summary open tasks",
+        );
+        sections.push(
+          ["", `## Open Tasks (${tasksError ? "?" : taskList.length})`, "", openTasksBody].join("\n")
+        );
 
         // Recent thoughts
-        const thoughtLines = ["", `## Recent Thoughts (${matchingThoughts.length})`];
-        if (matchingThoughts.length === 0) {
-          thoughtLines.push("", "No recent thoughts referencing this project.");
-        } else {
-          thoughtLines.push("");
-          for (const thought of matchingThoughts) {
-            const meta = (thought.metadata || {}) as Record<string, unknown>;
-            const typeLabel = (meta.type as string) || "unknown";
-            thoughtLines.push(
-              `- [${formatDate(thought.created_at)}] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`
-            );
-          }
-        }
-        sections.push(thoughtLines.join("\n"));
+        const thoughtsBody = renderSectionBody(
+          { data: thoughtsError ? null : matchingThoughts, error: thoughtsError },
+          "No recent thoughts referencing this project.",
+          (rows) =>
+            rows
+              .map((thought) => {
+                const meta = (thought.metadata || {}) as Record<string, unknown>;
+                const typeLabel = (meta.type as string) || "unknown";
+                return `- [${formatDate(thought.created_at)}] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`;
+              })
+              .join("\n"),
+          "get_project_summary recent thoughts",
+        );
+        sections.push(
+          [
+            "",
+            `## Recent Thoughts (${thoughtsError ? "?" : matchingThoughts.length})`,
+            "",
+            thoughtsBody,
+          ].join("\n")
+        );
 
         // Source notes
         const uniqueSnapshots = Object.values(snapshotMap);
@@ -284,7 +316,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const sinceIso = sinceDate.toISOString();
 
         // 1. Recent thoughts
-        const { data: thoughts } = await supabase
+        const { data: thoughts, error: thoughtsError } = await supabase
           .from("thoughts")
           .select("id, content, metadata, created_at")
           .is("archived_at", null)
@@ -293,7 +325,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .limit(20);
 
         // 2. Tasks created
-        const { data: tasksCreated } = await supabase
+        const { data: tasksCreated, error: tasksCreatedError } = await supabase
           .from("tasks")
           .select("content, status, project_id, created_at")
           .is("archived_at", null)
@@ -301,7 +333,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .order("created_at", { ascending: false });
 
         // 3. Tasks completed (done + updated recently)
-        const { data: tasksCompleted } = await supabase
+        const { data: tasksCompleted, error: tasksCompletedError } = await supabase
           .from("tasks")
           .select("content, project_id, updated_at")
           .eq("status", "done")
@@ -310,19 +342,20 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .order("updated_at", { ascending: false });
 
         // 4. Projects created or updated
-        const { data: projectsCreated } = await supabase
+        const { data: projectsCreated, error: projectsCreatedError } = await supabase
           .from("projects")
           .select("name, type, created_at")
           .is("archived_at", null)
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false });
 
-        const { data: projectsUpdated } = await supabase
+        const { data: projectsUpdated, error: projectsUpdatedError } = await supabase
           .from("projects")
           .select("name, type, updated_at")
           .is("archived_at", null)
           .gte("updated_at", sinceIso)
           .order("updated_at", { ascending: false });
+        const projectsError = projectsCreatedError ?? projectsUpdatedError;
 
         // Deduplicate projects (could appear in both created and updated)
         const allProjectNames = new Set<string>();
@@ -340,7 +373,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         }
 
         // 5. AI outputs delivered
-        const { data: aiOutputs } = await supabase
+        const { data: aiOutputs, error: aiOutputsError } = await supabase
           .from("ai_output")
           .select("title, file_path, picked_up_at")
           .eq("picked_up", true)
@@ -348,19 +381,20 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .order("picked_up_at", { ascending: false });
 
         // 6. People created or updated
-        const { data: peopleCreated } = await supabase
+        const { data: peopleCreated, error: peopleCreatedError } = await supabase
           .from("people")
           .select("name, type, created_at")
           .is("archived_at", null)
           .gte("created_at", sinceIso)
           .order("created_at", { ascending: false });
 
-        const { data: peopleUpdated } = await supabase
+        const { data: peopleUpdated, error: peopleUpdatedError } = await supabase
           .from("people")
           .select("name, type, updated_at")
           .is("archived_at", null)
           .gte("updated_at", sinceIso)
           .order("updated_at", { ascending: false });
+        const peopleError = peopleCreatedError ?? peopleUpdatedError;
 
         // Deduplicate people (could appear in both created and updated)
         const allPeopleNames = new Set<string>();
@@ -388,10 +422,13 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
 
         let projectNameMap: Record<string, string> = {};
         if (projectIdSet.size > 0) {
-          const { data: projects } = await supabase
+          const { data: projects, error: projectNamesError } = await supabase
             .from("projects")
             .select("id, name")
             .in("id", [...projectIdSet]);
+          if (projectNamesError) {
+            console.error(`get_recent_activity project-name lookup failed: ${projectNamesError.message}`);
+          }
           projectNameMap = Object.fromEntries(
             (projects || []).map((project: { id: string; name: string }) => [project.id, project.name])
           );
@@ -402,83 +439,110 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const sections: string[] = [];
         sections.push(`# Activity — Last ${effectiveDays} Day${effectiveDays !== 1 ? "s" : ""}`);
 
+        // Push one "## Header (count)" section, surfacing a failed query as an
+        // explicit unavailable marker rather than empty-state prose (finding C9).
+        const pushSection = <Row>(
+          title: string,
+          result: { data: Row[] | null; error: { message: string } | null },
+          emptyText: string,
+          renderRows: (rows: Row[]) => string,
+          context: string,
+        ) => {
+          const count = result.error ? "?" : (result.data?.length ?? 0);
+          sections.push(
+            "",
+            `## ${title} (${count})`,
+            "",
+            renderSectionBody(result, emptyText, renderRows, context),
+          );
+        };
+
         // Thoughts
         const thoughtList = thoughts || [];
-        sections.push("", `## Thoughts (${thoughtList.length})`);
-        if (thoughtList.length === 0) {
-          sections.push("", "No new thoughts.");
-        } else {
-          sections.push("");
-          for (const thought of thoughtList) {
-            const meta = (thought.metadata || {}) as Record<string, unknown>;
-            const typeLabel = (meta.type as string) || "unknown";
-            sections.push(`- [${formatDate(thought.created_at)}] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`);
-          }
-        }
+        pushSection(
+          "Thoughts",
+          { data: thoughtsError ? null : thoughtList, error: thoughtsError },
+          "No new thoughts.",
+          (rows) =>
+            rows
+              .map((thought) => {
+                const meta = (thought.metadata || {}) as Record<string, unknown>;
+                const typeLabel = (meta.type as string) || "unknown";
+                return `- [${formatDate(thought.created_at)}] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`;
+              })
+              .join("\n"),
+          "get_recent_activity thoughts",
+        );
 
         // Tasks created
-        const createdList = tasksCreated || [];
-        sections.push("", `## Tasks Created (${createdList.length})`);
-        if (createdList.length === 0) {
-          sections.push("", "No tasks created.");
-        } else {
-          sections.push("");
-          for (const task of createdList) {
-            const projectLabel = task.project_id && projectNameMap[task.project_id]
-              ? ` [${projectNameMap[task.project_id]}]`
-              : "";
-            sections.push(`- ${task.content} (${task.status})${projectLabel} — ${formatDate(task.created_at)}`);
-          }
-        }
+        pushSection(
+          "Tasks Created",
+          { data: tasksCreated, error: tasksCreatedError },
+          "No tasks created.",
+          (rows) =>
+            rows
+              .map((task) => {
+                const projectLabel = task.project_id && projectNameMap[task.project_id]
+                  ? ` [${projectNameMap[task.project_id]}]`
+                  : "";
+                return `- ${task.content} (${task.status})${projectLabel} — ${formatDate(task.created_at)}`;
+              })
+              .join("\n"),
+          "get_recent_activity tasks created",
+        );
 
         // Tasks completed
-        const completedList = tasksCompleted || [];
-        sections.push("", `## Tasks Completed (${completedList.length})`);
-        if (completedList.length === 0) {
-          sections.push("", "No tasks completed.");
-        } else {
-          sections.push("");
-          for (const task of completedList) {
-            const projectLabel = task.project_id && projectNameMap[task.project_id]
-              ? ` [${projectNameMap[task.project_id]}]`
-              : "";
-            sections.push(`- ${task.content}${projectLabel} — ${formatDate(task.updated_at)}`);
-          }
-        }
+        pushSection(
+          "Tasks Completed",
+          { data: tasksCompleted, error: tasksCompletedError },
+          "No tasks completed.",
+          (rows) =>
+            rows
+              .map((task) => {
+                const projectLabel = task.project_id && projectNameMap[task.project_id]
+                  ? ` [${projectNameMap[task.project_id]}]`
+                  : "";
+                return `- ${task.content}${projectLabel} — ${formatDate(task.updated_at)}`;
+              })
+              .join("\n"),
+          "get_recent_activity tasks completed",
+        );
 
         // Projects
-        sections.push("", `## Projects (${projectEntries.length})`);
-        if (projectEntries.length === 0) {
-          sections.push("", "No project activity.");
-        } else {
-          sections.push("");
-          for (const entry of projectEntries) {
-            sections.push(`- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${formatDate(entry.date)}`);
-          }
-        }
+        pushSection(
+          "Projects",
+          { data: projectsError ? null : projectEntries, error: projectsError },
+          "No project activity.",
+          (rows) =>
+            rows
+              .map((entry) => `- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${formatDate(entry.date)}`)
+              .join("\n"),
+          "get_recent_activity projects",
+        );
 
         // People
-        sections.push("", `## People (${peopleEntries.length})`);
-        if (peopleEntries.length === 0) {
-          sections.push("", "No people activity.");
-        } else {
-          sections.push("");
-          for (const entry of peopleEntries) {
-            sections.push(`- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${formatDate(entry.date)}`);
-          }
-        }
+        pushSection(
+          "People",
+          { data: peopleError ? null : peopleEntries, error: peopleError },
+          "No people activity.",
+          (rows) =>
+            rows
+              .map((entry) => `- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${formatDate(entry.date)}`)
+              .join("\n"),
+          "get_recent_activity people",
+        );
 
         // AI outputs
-        const outputList = aiOutputs || [];
-        sections.push("", `## AI Outputs Delivered (${outputList.length})`);
-        if (outputList.length === 0) {
-          sections.push("", "No AI outputs delivered.");
-        } else {
-          sections.push("");
-          for (const output of outputList) {
-            sections.push(`- "${output.title}" → ${output.file_path} — ${formatDate(output.picked_up_at)}`);
-          }
-        }
+        pushSection(
+          "AI Outputs Delivered",
+          { data: aiOutputs, error: aiOutputsError },
+          "No AI outputs delivered.",
+          (rows) =>
+            rows
+              .map((output) => `- "${output.title}" → ${output.file_path} — ${formatDate(output.picked_up_at)}`)
+              .join("\n"),
+          "get_recent_activity ai outputs",
+        );
 
         // Usefulness reminder
         if (thoughtList.length > 0) {

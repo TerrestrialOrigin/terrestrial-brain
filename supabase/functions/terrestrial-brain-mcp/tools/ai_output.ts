@@ -347,16 +347,22 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         ];
         let projectNameMap: Record<string, string> = {};
         if (projectIds.length > 0) {
-          const { data: projects } = await supabase
+          const { data: projects, error: projectsError } = await supabase
             .from("projects")
             .select("id, name")
             .in("id", projectIds);
-          projectNameMap = Object.fromEntries(
-            (projects || []).map((project: { id: string; name: string }) => [
-              project.id,
-              project.name,
-            ]),
-          );
+          // Log + raw-id fallback on error, never a silently-empty map (finding C9).
+          if (projectsError) {
+            console.error(`create_tasks_with_output project-name lookup failed: ${projectsError.message}`);
+            projectNameMap = Object.fromEntries(projectIds.map((pid) => [pid, pid]));
+          } else {
+            projectNameMap = Object.fromEntries(
+              (projects || []).map((project: { id: string; name: string }) => [
+                project.id,
+                project.name,
+              ]),
+            );
+          }
         }
 
         // Fetch person names for markdown assignee labels
@@ -367,16 +373,21 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         ];
         let personNameMap: Record<string, string> = {};
         if (personIds.length > 0) {
-          const { data: people } = await supabase
+          const { data: people, error: peopleError } = await supabase
             .from("people")
             .select("id, name")
             .in("id", personIds);
-          personNameMap = Object.fromEntries(
-            (people || []).map((person: { id: string; name: string }) => [
-              person.id,
-              person.name,
-            ]),
-          );
+          if (peopleError) {
+            console.error(`create_tasks_with_output assignee lookup failed: ${peopleError.message}`);
+            personNameMap = Object.fromEntries(personIds.map((pid) => [pid, pid]));
+          } else {
+            personNameMap = Object.fromEntries(
+              (people || []).map((person: { id: string; name: string }) => [
+                person.id,
+                person.name,
+              ]),
+            );
+          }
         }
 
         // Insert task rows sequentially (parent_index → parent_id resolution)

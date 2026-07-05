@@ -8,9 +8,9 @@ import { ProjectExtractor } from "../extractors/project-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { requireEnv } from "../env.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 const USEFULNESS_REMINDER_LINES = [
   "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
   "1. Call record_useful_thoughts with IDs that contributed (or empty array).",
@@ -924,10 +924,11 @@ export async function handleIngestNote(
       .map((t) => `[ID:${t.id}] (captured ${new Date(t.created_at).toLocaleDateString()})\n${t.content}`)
       .join("\n\n");
 
+    const reconcileApiKey = requireEnv("OPENROUTER_API_KEY");
     const reconcileResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${reconcileApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

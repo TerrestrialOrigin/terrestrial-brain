@@ -20,10 +20,14 @@ import { register as registerQueries } from "./tools/queries.ts";
 import { register as registerPeople } from "./tools/people.ts";
 import { register as registerDocuments } from "./tools/documents.ts";
 import { createFunctionCallLogger, extractIpAddress, setCurrentRequestIp } from "./logger.ts";
+import { requireEnv } from "./env.ts";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const MCP_ACCESS_KEY = Deno.env.get("MCP_ACCESS_KEY")!;
+// Composition-root secrets: validated at cold start so a missing var fails the
+// boot loudly (named in the error) rather than surfacing later as broken auth or
+// a corrupt outbound request (finding X5).
+const SUPABASE_URL = requireEnv("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+const MCP_ACCESS_KEY = requireEnv("MCP_ACCESS_KEY");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const logger = createFunctionCallLogger(supabase);

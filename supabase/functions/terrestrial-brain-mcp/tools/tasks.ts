@@ -103,26 +103,37 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           return { content: [{ type: "text" as const, text: "No tasks found." }] };
         }
 
-        // Get project names
+        // Get project names. On lookup error, log and fall back to raw ids
+        // (never a silently-empty map that would hide the failure) — finding C9.
         const projectIds = [...new Set(data.filter(t => t.project_id).map(t => t.project_id))];
         let projectMap: Record<string, string> = {};
         if (projectIds.length > 0) {
-          const { data: projects } = await supabase
+          const { data: projects, error: projectsError } = await supabase
             .from("projects")
             .select("id, name")
             .in("id", projectIds);
-          projectMap = Object.fromEntries((projects || []).map(p => [p.id, p.name]));
+          if (projectsError) {
+            console.error(`list_tasks project-name lookup failed: ${projectsError.message}`);
+            projectMap = Object.fromEntries(projectIds.map(pid => [pid, pid]));
+          } else {
+            projectMap = Object.fromEntries((projects || []).map(p => [p.id, p.name]));
+          }
         }
 
-        // Get assigned person names
+        // Get assigned person names (same log-and-fall-back-to-raw-id policy).
         const personIds = [...new Set(data.filter(t => t.assigned_to).map(t => t.assigned_to))];
         let personMap: Record<string, string> = {};
         if (personIds.length > 0) {
-          const { data: people } = await supabase
+          const { data: people, error: peopleError } = await supabase
             .from("people")
             .select("id, name")
             .in("id", personIds);
-          personMap = Object.fromEntries((people || []).map(p => [p.id, p.name]));
+          if (peopleError) {
+            console.error(`list_tasks assignee lookup failed: ${peopleError.message}`);
+            personMap = Object.fromEntries(personIds.map(pid => [pid, pid]));
+          } else {
+            personMap = Object.fromEntries((people || []).map(p => [p.id, p.name]));
+          }
         }
 
         const lines = data.map((t, i) => {
@@ -301,37 +312,52 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           };
         }
 
-        // Batch-resolve project names
+        // Batch-resolve project names. Log + raw-id fallback on error (finding C9).
         const projectIds = [...new Set(data.filter(task => task.project_id).map(task => task.project_id))];
         let projectMap: Record<string, string> = {};
         if (projectIds.length > 0) {
-          const { data: projects } = await supabase
+          const { data: projects, error: projectsError } = await supabase
             .from("projects")
             .select("id, name")
             .in("id", projectIds);
-          projectMap = Object.fromEntries((projects || []).map(project => [project.id, project.name]));
+          if (projectsError) {
+            console.error(`get_tasks project-name lookup failed: ${projectsError.message}`);
+            projectMap = Object.fromEntries(projectIds.map(pid => [pid, pid]));
+          } else {
+            projectMap = Object.fromEntries((projects || []).map(project => [project.id, project.name]));
+          }
         }
 
-        // Batch-resolve assigned person names
+        // Batch-resolve assigned person names (same policy).
         const personIds = [...new Set(data.filter(task => task.assigned_to).map(task => task.assigned_to))];
         let personMap: Record<string, string> = {};
         if (personIds.length > 0) {
-          const { data: people } = await supabase
+          const { data: people, error: peopleError } = await supabase
             .from("people")
             .select("id, name")
             .in("id", personIds);
-          personMap = Object.fromEntries((people || []).map(person => [person.id, person.name]));
+          if (peopleError) {
+            console.error(`get_tasks assignee lookup failed: ${peopleError.message}`);
+            personMap = Object.fromEntries(personIds.map(pid => [pid, pid]));
+          } else {
+            personMap = Object.fromEntries((people || []).map(person => [person.id, person.name]));
+          }
         }
 
-        // Batch-resolve parent task content
+        // Batch-resolve parent task content (same policy).
         const parentIds = [...new Set(data.filter(task => task.parent_id).map(task => task.parent_id))];
         let parentMap: Record<string, string> = {};
         if (parentIds.length > 0) {
-          const { data: parents } = await supabase
+          const { data: parents, error: parentsError } = await supabase
             .from("tasks")
             .select("id, content")
             .in("id", parentIds);
-          parentMap = Object.fromEntries((parents || []).map(parent => [parent.id, parent.content]));
+          if (parentsError) {
+            console.error(`get_tasks parent-task lookup failed: ${parentsError.message}`);
+            parentMap = Object.fromEntries(parentIds.map(pid => [pid, pid]));
+          } else {
+            parentMap = Object.fromEntries((parents || []).map(parent => [parent.id, parent.content]));
+          }
         }
 
         const lines = data.map((task, index) => {

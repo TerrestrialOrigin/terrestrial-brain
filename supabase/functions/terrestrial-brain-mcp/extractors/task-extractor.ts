@@ -23,9 +23,9 @@ import {
   getZonedDate,
 } from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
+import { requireEnv } from "../env.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
 // ---------------------------------------------------------------------------
 // Content similarity
@@ -275,11 +275,12 @@ async function inferProjectsByContent(
     .join("\n");
   const validIds = new Set(knownProjects.map((project) => project.id));
 
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   try {
     const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -476,11 +477,12 @@ async function inferTaskEnrichments(
     })
     .join("\n");
 
+  const apiKey = requireEnv("OPENROUTER_API_KEY");
   try {
     const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
