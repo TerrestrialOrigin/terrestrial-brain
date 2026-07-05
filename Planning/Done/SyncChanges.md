@@ -266,7 +266,7 @@ Extractors run **in sequence**, not parallel, because later extractors depend on
 
 ### 3.5 Tests (`tests/integration/extractors.test.ts`)
 
-- ProjectExtractor: note in `/projects/CarChief/` → detects CarChief project
+- ProjectExtractor: note in `/projects/Test Proj/` → detects Test Proj project
 - ProjectExtractor: note with `# TerrestrialCore` heading → detects project by heading
 - ProjectExtractor: new folder under `/projects/` → creates project row
 - ProjectExtractor: enriches context (newlyCreatedProjects populated)
@@ -289,7 +289,7 @@ Extractors run **in sequence**, not parallel, because later extractors depend on
 
 1. Use the structurally parsed checkboxes from `ParsedNote.checkboxes`
 2. For project association, apply priority chain:
-   a. **File path** — if note is in `/projects/CarChief/`, all tasks default to CarChief
+   a. **File path** — if note is in `/projects/Test Proj/`, all tasks default to Test Proj
    b. **Section heading** — if a task is under a `# TerrestrialCore` heading that matches a known project, it belongs to that project
    c. **Content inference** — for remaining unassigned tasks, use an AI call:
       - Input: task texts + known projects list (including `context.newlyCreatedProjects`)
@@ -316,7 +316,7 @@ Extractors run **in sequence**, not parallel, because later extractors depend on
 - TaskExtractor: checked `- [x]` → task status = 'done'
 - TaskExtractor: indented checkboxes → subtask hierarchy (parent_id set)
 - TaskExtractor: tasks under project heading → associated with that project
-- TaskExtractor: content-based project detection ("CarChief tickets" → CarChief project)
+- TaskExtractor: content-based project detection ("Test Proj tickets" → Test Proj project)
 - TaskExtractor: re-ingest with checked box → task status updated to 'done'
 - TaskExtractor: re-ingest with new checkbox added → new task created, existing tasks kept
 - Pipeline: full run with both extractors → references composed correctly with both project and task IDs
@@ -484,7 +484,7 @@ projectsFolderBase: string;     // default: "projects"
 
 ### 7.1 AI Creating Tasks via AI Output
 
-When the AI creates tasks for the user (e.g., "create a task list for the CarChief sprint"):
+When the AI creates tasks for the user (e.g., "create a task list for the Test Proj sprint"):
 
 1. **Write structured data to tasks table directly** — correct project associations, proper status, hierarchy
 2. **Write the markdown version to `ai_output`** — with `- [ ]` checkboxes, organized under headings, placed at a specific file path
@@ -537,7 +537,7 @@ When the plugin delivers the file and it later gets ingested:
 - **Checkboxes inside code blocks:** The structural parser must skip fenced code blocks (``` or ~~~). A `- [ ]` inside a code block is not a task.
 - **Duplicate task text:** Two checkboxes with identical text in the same note. Disambiguate by line position during reconciliation.
 - **Task moved between notes:** User cuts a `- [ ]` from one note and pastes it in another. The old note's ingest won't find the task → it stays in the DB (we don't delete tasks from re-ingest). The new note's ingest creates a new task. Mitigation: semantic dedup during TaskExtractor — before creating a new task, check if an identical-content task already exists for the same project.
-- **Project folder renamed:** User renames `/projects/CarChief/` to `/projects/DealerPro/`. Next ingest creates a new project "DealerPro." Old "CarChief" project stays in DB. User would need to manually archive CarChief or the AI can detect the rename heuristically.
+- **Project folder renamed:** User renames `/projects/Test Proj/` to `/projects/DemoProj/`. Next ingest creates a new project "DemoProj." Old "Test Proj" project stays in DB. User would need to manually archive Test Proj or the AI can detect the rename heuristically.
 - **Very long notes:** Notes with 100+ checkboxes. The AI call for project association should batch if needed. The structural parse is O(lines) and always fast.
 - **`capture_thought` with no tasks or projects:** The extractors run but return empty arrays. No harm — the thought is stored normally with empty references.
 - **AI Output file already exists in vault:** The plugin overwrites it. The AI should be aware of this and avoid clobbering user files — use paths under `/projects/` or a dedicated output folder.

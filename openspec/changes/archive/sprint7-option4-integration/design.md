@@ -28,7 +28,7 @@ Sprint 7 integrates the "Option 4" pattern: when the AI creates tasks for the us
 
 **Decision:** Each task row's `reference_id` is set to the `file_path` from the ai_output.
 
-**Why:** The TaskExtractor's reconciliation already queries `tasks WHERE reference_id = note.referenceId`. When `ingest_note` is called with `note_id = "projects/CarChief/SprintPlan.md"`, the pipeline finds the pre-created tasks tagged with the same path and matches by content similarity. No code changes needed in the extractor.
+**Why:** The TaskExtractor's reconciliation already queries `tasks WHERE reference_id = note.referenceId`. When `ingest_note` is called with `note_id = "projects/Test Proj/SprintPlan.md"`, the pipeline finds the pre-created tasks tagged with the same path and matches by content similarity. No code changes needed in the extractor.
 
 ### 3. Markdown generation from structured task data
 

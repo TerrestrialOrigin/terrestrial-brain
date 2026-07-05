@@ -64,9 +64,9 @@ AND `source_context` SHALL be stored (or null if not provided)
 
 ### Round-trip: no duplicate tasks on ingest
 
-GIVEN the AI has called `create_tasks_with_output` creating N tasks at `file_path: "projects/CarChief/sprint-tasks.md"`
-AND the tasks have `reference_id` = `"projects/CarChief/sprint-tasks.md"`
-WHEN `ingest_note` is later called with the same content and `note_id: "projects/CarChief/sprint-tasks.md"`
+GIVEN the AI has called `create_tasks_with_output` creating N tasks at `file_path: "projects/Test Proj/sprint-tasks.md"`
+AND the tasks have `reference_id` = `"projects/Test Proj/sprint-tasks.md"`
+WHEN `ingest_note` is later called with the same content and `note_id: "projects/Test Proj/sprint-tasks.md"`
 THEN the TaskExtractor SHALL match all N checkboxes against the existing N tasks by content similarity
 AND no new task rows SHALL be created
 AND the thought references SHALL contain the pre-existing task IDs

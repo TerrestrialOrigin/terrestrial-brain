@@ -8,7 +8,7 @@ Sprint 2 introduced the structural parser (`parser.ts`), which produces `ParsedN
 - `parser.ts` exports `ParsedNote`, `ParsedCheckbox`, `ParsedHeading`, and `parseNote()`
 - `helpers.ts::freshIngest()` embeds project detection in the thought-splitting LLM call
 - `projects` table has `id`, `name`, `type`, `parent_id`, `description`, `metadata`, `archived_at`
-- Three seed projects: CarChief, Terrestrial Brain, CarChief Backend (child of CarChief)
+- Three seed projects: Test Proj, Terrestrial Brain, Test Proj Backend (child of Test Proj)
 - Tests use Deno test framework, integration tests call the MCP server on `localhost:54321`
 
 ## Goals / Non-Goals
@@ -86,7 +86,7 @@ The content-matching LLM call follows the same `fetch(OPENROUTER_BASE + "/chat/c
 | Scenario | Handling |
 |---|---|
 | Note with `referenceId` of `/projects//` (empty folder name) | Skip auto-creation — folder name extraction returns empty string |
-| Note content mentions a project name that is a substring of another (e.g., "Car" vs "CarChief") | LLM matching is asked for exact project IDs from the known list — it cannot invent new ones |
+| Note content mentions a project name that is a substring of another (e.g., "Car" vs "Test Proj") | LLM matching is asked for exact project IDs from the known list — it cannot invent new ones |
 | Note with no headings, no `/projects/` path, and no project mentions | All three signals return empty — `ExtractionResult.ids` is `[]`, which is valid |
 | Very long note (100+ headings) | Heading matching is O(headings × projects) string comparison — fast. LLM call truncates to first ~200 chars per section |
 | Known projects list is empty (no projects in DB) | Skip LLM call entirely (no projects to match against). File-path detection still creates new projects |

@@ -1,6 +1,6 @@
 ## Why
 
-The brain DB now has rich cross-table relationships: thoughts reference projects and tasks, tasks belong to projects, note_snapshots store full source content, and ai_output tracks delivered artifacts. However, there's no way to get a unified picture from any of these axes. To answer "What's going on with CarChief?" the AI must call `get_project`, `list_tasks`, `list_thoughts`, and correlate the results manually. Similarly, "What happened this week?" requires querying each table independently.
+The brain DB now has rich cross-table relationships: thoughts reference projects and tasks, tasks belong to projects, note_snapshots store full source content, and ai_output tracks delivered artifacts. However, there's no way to get a unified picture from any of these axes. To answer "What's going on with Test Proj?" the AI must call `get_project`, `list_tasks`, `list_thoughts`, and correlate the results manually. Similarly, "What happened this week?" requires querying each table independently.
 
 Sprint 8 adds two composite query tools that join across tables and return formatted summaries, so the AI can answer these questions in a single tool call.
 

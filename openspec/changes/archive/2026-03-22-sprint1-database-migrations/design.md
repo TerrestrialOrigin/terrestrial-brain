@@ -40,7 +40,7 @@ This sprint creates the schema foundation. No application code changes — only 
 
 ### 2. `note_snapshots.reference_id` as UNIQUE TEXT, not UUID
 
-**Decision:** `reference_id` is `TEXT NOT NULL UNIQUE` — it holds vault-relative paths for Obsidian notes (e.g., `"projects/CarChief/planning.md"`) or session IDs for other sources.
+**Decision:** `reference_id` is `TEXT NOT NULL UNIQUE` — it holds vault-relative paths for Obsidian notes (e.g., `"projects/Test Proj/planning.md"`) or session IDs for other sources.
 
 **Rationale:** UUIDs would require a mapping layer between file paths and IDs. Since we upsert on `reference_id`, it must be the natural key. Text accommodates both file paths and future non-Obsidian sources.
 

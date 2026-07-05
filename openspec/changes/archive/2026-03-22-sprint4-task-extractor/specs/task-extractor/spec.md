@@ -41,17 +41,17 @@ The TaskExtractor SHALL associate tasks with projects using this priority order:
 3. AI content inference (batch LLM call for remaining unassigned tasks)
 
 #### Scenario: Task under project heading
-- **WHEN** a checkbox's `sectionHeading` is "CarChief" and "CarChief" is a known project
-- **THEN** the task SHALL be associated with the CarChief project (`project_id` set)
+- **WHEN** a checkbox's `sectionHeading` is "Test Proj" and "Test Proj" is a known project
+- **THEN** the task SHALL be associated with the Test Proj project (`project_id` set)
 
 #### Scenario: Task in project folder with no section heading match
-- **WHEN** a note is at `projects/CarChief/tasks.md` and a checkbox has no matching section heading
-- **THEN** the task SHALL default to the CarChief project (from pipeline's project references)
+- **WHEN** a note is at `projects/Test Proj/tasks.md` and a checkbox has no matching section heading
+- **THEN** the task SHALL default to the Test Proj project (from pipeline's project references)
 
 #### Scenario: AI-inferred project association
-- **WHEN** a checkbox text mentions "CarChief tickets" but has no heading or path match
-- **AND** "CarChief" is a known project
-- **THEN** the AI content inference SHALL associate the task with CarChief
+- **WHEN** a checkbox text mentions "Test Proj tickets" but has no heading or path match
+- **AND** "Test Proj" is a known project
+- **THEN** the AI content inference SHALL associate the task with Test Proj
 
 #### Scenario: No project match
 - **WHEN** a checkbox has no matching section heading, no file path project, and the AI finds no match

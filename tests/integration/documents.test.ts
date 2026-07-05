@@ -6,7 +6,7 @@ const SUPABASE_SERVICE_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
 // Known seed project from seed.sql
-const CARCHIEF_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
+const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const res = await fetch(BASE, {
@@ -53,8 +53,8 @@ Deno.test("write_document stores a document with explicit references", async () 
   const result = await callTool("write_document", {
     title: "Integration Test Document",
     content: "# Test Document\n\nThis is a full test document stored verbatim.",
-    project_id: CARCHIEF_PROJECT_ID,
-    file_path: "projects/CarChief/test-doc.md",
+    project_id: TEST_PROJ_ID,
+    file_path: "projects/Test Proj/test-doc.md",
     references: { people: [], tasks: [] },
   });
 
@@ -76,7 +76,7 @@ Deno.test("write_document stores content verbatim", async () => {
   const result = await callTool("write_document", {
     title: "Verbatim Test",
     content: verbatimContent,
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     references: { people: [], tasks: [] },
   });
   assertExists(result);
@@ -150,7 +150,7 @@ Deno.test("get_document retrieves full document with content", async () => {
   assertStringIncludes(result, "Integration Test Document");
   assertStringIncludes(result, "# Test Document");
   assertStringIncludes(result, "This is a full test document stored verbatim.");
-  assertStringIncludes(result, "CarChief");
+  assertStringIncludes(result, "Test Proj");
 });
 
 Deno.test("get_document returns error for non-existent ID", async () => {
@@ -172,7 +172,7 @@ Deno.test("list_documents returns documents", async () => {
 });
 
 Deno.test("list_documents filters by project", async () => {
-  const result = await callTool("list_documents", { project_id: CARCHIEF_PROJECT_ID });
+  const result = await callTool("list_documents", { project_id: TEST_PROJ_ID });
   assertExists(result);
   assertStringIncludes(result, "Integration Test Document");
 });
@@ -234,7 +234,7 @@ Deno.test("list_documents search is case-insensitive", async () => {
 
 Deno.test("list_documents combines project_id and title_contains", async () => {
   const result = await callTool("list_documents", {
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     title_contains: "Integration",
   });
   assertExists(result);
@@ -244,16 +244,16 @@ Deno.test("list_documents combines project_id and title_contains", async () => {
 Deno.test("list_documents combines project_id and title_contains (no match)", async () => {
   // Title exists but not in this project combination
   const result = await callTool("list_documents", {
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     title_contains: "Extraction Pipeline",
   });
-  // Extraction Pipeline Test is under a different project (DocExtractTest), not CarChief
+  // Extraction Pipeline Test is under a different project (DocExtractTest), not Test Proj
   assertStringIncludes(result, "No documents found");
 });
 
 Deno.test("list_documents combines all three filters", async () => {
   const result = await callTool("list_documents", {
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     title_contains: "Integration",
     search: "stored verbatim",
   });
@@ -336,7 +336,7 @@ Deno.test("update_document updates title only (no thought churn)", async () => {
   const createResult = await callTool("write_document", {
     title: "Update Title Test",
     content: "Content that should remain unchanged.",
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     references: { people: [], tasks: [] },
   });
   const idMatch = createResult.match(/id: ([0-9a-f-]+)/);
@@ -393,7 +393,7 @@ Deno.test("update_document updates content — deletes old thoughts, re-extracts
   const createResult = await callTool("write_document", {
     title: "Content Update Test",
     content: "Original content for testing updates.",
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     references: { people: [], tasks: [] },
   });
   const idMatch = createResult.match(/id: ([0-9a-f-]+)/);
@@ -472,11 +472,11 @@ Deno.test("update_document updates project_id only", async () => {
   const newProjectId = projectMatch![1];
   cleanupProjectIds.push(newProjectId);
 
-  // Create a document under CARCHIEF
+  // Create a document under TEST_PROJ
   const createResult = await callTool("write_document", {
     title: "Project Reassign Test",
     content: "Document to be reassigned.",
-    project_id: CARCHIEF_PROJECT_ID,
+    project_id: TEST_PROJ_ID,
     references: { people: [], tasks: [] },
   });
   const idMatch = createResult.match(/id: ([0-9a-f-]+)/);

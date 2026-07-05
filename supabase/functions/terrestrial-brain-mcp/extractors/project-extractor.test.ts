@@ -18,15 +18,15 @@ const {
 
 describe("extractProjectFromConventionalPath", () => {
   it("matches root-level projects folder", () => {
-    expect(extractProjectFromConventionalPath("projects/CarChief/sprint-notes.md")).toBe("CarChief");
+    expect(extractProjectFromConventionalPath("projects/Test Proj/sprint-notes.md")).toBe("Test Proj");
   });
 
   it("matches capitalized Projects folder", () => {
-    expect(extractProjectFromConventionalPath("Projects/CarChief/sprint-notes.md")).toBe("CarChief");
+    expect(extractProjectFromConventionalPath("Projects/Test Proj/sprint-notes.md")).toBe("Test Proj");
   });
 
   it("matches PROJECTS in all caps", () => {
-    expect(extractProjectFromConventionalPath("PROJECTS/CarChief/notes.md")).toBe("CarChief");
+    expect(extractProjectFromConventionalPath("PROJECTS/Test Proj/notes.md")).toBe("Test Proj");
   });
 
   it("matches nested projects folder", () => {
@@ -34,11 +34,11 @@ describe("extractProjectFromConventionalPath", () => {
   });
 
   it("matches deeply nested with capitalization", () => {
-    expect(extractProjectFromConventionalPath("work/clients/Projects/DealerPro/kickoff.md")).toBe("DealerPro");
+    expect(extractProjectFromConventionalPath("work/clients/Projects/DemoProj/kickoff.md")).toBe("DemoProj");
   });
 
   it("extracts first segment after projects/", () => {
-    expect(extractProjectFromConventionalPath("Projects/CarChief/sprints/week1.md")).toBe("CarChief");
+    expect(extractProjectFromConventionalPath("Projects/Test Proj/sprints/week1.md")).toBe("Test Proj");
   });
 
   it("returns null for no match", () => {
@@ -92,7 +92,7 @@ describe("pathContainsProjectKeyword", () => {
   // Note: conventional "projects/" folder also returns true, but
   // the extractor checks Signal 1a first and skips 1b if it matches
   it("returns true for conventional projects folder path", () => {
-    expect(pathContainsProjectKeyword("projects/CarChief/notes.md")).toBe(true);
+    expect(pathContainsProjectKeyword("projects/Test Proj/notes.md")).toBe(true);
   });
 });
 

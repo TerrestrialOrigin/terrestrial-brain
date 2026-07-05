@@ -251,7 +251,7 @@ var TerrestrialBrainPlugin = class extends import_obsidian.Plugin {
         content: stripped,
         title: file.basename,
         note_id: file.path
-        // vault-relative path e.g. "Projects/CarChief/sprint-notes.md"
+        // vault-relative path e.g. "Projects/Test Proj/sprint-notes.md"
       });
       this.syncedHashes[file.path] = hash;
       await this.saveSettings();

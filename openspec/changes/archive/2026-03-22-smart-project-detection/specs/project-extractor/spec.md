@@ -7,14 +7,14 @@ AND a project with a matching name exists in the database (case-insensitive)
 THEN the extractor SHALL return that project's ID in `ids`
 
 #### Scenario: Root-level projects folder (existing behavior)
-- **WHEN** a note has `referenceId` of `projects/CarChief/sprint-notes.md`
-- **AND** a project named "CarChief" exists
-- **THEN** the extractor SHALL return CarChief's ID
+- **WHEN** a note has `referenceId` of `projects/Test Proj/sprint-notes.md`
+- **AND** a project named "Test Proj" exists
+- **THEN** the extractor SHALL return Test Proj's ID
 
 #### Scenario: Capitalized Projects folder
-- **WHEN** a note has `referenceId` of `Projects/CarChief/sprint-notes.md`
-- **AND** a project named "CarChief" exists
-- **THEN** the extractor SHALL return CarChief's ID
+- **WHEN** a note has `referenceId` of `Projects/Test Proj/sprint-notes.md`
+- **AND** a project named "Test Proj" exists
+- **THEN** the extractor SHALL return Test Proj's ID
 
 #### Scenario: Nested projects folder
 - **WHEN** a note has `referenceId` of `farming/projects/Rabbit Hutch/plan.md`
@@ -22,9 +22,9 @@ THEN the extractor SHALL return that project's ID in `ids`
 - **THEN** the extractor SHALL return Rabbit Hutch's ID
 
 #### Scenario: Deeply nested with capitalization
-- **WHEN** a note has `referenceId` of `work/clients/Projects/DealerPro/kickoff.md`
-- **AND** a project named "DealerPro" exists
-- **THEN** the extractor SHALL return DealerPro's ID
+- **WHEN** a note has `referenceId` of `work/clients/Projects/DemoProj/kickoff.md`
+- **AND** a project named "DemoProj" exists
+- **THEN** the extractor SHALL return DemoProj's ID
 
 ### Requirement: Note in a nested project path
 
@@ -33,8 +33,8 @@ AND a project with that name exists
 THEN the extractor SHALL match on the first segment after `projects/`
 
 #### Scenario: Deeply nested note in projects subfolder
-- **WHEN** a note has `referenceId` of `Projects/CarChief/sprints/week1.md`
-- **THEN** the extractor SHALL match project "CarChief" (first segment after `projects/`)
+- **WHEN** a note has `referenceId` of `Projects/Test Proj/sprints/week1.md`
+- **THEN** the extractor SHALL match project "Test Proj" (first segment after `projects/`)
 
 ### Requirement: New project folder triggers auto-creation
 
@@ -80,7 +80,7 @@ If the LLM determines it is NOT a project (e.g., "Project Planning notes"), no p
 - **THEN** the LLM path analysis SHALL NOT be invoked (no path segment contains "project")
 
 #### Scenario: LLM path analysis skipped when conventional match succeeds
-- **WHEN** a note has `referenceId` of `projects/CarChief/notes.md`
+- **WHEN** a note has `referenceId` of `projects/Test Proj/notes.md`
 - **THEN** the conventional `projects/{name}/` pattern matches first
 - **AND** the LLM path analysis SHALL NOT be invoked
 

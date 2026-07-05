@@ -20,14 +20,14 @@ AND a project with a matching name exists in the database (case-insensitive)
 THEN the extractor SHALL return that project's ID in `ids`
 
 #### Scenario: Root-level projects folder
-- **WHEN** a note has `referenceId` of `projects/CarChief/sprint-notes.md`
-- **AND** a project named "CarChief" exists
-- **THEN** the extractor SHALL return CarChief's ID
+- **WHEN** a note has `referenceId` of `projects/Test Proj/sprint-notes.md`
+- **AND** a project named "Test Proj" exists
+- **THEN** the extractor SHALL return Test Proj's ID
 
 #### Scenario: Capitalized Projects folder
-- **WHEN** a note has `referenceId` of `Projects/CarChief/sprint-notes.md`
-- **AND** a project named "CarChief" exists
-- **THEN** the extractor SHALL return CarChief's ID
+- **WHEN** a note has `referenceId` of `Projects/Test Proj/sprint-notes.md`
+- **AND** a project named "Test Proj" exists
+- **THEN** the extractor SHALL return Test Proj's ID
 
 #### Scenario: Nested projects folder
 - **WHEN** a note has `referenceId` of `farming/projects/Rabbit Hutch/plan.md`
@@ -35,9 +35,9 @@ THEN the extractor SHALL return that project's ID in `ids`
 - **THEN** the extractor SHALL return Rabbit Hutch's ID
 
 #### Scenario: Deeply nested with capitalization
-- **WHEN** a note has `referenceId` of `work/clients/Projects/DealerPro/kickoff.md`
-- **AND** a project named "DealerPro" exists
-- **THEN** the extractor SHALL return DealerPro's ID
+- **WHEN** a note has `referenceId` of `work/clients/Projects/DemoProj/kickoff.md`
+- **AND** a project named "DemoProj" exists
+- **THEN** the extractor SHALL return DemoProj's ID
 
 ---
 
@@ -66,8 +66,8 @@ THEN the extractor SHALL create a project row and return its ID
 
 ### Auto-created project enriches context
 
-GIVEN the ProjectExtractor auto-creates a project "DealerPro"
-THEN `context.newlyCreatedProjects` SHALL contain `{ id: <new-uuid>, name: "DealerPro" }`
+GIVEN the ProjectExtractor auto-creates a project "DemoProj"
+THEN `context.newlyCreatedProjects` SHALL contain `{ id: <new-uuid>, name: "DemoProj" }`
 AND `context.knownProjects` SHALL also contain the new project
 
 ---
@@ -110,7 +110,7 @@ If the LLM determines it is NOT a project, no project SHALL be created from this
 - **THEN** the LLM path analysis SHALL NOT be invoked
 
 #### Scenario: LLM path analysis skipped when conventional match succeeds
-- **WHEN** a note has `referenceId` of `projects/CarChief/notes.md`
+- **WHEN** a note has `referenceId` of `projects/Test Proj/notes.md`
 - **THEN** the conventional `projects/{name}/` pattern matches first
 - **AND** the LLM path analysis SHALL NOT be invoked
 
@@ -122,9 +122,9 @@ If the LLM determines it is NOT a project, no project SHALL be created from this
 
 ### Heading matches known project
 
-GIVEN a parsed note has a heading `# CarChief` or `## CarChief`
-AND a project named "CarChief" exists
-THEN the extractor SHALL include CarChief's ID in the result
+GIVEN a parsed note has a heading `# Test Proj` or `## Test Proj`
+AND a project named "Test Proj" exists
+THEN the extractor SHALL include Test Proj's ID in the result
 
 ---
 
@@ -138,17 +138,17 @@ THEN no project SHALL be matched from that heading
 
 ### Case-insensitive heading match
 
-GIVEN a parsed note has a heading `# carchief`
-AND a project named "CarChief" exists
-THEN the extractor SHALL match and include CarChief's ID
+GIVEN a parsed note has a heading `# test proj`
+AND a project named "Test Proj" exists
+THEN the extractor SHALL match and include Test Proj's ID
 
 ---
 
 ### Content mentions a project by name
 
-GIVEN a note's body text mentions "CarChief" but has no matching heading or file path
-AND "CarChief" is a known project
-THEN the LLM content matching SHALL detect and return CarChief's ID
+GIVEN a note's body text mentions "Test Proj" but has no matching heading or file path
+AND "Test Proj" is a known project
+THEN the LLM content matching SHALL detect and return Test Proj's ID
 
 ---
 
@@ -175,8 +175,8 @@ THEN the extractor SHALL log the error and continue with only the deterministic 
 
 ### Same project detected by path and heading
 
-GIVEN a note is at `projects/CarChief/notes.md` AND has a heading `# CarChief`
-THEN CarChief's ID SHALL appear exactly once in the result
+GIVEN a note is at `projects/Test Proj/notes.md` AND has a heading `# Test Proj`
+THEN Test Proj's ID SHALL appear exactly once in the result
 
 ---
 

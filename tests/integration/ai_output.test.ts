@@ -112,17 +112,17 @@ Deno.test("create_ai_output with nested path preserves file_path", async () => {
   const result = await callTool("create_ai_output", {
     title: "Deeply Nested Output",
     content: "# Nested\n\nSome content.",
-    file_path: "projects/CarChief/sprints/2026/march/deep-plan.md",
+    file_path: "projects/Test Proj/sprints/2026/march/deep-plan.md",
   });
   assertExists(result);
-  assertEquals(result.includes("projects/CarChief/sprints/2026/march/deep-plan.md"), true);
+  assertEquals(result.includes("projects/Test Proj/sprints/2026/march/deep-plan.md"), true);
 
   // Verify the file_path is preserved in the pending output
   const pending = await callHTTP("get-pending-ai-output");
   const outputs = pending.data as { id: string; title: string; file_path: string }[];
   const nested = outputs.find((output) => output.title === "Deeply Nested Output");
   assertExists(nested, "Nested output should appear in pending list");
-  assertEquals(nested.file_path, "projects/CarChief/sprints/2026/march/deep-plan.md");
+  assertEquals(nested.file_path, "projects/Test Proj/sprints/2026/march/deep-plan.md");
 
   // Clean up
   await callHTTP("mark-ai-output-picked-up", { ids: [nested.id] });
@@ -250,21 +250,21 @@ Deno.test("generateTaskMarkdown: basic tasks produce correct checkbox markdown",
 
 Deno.test("generateTaskMarkdown: project headings when project names available", () => {
   const projectNameMap = {
-    "proj-1": "CarChief",
+    "proj-1": "Test Proj",
     "proj-2": "Terrestrial Brain",
   };
   const markdown = generateTaskMarkdown(
     "Multi-Project Tasks",
     [
-      { content: "Task for CarChief", project_id: "proj-1", status: "open" },
+      { content: "Task for Test Proj", project_id: "proj-1", status: "open" },
       { content: "Task for TB", project_id: "proj-2", status: "open" },
     ],
     projectNameMap,
   );
 
-  assertEquals(markdown.includes("## CarChief"), true, "Should have CarChief heading");
+  assertEquals(markdown.includes("## Test Proj"), true, "Should have Test Proj heading");
   assertEquals(markdown.includes("## Terrestrial Brain"), true, "Should have TB heading");
-  assertEquals(markdown.includes("- [ ] Task for CarChief"), true);
+  assertEquals(markdown.includes("- [ ] Task for Test Proj"), true);
   assertEquals(markdown.includes("- [ ] Task for TB"), true);
 });
 

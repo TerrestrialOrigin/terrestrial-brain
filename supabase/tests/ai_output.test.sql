@@ -4,7 +4,7 @@ SELECT plan(14);
 -- ─── 3.5 Defaults — insert with required fields only ────────────────────────
 
 INSERT INTO public.ai_output (id, title, content, file_path)
-VALUES ('eeeeeeee-0000-0000-0000-000000000001', 'Sprint Plan', '# Sprint Plan\n\nTasks here.', 'projects/CarChief/SprintPlan.md');
+VALUES ('eeeeeeee-0000-0000-0000-000000000001', 'Sprint Plan', '# Sprint Plan\n\nTasks here.', 'projects/Test Proj/SprintPlan.md');
 
 SELECT is(
   (SELECT picked_up FROM public.ai_output WHERE id = 'eeeeeeee-0000-0000-0000-000000000001'),

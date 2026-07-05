@@ -55,5 +55,5 @@ capture_thought runs the structural parser and pipeline to detect projects/tasks
 ## Risks / Trade-offs
 
 - **[Performance] Pipeline adds latency to ingest_note** → Acceptable for personal knowledge base (not high-throughput). Pipeline is fast for notes with few checkboxes. The LLM calls in ProjectExtractor and TaskExtractor are the same gpt-4o-mini calls already used.
-- **[Correctness] All thoughts get same references** → This is a simplification. A note about both CarChief and Terrestrial Brain will tag all thoughts with both projects. Acceptable — thoughts already reference their source note, and per-thought tagging can be added later if needed.
+- **[Correctness] All thoughts get same references** → This is a simplification. A note about both Test Proj and Terrestrial Brain will tag all thoughts with both projects. Acceptable — thoughts already reference their source note, and per-thought tagging can be added later if needed.
 - **[Error handling] Pipeline failure degrades gracefully** → If extractors fail, thoughts still get ingested with empty references. The user's data is never lost.

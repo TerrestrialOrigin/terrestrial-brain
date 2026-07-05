@@ -57,30 +57,30 @@ async function callToolRaw(name: string, args: Record<string, unknown>): Promise
 }
 
 // Seed data IDs from supabase/seed.sql
-const CARCHIEF_ID = "00000000-0000-0000-0000-000000000001";
+const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 const TERRESTRIAL_BRAIN_ID = "00000000-0000-0000-0000-000000000002";
-const CARCHIEF_BACKEND_ID = "00000000-0000-0000-0000-000000000003";
+const TEST_PROJ_BACKEND_ID = "00000000-0000-0000-0000-000000000003";
 
 // ─── get_project_summary Tests ─────────────────────────────────────────────
 
 Deno.test("get_project_summary returns project details for seed project", async () => {
-  const result = await callTool("get_project_summary", { id: CARCHIEF_ID });
+  const result = await callTool("get_project_summary", { id: TEST_PROJ_ID });
   assertExists(result);
-  assertStringIncludes(result, "CarChief");
+  assertStringIncludes(result, "Test Proj");
   assertStringIncludes(result, "client");
   assertStringIncludes(result, "Main client project");
 });
 
 Deno.test("get_project_summary shows child projects", async () => {
-  const result = await callTool("get_project_summary", { id: CARCHIEF_ID });
+  const result = await callTool("get_project_summary", { id: TEST_PROJ_ID });
   assertStringIncludes(result, "Child Projects");
-  assertStringIncludes(result, "CarChief Backend");
+  assertStringIncludes(result, "Test Proj Backend");
 });
 
 Deno.test("get_project_summary shows parent project", async () => {
-  const result = await callTool("get_project_summary", { id: CARCHIEF_BACKEND_ID });
+  const result = await callTool("get_project_summary", { id: TEST_PROJ_BACKEND_ID });
   assertStringIncludes(result, "Parent:");
-  assertStringIncludes(result, "CarChief");
+  assertStringIncludes(result, "Test Proj");
 });
 
 Deno.test("get_project_summary shows open tasks for Terrestrial Brain", async () => {
@@ -92,10 +92,10 @@ Deno.test("get_project_summary shows open tasks for Terrestrial Brain", async ()
 });
 
 Deno.test("get_project_summary shows thoughts with old-format references (project_id)", async () => {
-  // Seed thought: "CarChief Backend needs Redis caching..." has references.project_id = CARCHIEF_ID
-  const result = await callTool("get_project_summary", { id: CARCHIEF_ID });
+  // Seed thought: "Test Proj Backend needs response caching..." has references.project_id = TEST_PROJ_ID
+  const result = await callTool("get_project_summary", { id: TEST_PROJ_ID });
   assertStringIncludes(result, "Recent Thoughts");
-  assertStringIncludes(result, "Redis caching");
+  assertStringIncludes(result, "response caching");
 });
 
 Deno.test("get_project_summary returns error for non-existent project", async () => {
@@ -141,7 +141,7 @@ Deno.test("get_recent_activity shows seed data (created today)", async () => {
   // Seed data was inserted when emulators started, so it's within 1-day window
   const result = await callTool("get_recent_activity", { days: 1 });
   // Seed projects should appear
-  assertStringIncludes(result, "CarChief");
+  assertStringIncludes(result, "Test Proj");
   // Seed tasks should appear
   assertStringIncludes(result, "Tasks Created");
 });

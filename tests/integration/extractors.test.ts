@@ -42,7 +42,7 @@ const SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3Mi
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // Seed project IDs (from seed.sql)
-const CARCHIEF_ID = "00000000-0000-0000-0000-000000000001";
+const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 const TERRESTRIAL_BRAIN_ID = "00000000-0000-0000-0000-000000000002";
 
 // Seed people IDs (from seed.sql)
@@ -187,11 +187,11 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
   const note = parseNote("Content", "Test", null, "obsidian");
   await runExtractionPipeline(note, [inspectingExtractor], supabase);
 
-  // Seed data has at least CarChief, Terrestrial Brain, CarChief Backend
+  // Seed data has at least Test Proj, Terrestrial Brain, Test Proj Backend
   const projectNames = capturedKnownProjects.map(
     (project: { id: string; name: string }) => project.name,
   );
-  assertEquals(projectNames.includes("CarChief"), true);
+  assertEquals(projectNames.includes("Test Proj"), true);
   assertEquals(projectNames.includes("Terrestrial Brain"), true);
 });
 
@@ -201,15 +201,15 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
 
 Deno.test("extractProjectFromConventionalPath: extracts name from projects path", () => {
   assertEquals(
-    extractProjectFromConventionalPath("projects/CarChief/sprint-notes.md"),
-    "CarChief",
+    extractProjectFromConventionalPath("projects/Test Proj/sprint-notes.md"),
+    "Test Proj",
   );
 });
 
 Deno.test("extractProjectFromConventionalPath: extracts from nested path", () => {
   assertEquals(
-    extractProjectFromConventionalPath("projects/CarChief/sprints/week1.md"),
-    "CarChief",
+    extractProjectFromConventionalPath("projects/Test Proj/sprints/week1.md"),
+    "Test Proj",
   );
 });
 
@@ -238,13 +238,13 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
   const note = parseNote(
     "Sprint planning notes for this week.",
     "Sprint Notes",
-    "projects/CarChief/sprint-notes.md",
+    "projects/Test Proj/sprint-notes.md",
     "obsidian",
   );
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -256,7 +256,7 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
   const result = await extractor.extract(note, context);
 
   assertEquals(result.referenceKey, "projects");
-  assertEquals(result.ids.includes(CARCHIEF_ID), true);
+  assertEquals(result.ids.includes(TEST_PROJ_ID), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -265,13 +265,13 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
 
 Deno.test("ProjectExtractor: detects project from heading match", async () => {
   const extractor = new ProjectExtractor();
-  const content = "# CarChief\n\nSome notes about the project.\n\n# Other Section\n\nUnrelated content.";
+  const content = "# Test Proj\n\nSome notes about the project.\n\n# Other Section\n\nUnrelated content.";
   const note = parseNote(content, "Mixed Notes", "daily/today.md", "obsidian");
 
   const context: ExtractionContext = {
     supabase,
     knownProjects: [
-      { id: CARCHIEF_ID, name: "CarChief" },
+      { id: TEST_PROJ_ID, name: "Test Proj" },
       { id: TERRESTRIAL_BRAIN_ID, name: "Terrestrial Brain" },
     ],
     knownTasks: [],
@@ -284,17 +284,17 @@ Deno.test("ProjectExtractor: detects project from heading match", async () => {
 
   const result = await extractor.extract(note, context);
 
-  assertEquals(result.ids.includes(CARCHIEF_ID), true);
+  assertEquals(result.ids.includes(TEST_PROJ_ID), true);
 });
 
 Deno.test("ProjectExtractor: heading match is case-insensitive", async () => {
   const extractor = new ProjectExtractor();
-  const content = "# carchief\n\nSome notes.";
+  const content = "# test proj\n\nSome notes.";
   const note = parseNote(content, "Notes", "daily/today.md", "obsidian");
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -305,7 +305,7 @@ Deno.test("ProjectExtractor: heading match is case-insensitive", async () => {
 
   const result = await extractor.extract(note, context);
 
-  assertEquals(result.ids.includes(CARCHIEF_ID), true);
+  assertEquals(result.ids.includes(TEST_PROJ_ID), true);
 });
 
 Deno.test("ProjectExtractor: heading not matching any project returns no match from headings", async () => {
@@ -315,7 +315,7 @@ Deno.test("ProjectExtractor: heading not matching any project returns no match f
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -348,7 +348,7 @@ Deno.test("ProjectExtractor: auto-creates project from new folder", async () => 
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -425,7 +425,7 @@ Deno.test("ProjectExtractor: note outside /projects/ returns no path match", asy
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -447,7 +447,7 @@ Deno.test("ProjectExtractor: note with no referenceId gets no path match", async
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -468,17 +468,17 @@ Deno.test("ProjectExtractor: note with no referenceId gets no path match", async
 
 Deno.test("ProjectExtractor: deduplicates when same project matched by path and heading", async () => {
   const extractor = new ProjectExtractor();
-  const content = "# CarChief\n\nProject status update for CarChief.";
+  const content = "# Test Proj\n\nProject status update for Test Proj.";
   const note = parseNote(
     content,
-    "CarChief Status",
-    "projects/CarChief/status.md",
+    "Test Proj Status",
+    "projects/Test Proj/status.md",
     "obsidian",
   );
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -489,9 +489,9 @@ Deno.test("ProjectExtractor: deduplicates when same project matched by path and 
 
   const result = await extractor.extract(note, context);
 
-  // CarChief matched by both path and heading — should appear only once
-  const carchiefCount = result.ids.filter((id) => id === CARCHIEF_ID).length;
-  assertEquals(carchiefCount, 1);
+  // Test Proj matched by both path and heading — should appear only once
+  const testProjCount = result.ids.filter((id) => id === TEST_PROJ_ID).length;
+  assertEquals(testProjCount, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -500,9 +500,9 @@ Deno.test("ProjectExtractor: deduplicates when same project matched by path and 
 
 Deno.test("pipeline: ProjectExtractor wired into pipeline produces correct references", async () => {
   const note = parseNote(
-    "# CarChief\n\nStatus update on dealer integration.",
+    "# Test Proj\n\nStatus update on record integration.",
     "Status",
-    "projects/CarChief/status.md",
+    "projects/Test Proj/status.md",
     "obsidian",
   );
 
@@ -513,7 +513,7 @@ Deno.test("pipeline: ProjectExtractor wired into pipeline produces correct refer
   );
 
   assertExists(result.projects);
-  assertEquals(result.projects.includes(CARCHIEF_ID), true);
+  assertEquals(result.projects.includes(TEST_PROJ_ID), true);
 
   // Verify it's a proper Record<string, string[]>
   assertEquals(Array.isArray(result.projects), true);
@@ -702,12 +702,12 @@ Deno.test("TaskExtractor: indented checkboxes create subtask hierarchy", async (
 Deno.test("TaskExtractor: tasks under project heading get correct project_id", async () => {
   const extractor = new TaskExtractor();
   const referenceId = `test/task-extractor/heading-project-${Date.now()}.md`;
-  const content = "# CarChief\n\n- [ ] Fix dealer page\n\n# Other\n\n- [ ] Generic task\n";
+  const content = "# Test Proj\n\n- [ ] Fix record page\n\n# Other\n\n- [ ] Generic task\n";
   const note = parseNote(content, "Mixed", referenceId, "obsidian");
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -720,20 +720,20 @@ Deno.test("TaskExtractor: tasks under project heading get correct project_id", a
 
   assertEquals(result.ids.length, 2);
 
-  // The task under "# CarChief" should have project_id set
+  // The task under "# Test Proj" should have project_id set
   const { data: tasks } = await supabase
     .from("tasks")
     .select("id, content, project_id")
     .in("id", result.ids);
 
   assertExists(tasks);
-  const dealerTask = tasks.find((task: { content: string }) => task.content === "Fix dealer page");
+  const recordTask = tasks.find((task: { content: string }) => task.content === "Fix record page");
   const genericTask = tasks.find((task: { content: string }) => task.content === "Generic task");
 
-  assertExists(dealerTask);
+  assertExists(recordTask);
   assertExists(genericTask);
 
-  assertEquals(dealerTask.project_id, CARCHIEF_ID);
+  assertEquals(recordTask.project_id, TEST_PROJ_ID);
   // Generic task has no matching heading — project_id may be null or AI-inferred
   // We just verify it's a valid result
   assertEquals(typeof genericTask.project_id === "string" || genericTask.project_id === null, true);
@@ -1053,8 +1053,8 @@ Deno.test("TaskExtractor: note with no checkboxes returns empty result", async (
 // ---------------------------------------------------------------------------
 
 Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed references", async () => {
-  const referenceId = `projects/CarChief/pipeline-test-${Date.now()}.md`;
-  const content = "# CarChief\n\n- [ ] Fix dealer page\n- [ ] Update pricing API\n";
+  const referenceId = `projects/Test Proj/pipeline-test-${Date.now()}.md`;
+  const content = "# Test Proj\n\n- [ ] Fix record page\n- [ ] Update pricing API\n";
   const note = parseNote(content, "Pipeline", referenceId, "obsidian");
 
   // Run the real pipeline — ProjectExtractor sets accumulatedReferences.projects,
@@ -1067,10 +1067,10 @@ Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed reference
 
   assertExists(result.projects);
   assertExists(result.tasks);
-  assertEquals(result.projects.includes(CARCHIEF_ID), true);
+  assertEquals(result.projects.includes(TEST_PROJ_ID), true);
   assertEquals(result.tasks.length, 2);
 
-  // Verify tasks have the CarChief project_id
+  // Verify tasks have the Test Proj project_id
   const { data: tasks } = await supabase
     .from("tasks")
     .select("id, project_id")
@@ -1078,7 +1078,7 @@ Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed reference
 
   assertExists(tasks);
   for (const task of tasks) {
-    assertEquals(task.project_id, CARCHIEF_ID);
+    assertEquals(task.project_id, TEST_PROJ_ID);
   }
 
   createdTaskIds.push(...result.tasks);
@@ -1201,7 +1201,7 @@ Deno.test("PeopleExtractor: empty note content returns empty ids", async () => {
 
 Deno.test("PeopleExtractor: with known people and content returns valid result", async () => {
   const extractor = new PeopleExtractor();
-  const content = "# Meeting Notes\n\nDiscussed the roadmap with Alice. She suggested we prioritize the dealer page.";
+  const content = "# Meeting Notes\n\nDiscussed the roadmap with Alice. She suggested we prioritize the record page.";
   const note = parseNote(content, "Meeting", "daily/meeting.md", "obsidian");
 
   const context: ExtractionContext = {
@@ -1803,12 +1803,12 @@ Deno.test("TaskExtractor: no person match leaves assigned_to null", async () => 
 Deno.test("TaskExtractor: extraction_method is heading_match when project resolved by heading", async () => {
   const extractor = new TaskExtractor();
   const referenceId = `test/task-extractor/method-heading-${Date.now()}.md`;
-  const content = "# CarChief\n\n- [ ] Fix dealer page\n";
+  const content = "# Test Proj\n\n- [ ] Fix record page\n";
   const note = parseNote(content, "Tasks", referenceId, "obsidian");
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
@@ -1826,7 +1826,7 @@ Deno.test("TaskExtractor: extraction_method is heading_match when project resolv
     .single();
 
   assertExists(task);
-  assertEquals(task.project_id, CARCHIEF_ID);
+  assertEquals(task.project_id, TEST_PROJ_ID);
 
   createdTaskIds.push(task.id);
 });
@@ -1843,13 +1843,13 @@ Deno.test("TaskExtractor: extraction_method is file_path when project from pipel
 
   const context: ExtractionContext = {
     supabase,
-    knownProjects: [{ id: CARCHIEF_ID, name: "CarChief" }],
+    knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
     newlyCreatedProjects: [],
     newlyCreatedTasks: [],
     newlyCreatedPeople: [],
-    accumulatedReferences: { projects: [CARCHIEF_ID] },
+    accumulatedReferences: { projects: [TEST_PROJ_ID] },
   };
 
   const result = await extractor.extract(note, context);
@@ -1861,7 +1861,7 @@ Deno.test("TaskExtractor: extraction_method is file_path when project from pipel
     .single();
 
   assertExists(task);
-  assertEquals(task.project_id, CARCHIEF_ID);
+  assertEquals(task.project_id, TEST_PROJ_ID);
 
   createdTaskIds.push(task.id);
 });
@@ -1871,8 +1871,8 @@ Deno.test("TaskExtractor: extraction_method is file_path when project from pipel
 // ---------------------------------------------------------------------------
 
 Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to", async () => {
-  const referenceId = `projects/CarChief/full-pipeline-${Date.now()}.md`;
-  const content = "# CarChief\n\n- [ ] Alice should review the PR by 2026-05-01\n";
+  const referenceId = `projects/Test Proj/full-pipeline-${Date.now()}.md`;
+  const content = "# Test Proj\n\n- [ ] Alice should review the PR by 2026-05-01\n";
   const note = parseNote(content, "Full Test", referenceId, "obsidian");
 
   const result = await runExtractionPipeline(
@@ -1895,8 +1895,8 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
   // Content should have date stripped
   assertEquals(task.content, "Alice should review the PR");
 
-  // Project should be CarChief (heading match)
-  assertEquals(task.project_id, CARCHIEF_ID);
+  // Project should be Test Proj (heading match)
+  assertEquals(task.project_id, TEST_PROJ_ID);
 
   // Due date should be extracted
   assertExists(task.due_by);
@@ -1908,7 +1908,7 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
   // Metadata populated
   assertExists(task.metadata);
   assertEquals(task.metadata.source, "obsidian");
-  assertEquals(task.metadata.section_heading, "CarChief");
+  assertEquals(task.metadata.section_heading, "Test Proj");
 
   createdTaskIds.push(task.id);
 });

@@ -132,7 +132,7 @@ Implement the following tools:
 - Input: `id` (uuid string, required)
 - Sets `archived_at = now()` on the project
 - Also archives all direct child projects (recursive) and all open tasks belonging to this project or any child
-- Returns: summary of what was archived (e.g. "Archived project 'CarChief Backend' and 2 child projects, 4 tasks")
+- Returns: summary of what was archived (e.g. "Archived project 'Test Proj Backend' and 2 child projects, 4 tasks")
 
 ---
 
@@ -324,7 +324,7 @@ Write Deno tests covering:
 - `update_task` with `status: "done"` → verify `archived_at` is set
 - `create_ai_note` → `get_unsynced_ai_notes` → verify note appears
 - `mark_notes_synced` → `get_unsynced_ai_notes` → verify note no longer appears
-- `ingest_note` with content mentioning "CarChief" → verify resulting thought metadata has `references.project_id` set to the CarChief seed project id
+- `ingest_note` with content mentioning "Test Proj" → verify resulting thought metadata has `references.project_id` set to the Test Proj seed project id
 - `thought_stats` → verify counts are accurate after operations
 
 ### 3.2 DB Tests (`supabase/tests/`)

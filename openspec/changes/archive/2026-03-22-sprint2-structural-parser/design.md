@@ -63,7 +63,7 @@ Track whether we're inside a fenced code block (``` or ~~~). When inside, skip a
 
 Each checkbox stores the `sectionHeading` — the text of the nearest `#` heading above it. This is computed during the line-by-line pass by tracking the most recent heading seen.
 
-**Why:** The TaskExtractor (Sprint 4) uses section headings to associate tasks with projects (e.g., a task under a `## CarChief` heading belongs to that project).
+**Why:** The TaskExtractor (Sprint 4) uses section headings to associate tasks with projects (e.g., a task under a `## Test Proj` heading belongs to that project).
 
 ### 6. Heading line ranges
 

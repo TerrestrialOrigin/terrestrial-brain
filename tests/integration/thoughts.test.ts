@@ -124,7 +124,7 @@ const CC_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
 Deno.test("list_thoughts with project_id filter returns only matching thoughts", async () => {
   const result = await callTool("list_thoughts", { project_id: TB_PROJECT_ID, limit: 50 });
   assertExists(result);
-  // All returned thoughts should be about Terrestrial Brain, none about CarChief-only topics
+  // All returned thoughts should be about Terrestrial Brain, none about Test Proj-only topics
   assertEquals(result.includes("recent thought"), true, "Should return results");
   // The TB-seeded thought mentions MCP or Obsidian
   assertEquals(
@@ -222,7 +222,7 @@ Deno.test("list_thoughts with combined author and project_id filter", async () =
 });
 
 Deno.test("list_thoughts with mismatched author and project_id returns no thoughts", async () => {
-  // gpt-4o-mini authored the CarChief thought, not the TB one
+  // gpt-4o-mini authored the Test Proj thought, not the TB one
   const result = await callTool("list_thoughts", {
     author: "gpt-4o-mini",
     project_id: TB_PROJECT_ID,
@@ -487,26 +487,26 @@ Deno.test("list_thoughts displays raw UUID for orphaned project references", asy
 
 // ─── Ingest Note with Project Detection (via /ingest-note HTTP route) ────────
 
-const CARCHIEF_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
+const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 const INGEST_URL =
   "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
 
-const TEST_NOTE_ID = `test-ingest-carchief-${Date.now()}`;
+const TEST_NOTE_ID = `test-ingest-test-proj-${Date.now()}`;
 
 Deno.test("ingest_note with project mention tags thoughts with project_id", async () => {
-  const noteContent = `# CarChief Dealer Lookup Performance
+  const noteContent = `# Test Proj Record Lookup Performance
 
-The CarChief dealer lookup endpoint is too slow for production use. We need to add Redis caching
+The Test Proj record lookup endpoint is too slow for production use. We need to add response caching
 in front of the PostgreSQL query. Target is sub-100ms p95 latency for cached lookups.
 
-CarChief Backend API should expose a cache-invalidation webhook so the dealer data stays fresh.`;
+Test Proj Backend API should expose a cache-invalidation webhook so the record data stays fresh.`;
 
   const ingestResponse = await fetch(INGEST_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       content: noteContent,
-      title: "CarChief Dealer Lookup Performance",
+      title: "Test Proj Record Lookup Performance",
       note_id: TEST_NOTE_ID,
     }),
   });
@@ -531,22 +531,22 @@ CarChief Backend API should expose a cache-invalidation webhook so the dealer da
     await response.json();
   assertEquals(thoughts.length > 0, true, "Should have ingested at least one thought");
 
-  // At least one thought should have the CarChief project_id in references (new array format or old single-id format)
+  // At least one thought should have the Test Proj project_id in references (new array format or old single-id format)
   const taggedThoughts = thoughts.filter(
     (thought) => {
       const refs = thought.metadata?.references as Record<string, unknown> | undefined;
       if (!refs) return false;
       // New format: references.projects is an array containing the ID
-      if (Array.isArray(refs.projects) && (refs.projects as string[]).includes(CARCHIEF_PROJECT_ID)) return true;
+      if (Array.isArray(refs.projects) && (refs.projects as string[]).includes(TEST_PROJ_ID)) return true;
       // Old format: references.project_id is the ID string
-      if (refs.project_id === CARCHIEF_PROJECT_ID) return true;
+      if (refs.project_id === TEST_PROJ_ID) return true;
       return false;
     }
   );
   assertEquals(
     taggedThoughts.length > 0,
     true,
-    `At least one thought should be tagged with CarChief project_id (${CARCHIEF_PROJECT_ID}). ` +
+    `At least one thought should be tagged with Test Proj project_id (${TEST_PROJ_ID}). ` +
       `Found ${thoughts.length} thoughts, none tagged. Metadata: ${JSON.stringify(thoughts.map((thought) => thought.metadata))}`
   );
 });
@@ -624,9 +624,9 @@ Deno.test("capture_thought leaves author null when omitted", async () => {
 });
 
 Deno.test("capture_thought merges explicit project_ids with pipeline-detected projects", async () => {
-  // Use CarChief in the content so the pipeline detects it, and also pass a second explicit UUID
+  // Use Test Proj in the content so the pipeline detects it, and also pass a second explicit UUID
   const explicitProjectId = "00000000-0000-0000-0000-000000000002";
-  const uniqueContent = `Integration test: CarChief project merge check ${Date.now()}`;
+  const uniqueContent = `Integration test: Test Proj project merge check ${Date.now()}`;
   const result = await callTool("capture_thought", {
     content: uniqueContent,
     project_ids: [explicitProjectId],

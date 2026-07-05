@@ -55,13 +55,13 @@ Matched tasks get updated (content, status). Unmatched checkboxes create new tas
 ### 4. Project association priority chain
 
 For each task, the project is determined by:
-1. **File path** — if note is in `/projects/CarChief/`, all tasks default to that project (from ProjectExtractor result)
+1. **File path** — if note is in `/projects/Test Proj/`, all tasks default to that project (from ProjectExtractor result)
 2. **Section heading** — if a checkbox's `sectionHeading` matches a known project name (case-insensitive), that project takes priority
 3. **AI content inference** — for remaining unassigned tasks, batch them into a single LLM call with the known projects list. The LLM returns `[{ "task_index": N, "project_id": "uuid" }]`. Only valid project IDs from the known list are accepted.
 
 **Why batch the AI call:** One call for all unassigned tasks is cheaper and faster than per-task calls.
 
-**Why section heading overrides file path:** A note in `/projects/CarChief/` might have a section `## Terrestrial Brain` with tasks that belong to a different project. The section heading is a more specific signal.
+**Why section heading overrides file path:** A note in `/projects/Test Proj/` might have a section `## Terrestrial Brain` with tasks that belong to a different project. The section heading is a more specific signal.
 
 ### 5. Subtask hierarchy maps to `parent_id`
 

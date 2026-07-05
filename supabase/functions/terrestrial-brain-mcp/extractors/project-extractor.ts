@@ -85,7 +85,7 @@ export async function extractProjectNameFromPath(
 RULES:
 - A path segment or filename like "Rabbit Hutch Project" IS a project named "Rabbit Hutch"
 - A path segment like "Project Planning notes" is NOT a project — "Project" is used descriptively
-- A filename like "CarChief Project.md" IS a project named "CarChief"
+- A filename like "Acme Project.md" IS a project named "Acme"
 - A folder like "My Garden Project" IS a project named "My Garden"
 - "Project updates" or "Project ideas" are NOT project names — they're generic labels
 - Strip the word "Project" from the name when extracting

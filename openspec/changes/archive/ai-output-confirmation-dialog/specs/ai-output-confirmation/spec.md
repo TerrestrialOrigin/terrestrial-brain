@@ -8,7 +8,7 @@ The Obsidian plugin SHALL display a confirmation dialog before writing any AI ou
 - **WHEN** `pollAIOutput()` retrieves one or more pending AI outputs
 - **THEN** the plugin SHALL display a modal dialog listing all pending outputs
 - **AND** the dialog SHALL show the total count at the top (e.g., "3 pending AI output(s)")
-- **AND** each output SHALL be listed with its full file path and content character count (e.g., `projects/CarChief/plan.md — 2,340 chars`)
+- **AND** each output SHALL be listed with its full file path and content character count (e.g., `projects/Test Proj/plan.md — 2,340 chars`)
 
 #### Scenario: No dialog when no pending outputs
 - **WHEN** `pollAIOutput()` retrieves zero pending AI outputs

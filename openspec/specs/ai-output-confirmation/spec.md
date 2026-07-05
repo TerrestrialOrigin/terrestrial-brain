@@ -8,7 +8,7 @@ The dialog SHALL indicate per-file conflict status: whether each pending output 
 - **WHEN** `pollAIOutput()` retrieves one or more pending AI output metadata records
 - **THEN** the plugin SHALL display a modal dialog listing all pending outputs
 - **AND** the dialog SHALL show the total count at the top (e.g., "3 pending AI output(s)")
-- **AND** each output SHALL be listed with its full file path and human-readable file size (e.g., `projects/CarChief/plan.md — 2.3 KB`)
+- **AND** each output SHALL be listed with its full file path and human-readable file size (e.g., `projects/Test Proj/plan.md — 2.3 KB`)
 - **AND** the full content body SHALL NOT be fetched until the user accepts
 
 #### Scenario: No dialog when no pending outputs (automatic poll)

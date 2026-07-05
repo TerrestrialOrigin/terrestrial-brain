@@ -17,7 +17,7 @@
 ## 3. Testing & Verification
 
 - [x] 3.1 Write pipeline unit tests — mock extractors verifying sequential execution, context enrichment, result composition, empty results
-- [x] 3.2 Write ProjectExtractor integration tests — file path detection with known project (CarChief seed data)
+- [x] 3.2 Write ProjectExtractor integration tests — file path detection with known project (Test Proj seed data)
 - [x] 3.3 Write ProjectExtractor integration tests — heading-based detection with known project
 - [x] 3.4 Write ProjectExtractor integration tests — auto-creation from new `/projects/` folder, verify DB row created and context enriched
 - [x] 3.5 Write ProjectExtractor integration tests — empty folder name skipped, note outside `/projects/` returns no path match

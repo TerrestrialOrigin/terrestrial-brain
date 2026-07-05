@@ -28,8 +28,8 @@ Signal 1 is too rigid. Users capitalize "Projects", nest project folders at any 
 New regex: `/(?:^|\/)projects\/([^/]+)\//i`
 
 This matches:
-- `projects/CarChief/plan.md` (root-level, current behavior)
-- `Projects/CarChief/plan.md` (capitalized)
+- `projects/Test Proj/plan.md` (root-level, current behavior)
+- `Projects/Test Proj/plan.md` (capitalized)
 - `farming/projects/Rabbit Hutch/plan.md` (nested)
 - `farming/Projects/Rabbit Hutch/plan.md` (nested + capitalized)
 

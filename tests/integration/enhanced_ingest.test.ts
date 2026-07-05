@@ -86,7 +86,7 @@ async function callIngestNote(args: {
 }
 
 // Seed project IDs (from seed.sql)
-const CARCHIEF_ID = "00000000-0000-0000-0000-000000000001";
+const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 
 // Track entities for cleanup
 const testNoteIds: string[] = [];
@@ -143,14 +143,14 @@ Deno.test("ingest_note: thoughts have metadata.references with tasks and project
   testNoteIds.push(noteId);
   testTaskReferenceIds.push(noteId);
 
-  const noteContent = `# CarChief
-- [ ] Fix dealer lookup
-Some notes about the CarChief dealer integration.
+  const noteContent = `# Test Proj
+- [ ] Fix record lookup
+Some notes about the Test Proj record integration.
 `;
 
   await callIngestNote({
     content: noteContent,
-    title: "CarChief Tasks",
+    title: "Test Proj Tasks",
     note_id: noteId,
   });
 
@@ -464,19 +464,19 @@ Deno.test("option4: create_tasks_with_output creates tasks and ai_output", async
   testTaskReferenceIds.push(filePath);
 
   const result = await callTool("create_tasks_with_output", {
-    title: "CarChief Sprint Plan",
+    title: "Test Proj Sprint Plan",
     file_path: filePath,
     tasks: [
-      { content: "Implement dealer lookup caching", project_id: CARCHIEF_ID, status: "open" },
-      { content: "Write integration tests for caching", project_id: CARCHIEF_ID, status: "open" },
-      { content: "Deploy to staging", project_id: CARCHIEF_ID, status: "open" },
+      { content: "Implement record lookup caching", project_id: TEST_PROJ_ID, status: "open" },
+      { content: "Write integration tests for caching", project_id: TEST_PROJ_ID, status: "open" },
+      { content: "Deploy to staging", project_id: TEST_PROJ_ID, status: "open" },
     ],
     source_context: "Option 4 integration test",
   });
 
   assertExists(result);
   assertEquals(result.includes("3 task(s)"), true, "Should report 3 tasks created");
-  assertEquals(result.includes("CarChief Sprint Plan"), true, "Should include title");
+  assertEquals(result.includes("Test Proj Sprint Plan"), true, "Should include title");
   assertEquals(result.includes(filePath), true, "Should include file_path");
 
   // Verify tasks were created with correct reference_id
@@ -488,9 +488,9 @@ Deno.test("option4: create_tasks_with_output creates tasks and ai_output", async
 
   assertExists(tasks);
   assertEquals(tasks.length, 3, "Should have 3 tasks in DB");
-  assertEquals(tasks[0].content, "Implement dealer lookup caching");
+  assertEquals(tasks[0].content, "Implement record lookup caching");
   assertEquals(tasks[0].reference_id, filePath);
-  assertEquals(tasks[0].project_id, CARCHIEF_ID);
+  assertEquals(tasks[0].project_id, TEST_PROJ_ID);
   assertEquals(tasks[0].status, "open");
 });
 
@@ -521,7 +521,7 @@ Deno.test("option4: round-trip — ingest of delivered content creates no duplic
   // Simulate what happens after plugin delivery: ingest_note with the same content and path
   const ingestResult = await callIngestNote({
     content: matchingOutput.content,
-    title: "CarChief Sprint Plan",
+    title: "Test Proj Sprint Plan",
     note_id: filePath,
   });
   assertExists(ingestResult);

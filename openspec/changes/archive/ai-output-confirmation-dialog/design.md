@@ -30,7 +30,7 @@ Use Obsidian's built-in `Modal` class to show a confirmation dialog. This is the
 
 The modal displays:
 - Header: "N pending AI output(s)"
-- A list of each output: file path and character count (e.g., `projects/CarChief/plan.md — 2,340 chars`)
+- A list of each output: file path and character count (e.g., `projects/Test Proj/plan.md — 2,340 chars`)
 - Two buttons: "Accept All" and "Reject All"
 
 **Alternative considered:** Using Obsidian's `Notice` with clickable actions. Rejected because Notices are transient and don't block — the user could miss them, defeating the purpose.

@@ -1,6 +1,6 @@
 ## Why
 
-When the AI creates tasks for the user (e.g., "plan the next sprint for CarChief"), two things need to happen atomically: (1) structured task rows are inserted into the `tasks` table with correct project associations, status, and hierarchy, and (2) a markdown document with `- [ ]` checkboxes is written to `ai_output` for delivery to the user's vault. When the plugin delivers that file and the user's next vault sync triggers `ingest_note`, the TaskExtractor must recognize the pre-existing tasks and link to them rather than creating duplicates.
+When the AI creates tasks for the user (e.g., "plan the next sprint for Test Proj"), two things need to happen atomically: (1) structured task rows are inserted into the `tasks` table with correct project associations, status, and hierarchy, and (2) a markdown document with `- [ ]` checkboxes is written to `ai_output` for delivery to the user's vault. When the plugin delivers that file and the user's next vault sync triggers `ingest_note`, the TaskExtractor must recognize the pre-existing tasks and link to them rather than creating duplicates.
 
 Currently, the AI can create tasks via `create_task` (one at a time) and deliver markdown via `create_ai_output`, but these are disconnected — there's no mechanism to tag task rows with the file path they'll appear in, and no guarantee the TaskExtractor will match them on ingest. Sprint 7 closes this loop.
 

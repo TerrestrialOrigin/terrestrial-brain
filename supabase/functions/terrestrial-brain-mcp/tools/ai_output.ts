@@ -216,7 +216,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       inputSchema: {
         title: z.string().describe("Human-readable title for the output document"),
         file_path: z.string().describe(
-          "Target vault-relative path including filename, e.g. 'projects/CarChief/sprint-tasks.md'",
+          "Target vault-relative path including filename, e.g. 'projects/Test Proj/sprint-tasks.md'",
         ),
         tasks: z
           .array(

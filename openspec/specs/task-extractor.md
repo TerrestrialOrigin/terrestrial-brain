@@ -56,23 +56,23 @@ THEN the child task SHALL have `parent_id: null`
 
 ### Task under project heading
 
-GIVEN a checkbox's `sectionHeading` is "CarChief" and "CarChief" is a known project
-THEN the task SHALL be associated with the CarChief project (`project_id` set)
+GIVEN a checkbox's `sectionHeading` is "Test Proj" and "Test Proj" is a known project
+THEN the task SHALL be associated with the Test Proj project (`project_id` set)
 
 ---
 
 ### Task in project folder with no section heading match
 
-GIVEN a note is at `projects/CarChief/tasks.md` and a checkbox has no matching section heading
-THEN the task SHALL default to the CarChief project (from pipeline's project references)
+GIVEN a note is at `projects/Test Proj/tasks.md` and a checkbox has no matching section heading
+THEN the task SHALL default to the Test Proj project (from pipeline's project references)
 
 ---
 
 ### AI-inferred project association
 
-GIVEN a checkbox text mentions "CarChief tickets" but has no heading or path match
-AND "CarChief" is a known project
-THEN the AI content inference SHALL associate the task with CarChief
+GIVEN a checkbox text mentions "Test Proj tickets" but has no heading or path match
+AND "Test Proj" is a known project
+THEN the AI content inference SHALL associate the task with Test Proj
 
 ---
 

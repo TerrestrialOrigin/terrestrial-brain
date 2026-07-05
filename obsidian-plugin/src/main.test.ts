@@ -280,7 +280,7 @@ describe("pollAIOutput", () => {
     setupTwoPhaseCallHTTP(
       plugin,
       [
-        { id: "output-1", title: "Output 1", file_path: "projects/CarChief/plan.md", content_size: 9, created_at: "2026-03-22T00:00:00Z" },
+        { id: "output-1", title: "Output 1", file_path: "projects/Test Proj/plan.md", content_size: 9, created_at: "2026-03-22T00:00:00Z" },
         { id: "output-2", title: "Output 2", file_path: "projects/TB/design.md", content_size: 9, created_at: "2026-03-22T00:00:00Z" },
       ],
       [
@@ -291,7 +291,7 @@ describe("pollAIOutput", () => {
 
     await plugin.pollAIOutput();
 
-    expect(plugin.syncedHashes["projects/CarChief/plan.md"]).toBe(simpleHash("Content A"));
+    expect(plugin.syncedHashes["projects/Test Proj/plan.md"]).toBe(simpleHash("Content A"));
     expect(plugin.syncedHashes["projects/TB/design.md"]).toBe(simpleHash("Content B"));
   });
 
