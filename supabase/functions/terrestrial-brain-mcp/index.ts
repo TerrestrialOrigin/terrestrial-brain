@@ -32,6 +32,10 @@ import { requireEnv } from "./env.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AiProvider } from "./ai/ai-provider.ts";
 import { createAiProvider } from "./ai/factory.ts";
+import type { ThoughtRepository } from "./repositories/thought-repository.ts";
+import type { TaskRepository } from "./repositories/task-repository.ts";
+import { SupabaseThoughtRepository } from "./repositories/supabase-thought-repository.ts";
+import { SupabaseTaskRepository } from "./repositories/supabase-task-repository.ts";
 
 // Composition-root secrets: validated at cold start so a missing var fails the
 // boot loudly (named in the error) rather than surfacing later as broken auth or
@@ -42,6 +46,10 @@ const MCP_ACCESS_KEY = requireEnv("MCP_ACCESS_KEY");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const logger = createFunctionCallLogger(supabase);
+// Repository seams over the `thoughts` / `tasks` tables (fix-plan Step 16).
+// Stateless wrappers over the shared client — constructed once and injected.
+const thoughtRepository = new SupabaseThoughtRepository(supabase);
+const taskRepository = new SupabaseTaskRepository(supabase);
 // The single AiProvider seam over OpenRouter (fix-plan Step 15). Constructed once
 // here and injected into consumers; the provider is stateless, so one instance is
 // safe to share across requests. Step 22 will branch this factory on TB_AI_PROVIDER.
@@ -59,6 +67,8 @@ function createMcpServer(
   supabaseClient: SupabaseClient,
   callLogger: FunctionCallLogger,
   provider: AiProvider,
+  thoughtRepo: ThoughtRepository,
+  taskRepo: TaskRepository,
 ): McpServer {
   const server = new McpServer({
     name: "open-brain",
@@ -66,14 +76,22 @@ function createMcpServer(
   });
 
   // Only thoughts + documents run the extraction pipeline / embeddings, so only
-  // they receive the AiProvider; the rest keep their DB-only signature.
-  registerThoughts(server, supabaseClient, callLogger, provider);
+  // they receive the AiProvider; thoughts + tasks + documents receive the
+  // repository seams (documents forwards taskRepo to the pipeline only).
+  registerThoughts(
+    server,
+    supabaseClient,
+    callLogger,
+    provider,
+    thoughtRepo,
+    taskRepo,
+  );
   registerProjects(server, supabaseClient, callLogger);
-  registerTasks(server, supabaseClient, callLogger);
+  registerTasks(server, supabaseClient, callLogger, taskRepo);
   registerAIOutput(server, supabaseClient, callLogger);
   registerQueries(server, supabaseClient, callLogger);
   registerPeople(server, supabaseClient, callLogger);
-  registerDocuments(server, supabaseClient, callLogger, provider);
+  registerDocuments(server, supabaseClient, callLogger, provider, taskRepo);
 
   return server;
 }
@@ -114,6 +132,8 @@ async function accessKeyMatches(
 interface HttpRouteContext {
   supabase: SupabaseClient;
   aiProvider: AiProvider;
+  thoughtRepository: ThoughtRepository;
+  taskRepository: TaskRepository;
   body: Record<string, unknown>;
 }
 
@@ -148,18 +168,26 @@ const HTTP_ROUTES: HttpRoute[] = [
     suffix: "/ingest-note",
     logName: "ingest-note",
     parseBody: true,
-    handle: async ({ supabase, aiProvider, body }) => {
+    handle: async (
+      { supabase, aiProvider, thoughtRepository, taskRepository, body },
+    ) => {
       const content = body.content;
       if (
         !content || typeof content !== "string" || content.trim().length === 0
       ) {
         return { ok: false, error: "content is required", status: 400 };
       }
-      const result = await handleIngestNote(supabase, aiProvider, {
-        content,
-        title: body.title as string | undefined,
-        note_id: body.note_id as string | undefined,
-      });
+      const result = await handleIngestNote(
+        supabase,
+        aiProvider,
+        thoughtRepository,
+        taskRepository,
+        {
+          content,
+          title: body.title as string | undefined,
+          note_id: body.note_id as string | undefined,
+        },
+      );
       if (!result.success) {
         return {
           ok: false,
@@ -281,7 +309,13 @@ app.all("*", async (c) => {
           ipAddress,
         );
 
-        const result = await route.handle({ supabase, aiProvider, body });
+        const result = await route.handle({
+          supabase,
+          aiProvider,
+          thoughtRepository,
+          taskRepository,
+          body,
+        });
 
         if (!result.ok) {
           if (logId) await logger.logResult(logId, 0, 0, result.error);
@@ -319,7 +353,13 @@ app.all("*", async (c) => {
   // context so tool handlers read THIS request's IP (finding C8), and a fresh
   // server + transport are built per request per the SDK's stateless pattern.
   return runWithRequestContext({ ipAddress }, async () => {
-    const server = createMcpServer(supabase, logger, aiProvider);
+    const server = createMcpServer(
+      supabase,
+      logger,
+      aiProvider,
+      thoughtRepository,
+      taskRepository,
+    );
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
     return transport.handleRequest(c);

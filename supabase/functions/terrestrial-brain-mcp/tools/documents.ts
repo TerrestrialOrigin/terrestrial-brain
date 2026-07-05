@@ -9,12 +9,14 @@ import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
+import type { TaskRepository } from "../repositories/task-repository.ts";
 
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
   aiProvider: AiProvider,
+  taskRepository: TaskRepository,
 ) {
   // ─── write_document ───────────────────────────────────────────────────────────
 
@@ -71,6 +73,7 @@ export function register(
               ],
               supabase,
               aiProvider,
+              taskRepository,
             );
             resolvedReferences = extractedRefs;
           } catch (pipelineError) {
@@ -369,6 +372,7 @@ export function register(
               ],
               supabase,
               aiProvider,
+              taskRepository,
             );
             updates.references = extractedRefs;
           } catch (pipelineError) {

@@ -9,6 +9,10 @@ import type {
   ParsedCheckbox,
   ParsedNote,
 } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
+import type {
+  NewTaskValues,
+  TaskRepository,
+} from "../../supabase/functions/terrestrial-brain-mcp/repositories/task-repository.ts";
 
 // Unit tests for TaskExtractor re-ingest MERGE SEMANTICS (finding C6, Step 8).
 // Drives the REAL TaskExtractor.extract against a fake Supabase context and a
@@ -21,11 +25,14 @@ Deno.env.set("OPENROUTER_API_KEY", "test-openrouter-key");
 const NOTE_REF = "notes/re-ingest.md";
 
 // ---------------------------------------------------------------------------
-// Fake Supabase: records write payloads; can be told to fail updates.
-// Implements only the chains TaskExtractor actually calls:
-//   .from(t).update(payload).eq(...)            (awaited → { error })
-//   .from(t).update(payload).eq(...).is(...)    (awaited → { error })
-//   .from(t).insert(payload).select(...).single()  (→ { data, error })
+// Fake TaskRepository: records the writes TaskExtractor issues (through the
+// Step 16 repository seam) and can be told to fail them. The recorded
+// WriteRecord shape mirrors the pre-seam Supabase chain 1:1, so the assertions
+// below are unchanged:
+//   update(id, payload)      → { op:"update", filters:{ id } }
+//   insert(values)           → { op:"insert", filters:{} } → { data:{id,content} }
+//   archiveIfActive(id)      → { op:"update", payload:{archived_at,status},
+//                                filters:{ id, archived_at:null } }
 // ---------------------------------------------------------------------------
 
 interface WriteRecord {
@@ -35,76 +42,94 @@ interface WriteRecord {
   filters: Record<string, unknown>;
 }
 
-interface FakeSupabaseOptions {
+interface FakeRepoOptions {
   /** Return an error message for a given update write, or null to succeed. */
   updateError?: (record: WriteRecord) => string | null;
   /** Error message for insert writes, or null (default) to succeed. */
   insertError?: string | null;
 }
 
-function makeFakeSupabase(
-  options: FakeSupabaseOptions = {},
-): { supabase: SupabaseClient; writes: WriteRecord[] } {
+// The extractor never reads through context.supabase after the seam, so a bare
+// stand-in satisfies the ExtractionContext type without being called.
+const DUMMY_SUPABASE = {} as unknown as SupabaseClient;
+
+function makeFakeTaskRepository(
+  options: FakeRepoOptions = {},
+): { taskRepository: TaskRepository; writes: WriteRecord[] } {
   const writes: WriteRecord[] = [];
   let insertCounter = 0;
 
-  const from = (table: string) => {
-    const record: WriteRecord = {
-      table,
-      op: "update",
-      payload: {},
-      filters: {},
-    };
-    // deno-lint-ignore no-explicit-any
-    const builder: any = {
-      update(payload: Record<string, unknown>) {
-        record.op = "update";
-        record.payload = payload;
-        return builder;
-      },
-      insert(payload: Record<string, unknown>) {
-        record.op = "insert";
-        record.payload = payload;
-        return builder;
-      },
-      eq(column: string, value: unknown) {
-        record.filters[column] = value;
-        return builder;
-      },
-      is(column: string, value: unknown) {
-        record.filters[column] = value;
-        return builder;
-      },
-      select(_columns: string) {
-        return builder;
-      },
-      single() {
-        writes.push(record);
-        const errorMessage = options.insertError ?? null;
-        if (errorMessage) {
-          return Promise.resolve({
-            data: null,
-            error: { message: errorMessage },
-          });
-        }
+  const taskRepository: TaskRepository = {
+    insert(values: NewTaskValues) {
+      const record: WriteRecord = {
+        table: "tasks",
+        op: "insert",
+        payload: { ...values },
+        filters: {},
+      };
+      writes.push(record);
+      const errorMessage = options.insertError ?? null;
+      if (errorMessage) {
         return Promise.resolve({
-          data: {
-            id: `new-task-${++insertCounter}`,
-            content: String(record.payload.content ?? ""),
-          },
-          error: null,
+          data: null,
+          error: { message: errorMessage },
         });
-      },
-      then(resolve: (value: { error: { message: string } | null }) => void) {
-        writes.push(record);
-        const errorMessage = options.updateError?.(record) ?? null;
-        resolve({ error: errorMessage ? { message: errorMessage } : null });
-      },
-    };
-    return builder;
+      }
+      return Promise.resolve({
+        data: {
+          id: `new-task-${++insertCounter}`,
+          content: String(values.content ?? ""),
+        },
+        error: null,
+      });
+    },
+    update(id: string, updates: Record<string, unknown>) {
+      const record: WriteRecord = {
+        table: "tasks",
+        op: "update",
+        payload: updates,
+        filters: { id },
+      };
+      writes.push(record);
+      const errorMessage = options.updateError?.(record) ?? null;
+      return Promise.resolve({
+        data: null,
+        error: errorMessage ? { message: errorMessage } : null,
+      });
+    },
+    archive(id: string) {
+      const record: WriteRecord = {
+        table: "tasks",
+        op: "update",
+        payload: { archived_at: new Date().toISOString() },
+        filters: { id },
+      };
+      writes.push(record);
+      return Promise.resolve({ data: null, error: null });
+    },
+    archiveIfActive(id: string) {
+      const record: WriteRecord = {
+        table: "tasks",
+        op: "update",
+        payload: { archived_at: new Date().toISOString(), status: "done" },
+        filters: { id, archived_at: null },
+      };
+      writes.push(record);
+      const errorMessage = options.updateError?.(record) ?? null;
+      return Promise.resolve({
+        data: null,
+        error: errorMessage ? { message: errorMessage } : null,
+      });
+    },
+    list() {
+      return Promise.resolve({ data: [], error: null });
+    },
+    findByIds() {
+      return Promise.resolve({ data: [], error: null });
+    },
   };
 
-  return { supabase: { from } as unknown as SupabaseClient, writes };
+  return { taskRepository, writes };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,11 +204,12 @@ function note(checkboxes: ParsedCheckbox[]): ParsedNote {
 }
 
 function baseContext(
-  supabase: SupabaseClient,
+  taskRepository: TaskRepository,
   overrides: Partial<ExtractionContext> = {},
 ): ExtractionContext {
   return {
-    supabase,
+    supabase: DUMMY_SUPABASE,
+    taskRepository,
     // The extractor reaches the LLM through this seam (Step 15). The real
     // OpenRouter provider calls globalThis.fetch, which these tests stub — so an
     // HTTP-500 stub surfaces as a provider error the extractor catches (preserve
@@ -222,8 +248,8 @@ function matchedUpdate(writes: WriteRecord[]): WriteRecord | undefined {
 Deno.test("merge: LLM project inference failure omits project_id (preserve)", async () => {
   await withFetchStub(async () => {
     stubFetchFailure(500); // both project inference and enrichment fail
-    const { supabase, writes } = makeFakeSupabase();
-    const context = baseContext(supabase, {
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
       knownProjects: [{ id: "proj-1", name: "Some Project" }],
     });
 
@@ -249,8 +275,8 @@ Deno.test("merge: LLM project inference failure omits project_id (preserve)", as
 Deno.test("merge: no known projects omits project_id (preserve)", async () => {
   await withFetchStub(async () => {
     stubFetchFailure(500);
-    const { supabase, writes } = makeFakeSupabase();
-    const context = baseContext(supabase, { knownProjects: [] });
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, { knownProjects: [] });
 
     await new TaskExtractor().extract(
       note([checkbox("Fix the login page")]),
@@ -274,8 +300,8 @@ Deno.test("merge: no known projects omits project_id (preserve)", async () => {
 Deno.test("merge: heading-resolved project sets project_id to the value", async () => {
   await withFetchStub(async () => {
     stubFetchOk({ enrichments: [] });
-    const { supabase, writes } = makeFakeSupabase();
-    const context = baseContext(supabase, {
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
       knownProjects: [{ id: "proj-heading", name: "Login Work" }],
     });
 
@@ -299,8 +325,8 @@ Deno.test("merge: available project inference with no assignment clears project_
   await withFetchStub(async () => {
     // Project inference succeeds but assigns nothing; enrichment likewise empty.
     stubFetchOk({ assignments: [], enrichments: [] });
-    const { supabase, writes } = makeFakeSupabase();
-    const context = baseContext(supabase, {
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
       knownProjects: [{ id: "proj-1", name: "Some Project" }],
     });
 
@@ -336,8 +362,8 @@ Deno.test("merge: available enrichment with no result clears due_by and assigned
         },
       ],
     });
-    const { supabase, writes } = makeFakeSupabase();
-    const context = baseContext(supabase, {
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
       knownProjects: [],
       knownPeople: [{ id: "person-1", name: "Alice" }],
     });
@@ -369,8 +395,8 @@ Deno.test("merge: available enrichment with no result clears due_by and assigned
 Deno.test("merge: enrichment failure omits due_by and assigned_to (preserve)", async () => {
   await withFetchStub(async () => {
     stubFetchFailure(500);
-    const { supabase, writes } = makeFakeSupabase();
-    const context = baseContext(supabase, {
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
       knownProjects: [],
       knownPeople: [{ id: "person-1", name: "Alice" }],
     });
@@ -402,13 +428,13 @@ Deno.test("merge: enrichment failure omits due_by and assigned_to (preserve)", a
 Deno.test("merge: failed matched-task update is surfaced in result.errors", async () => {
   await withFetchStub(async () => {
     stubFetchFailure(500);
-    const { supabase } = makeFakeSupabase({
+    const { taskRepository } = makeFakeTaskRepository({
       updateError: (record) =>
         record.filters.id === MATCHED_TASK_ID && "content" in record.payload
           ? "simulated write failure"
           : null,
     });
-    const context = baseContext(supabase, { knownProjects: [] });
+    const context = baseContext(taskRepository, { knownProjects: [] });
 
     const result = await new TaskExtractor().extract(
       note([checkbox("Fix the login page")]),
@@ -432,8 +458,8 @@ Deno.test("merge: failed matched-task update is surfaced in result.errors", asyn
 Deno.test("merge: successful extraction reports no errors", async () => {
   await withFetchStub(async () => {
     stubFetchOk({ enrichments: [] });
-    const { supabase } = makeFakeSupabase();
-    const context = baseContext(supabase, { knownProjects: [] });
+    const { taskRepository } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, { knownProjects: [] });
 
     const result = await new TaskExtractor().extract(
       note([checkbox("Fix the login page")]),

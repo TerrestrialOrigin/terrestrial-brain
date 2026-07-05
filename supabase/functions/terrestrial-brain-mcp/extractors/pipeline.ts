@@ -8,6 +8,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedNote } from "../parser.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
+import type { TaskRepository } from "../repositories/task-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,6 +18,8 @@ export interface ExtractionContext {
   supabase: SupabaseClient;
   /** Injected LLM/embedding seam — extractors call this instead of fetch. */
   aiProvider: AiProvider;
+  /** Injected tasks-table seam — TaskExtractor writes through this, not supabase. */
+  taskRepository: TaskRepository;
   knownProjects: { id: string; name: string }[];
   knownTasks: { id: string; content: string; reference_id: string | null }[];
   knownPeople: { id: string; name: string }[];
@@ -61,6 +64,7 @@ export async function runExtractionPipeline(
   extractors: Extractor[],
   supabase: SupabaseClient,
   aiProvider: AiProvider,
+  taskRepository: TaskRepository,
 ): Promise<Record<string, string[]>> {
   // Initialize context — fetch known projects and people from DB
   const [{ data: activeProjects }, { data: activePeople }] = await Promise.all([
@@ -91,6 +95,7 @@ export async function runExtractionPipeline(
   const context: ExtractionContext = {
     supabase,
     aiProvider,
+    taskRepository,
     knownProjects: (activeProjects || []).map(
       (project: { id: string; name: string }) => ({
         id: project.id,
