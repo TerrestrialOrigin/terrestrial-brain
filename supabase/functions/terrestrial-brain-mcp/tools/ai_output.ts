@@ -22,6 +22,16 @@ interface TaskInput {
 // ---------------------------------------------------------------------------
 
 /**
+ * Defensive upper bound on how deep the parent chain is followed when computing
+ * a task's nesting depth. `validateParentIndices` already guarantees a strictly
+ * decreasing, acyclic parent chain for the `create_tasks_with_output` path, so
+ * this bound is belt-and-suspenders — it protects `generateTaskMarkdown`, which
+ * is exported and unit-tested directly and can therefore be called with data
+ * that never went through validation.
+ */
+const MAX_TASK_DEPTH = 50;
+
+/**
  * Computes nesting depth for a task by following the parent_index chain.
  * Returns 0 for top-level tasks.
  */
@@ -34,9 +44,50 @@ function computeTaskDepth(index: number, tasks: TaskInput[]): number {
   ) {
     depth++;
     current = tasks[current].parent_index!;
-    if (depth > 10) break; // safety: prevent infinite loops from circular refs
+    if (depth > MAX_TASK_DEPTH) break; // safety: bound runaway/unvalidated chains
   }
   return depth;
+}
+
+/**
+ * Validates that every task's `parent_index`, when present, references an
+ * EARLIER task in the array (an integer in the range [0, index)). Because a
+ * valid parent index is strictly less than the task's own index, the parent
+ * chain is strictly decreasing — forward references, self references, and
+ * cycles are all impossible by construction, so subtask hierarchy is never
+ * silently dropped during insertion.
+ *
+ * Returns a human-readable error string for the first violation, or null when
+ * every `parent_index` is valid.
+ */
+export function validateParentIndices(tasks: TaskInput[]): string | null {
+  for (let index = 0; index < tasks.length; index++) {
+    const parentIndex = tasks[index].parent_index;
+    if (parentIndex === undefined || parentIndex === null) continue;
+
+    if (!Number.isInteger(parentIndex)) {
+      return `Task at index ${index} has a non-integer parent_index (${parentIndex}). ` +
+        `parent_index must be the integer array index of an earlier task.`;
+    }
+    if (parentIndex < 0) {
+      return `Task at index ${index} has a negative parent_index (${parentIndex}). ` +
+        `parent_index must reference an earlier task (0-based index).`;
+    }
+    if (parentIndex === index) {
+      return `Task at index ${index} references itself as its own parent. ` +
+        `parent_index must reference an EARLIER task.`;
+    }
+    if (parentIndex > index) {
+      return `Task at index ${index} has a forward parent_index (${parentIndex}); ` +
+        `a parent must appear BEFORE its child in the tasks array. ` +
+        `Reorder the tasks so each parent precedes its children.`;
+    }
+    if (parentIndex >= tasks.length) {
+      return `Task at index ${index} has an out-of-range parent_index (${parentIndex}); ` +
+        `only ${tasks.length} task(s) were provided.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -278,6 +329,17 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
 
         // Fetch project names for markdown headings
         const typedTasks = tasks as TaskInput[];
+
+        // Validate parent_index references up front — reject forward/self/
+        // out-of-range/non-integer parents BEFORE inserting anything, so bad
+        // hierarchy fails loudly instead of silently flattening (finding C4).
+        const parentError = validateParentIndices(typedTasks);
+        if (parentError) {
+          return {
+            content: [{ type: "text" as const, text: parentError }],
+            isError: true,
+          };
+        }
         const projectIds = [
           ...new Set(
             typedTasks.filter((task) => task.project_id).map((task) => task.project_id!),
@@ -351,11 +413,23 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .single();
 
           if (error) {
+            // Roll back the tasks already inserted in this call so a mid-loop
+            // failure never leaves orphaned rows (all-or-nothing, finding C4).
+            let rollbackNote = "";
+            if (taskIds.length > 0) {
+              const { error: rollbackError } = await supabase
+                .from("tasks")
+                .delete()
+                .in("id", taskIds);
+              rollbackNote = rollbackError
+                ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${taskIds.join(", ")}.`
+                : ` Rolled back ${taskIds.length} already-inserted task(s).`;
+            }
             return {
               content: [
                 {
                   type: "text" as const,
-                  text: `Failed to create task "${task.content}": ${error.message}`,
+                  text: `Failed to create task "${task.content}": ${error.message}.${rollbackNote}`,
                 },
               ],
               isError: true,

@@ -1,6 +1,13 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { generateTaskMarkdown } from "../../supabase/functions/terrestrial-brain-mcp/tools/ai_output.ts";
-import { callHTTP, callTool } from "../helpers/mcp-client.ts";
+import {
+  callHTTP,
+  callTool,
+  callToolRaw,
+  restUrl,
+  serviceHeaders,
+  uniqueName,
+} from "../helpers/mcp-client.ts";
 
 // ─── AI Output Tests ────────────────────────────────────────────────────────
 
@@ -263,6 +270,147 @@ Deno.test("generateTaskMarkdown: tasks without project_id have no project headin
   assertEquals(markdown.includes("##"), false, "Should have no H2 headings");
   assertEquals(markdown.includes("- [ ] Orphan task 1"), true);
   assertEquals(markdown.includes("- [x] Orphan task 2"), true);
+});
+
+// ─── create_tasks_with_output: atomicity & parent_index validation (C4) ──────
+//
+// Each test owns a unique `file_path` (stored as the tasks' `reference_id`) and
+// cleans up any rows it created in `finally`, so the tests are order-independent.
+
+interface TaskRow {
+  id: string;
+  content: string;
+  parent_id: string | null;
+}
+
+/** Fetch the task rows created for a given file_path (reference_id) via REST. */
+async function tasksByReferenceId(filePath: string): Promise<TaskRow[]> {
+  const res = await fetch(
+    restUrl(
+      `tasks?reference_id=eq.${encodeURIComponent(filePath)}&select=id,content,parent_id`,
+    ),
+    { headers: serviceHeaders() },
+  );
+  return (await res.json()) as TaskRow[];
+}
+
+async function deleteTasksByReferenceId(filePath: string): Promise<void> {
+  await fetch(
+    restUrl(`tasks?reference_id=eq.${encodeURIComponent(filePath)}`),
+    { method: "DELETE", headers: serviceHeaders() },
+  );
+}
+
+Deno.test("create_tasks_with_output: forward parent_index is rejected, zero rows created", async () => {
+  const filePath = `test/atomic/${uniqueName("forward-ref")}.md`;
+  try {
+    // Child (index 0) references parent at index 1, which is inserted later.
+    const { text, isError } = await callToolRaw("create_tasks_with_output", {
+      title: "Forward Ref",
+      file_path: filePath,
+      tasks: [
+        { content: "Child references later parent", parent_index: 1 },
+        { content: "The parent" },
+      ],
+    });
+
+    assertEquals(isError, true, "Forward parent_index must be rejected");
+    assertEquals(
+      /parent_index/i.test(text),
+      true,
+      "Error should mention parent_index",
+    );
+
+    const rows = await tasksByReferenceId(filePath);
+    assertEquals(rows.length, 0, "No task rows should be created on rejection");
+  } finally {
+    await deleteTasksByReferenceId(filePath);
+  }
+});
+
+Deno.test("create_tasks_with_output: self/out-of-range/negative parent_index rejected, zero rows", async () => {
+  const cases: { label: string; parent_index: number }[] = [
+    { label: "self", parent_index: 0 },
+    { label: "out-of-range", parent_index: 5 },
+    { label: "negative", parent_index: -1 },
+  ];
+  for (const testCase of cases) {
+    const filePath = `test/atomic/${uniqueName(testCase.label)}.md`;
+    try {
+      const { isError } = await callToolRaw("create_tasks_with_output", {
+        title: `Bad parent_index: ${testCase.label}`,
+        file_path: filePath,
+        tasks: [
+          { content: `Task with ${testCase.label} parent_index`, parent_index: testCase.parent_index },
+        ],
+      });
+      assertEquals(isError, true, `${testCase.label} parent_index must be rejected`);
+      const rows = await tasksByReferenceId(filePath);
+      assertEquals(rows.length, 0, `${testCase.label}: no rows should be created`);
+    } finally {
+      await deleteTasksByReferenceId(filePath);
+    }
+  }
+});
+
+Deno.test("create_tasks_with_output: mid-loop insert failure rolls back prior inserts", async () => {
+  const filePath = `test/atomic/${uniqueName("mid-loop-fail")}.md`;
+  try {
+    // Tasks 0 and 1 are valid; task 2 has a non-existent assigned_to (FK to
+    // people), so its insert fails after 0 and 1 have already been inserted.
+    const { isError } = await callToolRaw("create_tasks_with_output", {
+      title: "Mid-loop failure",
+      file_path: filePath,
+      tasks: [
+        { content: "Valid task A" },
+        { content: "Valid task B" },
+        { content: "Task with bad assignee", assigned_to: "00000000-0000-0000-0000-000000000000" },
+      ],
+    });
+
+    assertEquals(isError, true, "Insert failure must return an error");
+
+    const rows = await tasksByReferenceId(filePath);
+    assertEquals(
+      rows.length,
+      0,
+      "All already-inserted tasks must be rolled back on mid-loop failure",
+    );
+  } finally {
+    await deleteTasksByReferenceId(filePath);
+  }
+});
+
+Deno.test("create_tasks_with_output: valid backward parent_index preserves hierarchy", async () => {
+  const filePath = `test/atomic/${uniqueName("valid-hierarchy")}.md`;
+  try {
+    const result = await callTool("create_tasks_with_output", {
+      title: "Valid Hierarchy",
+      file_path: filePath,
+      tasks: [
+        { content: "Parent task" },
+        { content: "Child task", parent_index: 0 },
+        { content: "Grandchild task", parent_index: 1 },
+      ],
+    });
+    assertEquals(result.includes("Created 3 task(s)"), true);
+
+    const rows = await tasksByReferenceId(filePath);
+    assertEquals(rows.length, 3, "All three tasks should be created");
+
+    const byContent = new Map(rows.map((row) => [row.content, row]));
+    const parent = byContent.get("Parent task")!;
+    const child = byContent.get("Child task")!;
+    const grandchild = byContent.get("Grandchild task")!;
+    assertExists(parent);
+    assertExists(child);
+    assertExists(grandchild);
+    assertEquals(parent.parent_id, null, "Parent has no parent_id");
+    assertEquals(child.parent_id, parent.id, "Child links to parent's DB id");
+    assertEquals(grandchild.parent_id, child.id, "Grandchild links to child's DB id");
+  } finally {
+    await deleteTasksByReferenceId(filePath);
+  }
 });
 
 // Clean up the "Plain Content Test" output
