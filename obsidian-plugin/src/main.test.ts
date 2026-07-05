@@ -61,7 +61,7 @@ vi.mock("obsidian", () => ({
   TFile: class {},
 }));
 
-import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildEndpointUrl, extractKeyFromUrl, isInsecureEndpoint } from "./main";
+import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildEndpointUrl, extractKeyFromUrl, isInsecureEndpoint, truncateForNotice } from "./main";
 
 // ─── Helper: create a partial plugin instance for testing ────────────────────
 
@@ -1119,6 +1119,346 @@ describe("loadSettings migrates legacy ?key= URLs", () => {
     expect(plugin.settings.tbEndpointUrl).toBe("https://host/fn");
     expect(plugin.settings.accessKey).toBe("already-set");
     expect(plugin.saveData).not.toHaveBeenCalled();
+  });
+});
+
+// ─── C1: vault-sync honest failure reporting ─────────────────────────────────
+// Runs the REAL vault-sync command loop through the REAL processNote, with
+// callIngestNote rejecting for every file. The bug: current code shows
+// "✅ Vault sync complete" even when every note failed.
+
+describe("C1 — vault sync reports real failures", () => {
+  const realWindow = (globalThis as any).window;
+
+  afterEach(() => {
+    if (realWindow !== undefined) {
+      (globalThis as any).window = realWindow;
+    } else {
+      delete (globalThis as any).window;
+    }
+    noticeMessages.length = 0;
+  });
+
+  async function loadPluginWithFiles(
+    files: { path: string; basename: string; extension: string }[],
+  ): Promise<{ plugin: TerrestrialBrainPlugin; commands: Record<string, any> }> {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+
+    const commands: Record<string, any> = {};
+    plugin.addCommand = ((cmd: any) => { commands[cmd.id] = cmd; }) as any;
+    plugin.addRibbonIcon = vi.fn() as any;
+    plugin.addSettingTab = vi.fn() as any;
+    plugin.registerEvent = vi.fn() as any;
+    plugin.registerInterval = vi.fn().mockReturnValue(1) as any;
+    // Keep the endpoint through loadSettings (which otherwise resets to defaults)
+    plugin.loadData = vi.fn().mockResolvedValue({
+      settings: { tbEndpointUrl: "https://example.com/mcp" },
+      syncedHashes: {},
+    });
+    plugin.app.vault.on = vi.fn().mockReturnValue({});
+    plugin.app.vault.getMarkdownFiles = vi.fn().mockReturnValue(files);
+    plugin.app.vault.read = vi.fn().mockResolvedValue("# content body");
+
+    (globalThis as any).window = {
+      setTimeout: vi.fn(),
+      setInterval: vi.fn().mockReturnValue(1),
+      clearInterval: vi.fn(),
+    };
+
+    await plugin.onload();
+    return { plugin, commands };
+  }
+
+  it("does NOT show a success notice when every note fails", async () => {
+    const files = [
+      { path: "a.md", basename: "a", extension: "md" },
+      { path: "b.md", basename: "b", extension: "md" },
+    ];
+    const { plugin, commands } = await loadPluginWithFiles(files);
+    // Every ingest fails — real processNote runs
+    plugin.callIngestNote = vi.fn().mockRejectedValue(new Error("network down"));
+
+    noticeMessages.length = 0;
+    await commands["sync-vault-to-terrestrial-brain"].callback();
+
+    expect(noticeMessages.some((message) => message.includes("Vault sync complete"))).toBe(false);
+    expect(noticeMessages.some((message) => /fail/i.test(message))).toBe(true);
+  });
+
+  it("reports accurate counts on mixed success/failure", async () => {
+    const files = [
+      { path: "ok.md", basename: "ok", extension: "md" },
+      { path: "bad.md", basename: "bad", extension: "md" },
+    ];
+    const { plugin, commands } = await loadPluginWithFiles(files);
+    plugin.callIngestNote = vi.fn().mockImplementation(async (_content: string, title: string) => {
+      if (title === "bad") throw new Error("boom");
+      return "ok";
+    });
+
+    noticeMessages.length = 0;
+    await commands["sync-vault-to-terrestrial-brain"].callback();
+
+    // Exactly one failure reported; not a clean success notice
+    expect(noticeMessages.some((message) => /1 failed/.test(message))).toBe(true);
+    expect(noticeMessages.some((message) => message.includes("Vault sync complete"))).toBe(false);
+  });
+});
+
+// ─── C10: saveSettings must not restart the poll interval ────────────────────
+// Exercises the REAL saveSettings (not the vi.fn override the other tests use).
+
+describe("C10 — saveSettings does not starve the poll interval", () => {
+  const realWindow = (globalThis as any).window;
+
+  afterEach(() => {
+    if (realWindow !== undefined) {
+      (globalThis as any).window = realWindow;
+    } else {
+      delete (globalThis as any).window;
+    }
+  });
+
+  function stubWindow() {
+    const clearIntervalSpy = vi.fn();
+    const setIntervalSpy = vi.fn().mockReturnValue(555);
+    (globalThis as any).window = {
+      setInterval: setIntervalSpy,
+      clearInterval: clearIntervalSpy,
+    };
+    return { clearIntervalSpy, setIntervalSpy };
+  }
+
+  it("persisting settings does not tear down a running interval", async () => {
+    const plugin = createTestPlugin();
+    // Use the REAL saveSettings from the prototype
+    delete (plugin as unknown as Record<string, unknown>).saveSettings;
+    plugin.saveData = vi.fn().mockResolvedValue(undefined);
+    plugin.registerInterval = ((id: number) => id) as any;
+    (plugin as any).pollIntervalId = 999; // pretend an interval is already registered
+
+    const { clearIntervalSpy, setIntervalSpy } = stubWindow();
+
+    await plugin.saveSettings();
+
+    expect(clearIntervalSpy).not.toHaveBeenCalled();
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── B3: vault delete/rename lifecycle + crash-safe debounce ─────────────────
+
+describe("B3 — vault delete/rename lifecycle", () => {
+  it("delete cancels the pending timer and drops the hash", async () => {
+    const plugin = createTestPlugin();
+    delete (plugin as unknown as Record<string, unknown>).saveSettings;
+    plugin.saveData = vi.fn().mockResolvedValue(undefined);
+    plugin.syncedHashes = { "a.md": "h1", "b.md": "h2" };
+    const timer = setTimeout(() => {}, 100000);
+    plugin.debounceTimers.set("a.md", timer);
+
+    await plugin.handleFileDelete({ path: "a.md" } as any);
+
+    expect(plugin.syncedHashes["a.md"]).toBeUndefined();
+    expect(plugin.syncedHashes["b.md"]).toBe("h2");
+    expect(plugin.debounceTimers.has("a.md")).toBe(false);
+    expect(plugin.saveData).toHaveBeenCalled();
+  });
+
+  it("rename re-keys the hash and cancels the old-path timer", async () => {
+    const plugin = createTestPlugin();
+    delete (plugin as unknown as Record<string, unknown>).saveSettings;
+    plugin.saveData = vi.fn().mockResolvedValue(undefined);
+    plugin.syncedHashes = { "old.md": "h1" };
+    const timer = setTimeout(() => {}, 100000);
+    plugin.debounceTimers.set("old.md", timer);
+
+    await plugin.handleFileRename({ path: "new.md" } as any, "old.md");
+
+    expect(plugin.syncedHashes["new.md"]).toBe("h1");
+    expect(plugin.syncedHashes["old.md"]).toBeUndefined();
+    expect(plugin.debounceTimers.has("old.md")).toBe(false);
+    expect(plugin.saveData).toHaveBeenCalled();
+  });
+
+  it("processNote returns 'skipped' (not throw) when the file is unreadable", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.app.vault.read = vi.fn().mockRejectedValue(new Error("ENOENT"));
+
+    const outcome = await plugin.processNote({ path: "gone.md", basename: "gone", extension: "md" } as any);
+
+    expect(outcome).toBe("skipped");
+  });
+});
+
+// ─── B5: scheduled-sync retry with capped backoff ────────────────────────────
+
+describe("B5 — scheduled sync retry", () => {
+  function captureTimers() {
+    const captured: { fn: () => Promise<void>; delay: number }[] = [];
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>, delay: number) => {
+      captured.push({ fn, delay });
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+    return { captured, spy };
+  }
+
+  it("retries a failed scheduled sync with a larger delay", async () => {
+    const plugin = createTestPlugin();
+    plugin.settings.syncDelayMinutes = 5; // base 300000 ms
+    plugin.processNote = vi.fn().mockResolvedValue("failed");
+    const { captured, spy } = captureTimers();
+
+    plugin.scheduleSync({ path: "x.md", basename: "x", extension: "md" } as any);
+    expect(captured[0].delay).toBe(300000);
+
+    await captured[0].fn(); // fire the timer → failure → schedule a retry
+
+    expect(captured.length).toBe(2);
+    expect(captured[1].delay).toBeGreaterThan(captured[0].delay);
+
+    spy.mockRestore();
+  });
+
+  it("stops retrying after MAX_RETRY_ATTEMPTS", async () => {
+    const plugin = createTestPlugin();
+    plugin.settings.syncDelayMinutes = 5;
+    plugin.processNote = vi.fn().mockResolvedValue("failed");
+    const { captured, spy } = captureTimers();
+
+    plugin.scheduleSync({ path: "x.md", basename: "x", extension: "md" } as any, 3); // at the cap
+    await captured[0].fn();
+
+    expect(captured.length).toBe(1); // no further retry scheduled
+
+    spy.mockRestore();
+  });
+
+  it("does not retry a successful or skipped scheduled sync", async () => {
+    const plugin = createTestPlugin();
+    plugin.processNote = vi.fn().mockResolvedValue("synced");
+    const { captured, spy } = captureTimers();
+
+    plugin.scheduleSync({ path: "x.md", basename: "x", extension: "md" } as any);
+    await captured[0].fn();
+
+    expect(captured.length).toBe(1);
+
+    spy.mockRestore();
+  });
+
+  it("manual (forced) sync failure does not schedule any retry", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.app.vault.read = vi.fn().mockResolvedValue("# body");
+    plugin.callIngestNote = vi.fn().mockRejectedValue(new Error("boom"));
+
+    const outcome = await plugin.processNote(
+      { path: "m.md", basename: "m", extension: "md" } as any,
+      { force: true },
+    );
+
+    expect(outcome).toBe("failed");
+    expect(plugin.debounceTimers.size).toBe(0);
+  });
+});
+
+// ─── B4: manual pull failure surfaces a Notice ───────────────────────────────
+
+describe("B4 — manual pull failure surfaced", () => {
+  beforeEach(() => {
+    noticeMessages.length = 0;
+  });
+
+  it("shows a Notice when a manual pull fails", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.callHTTP = vi.fn().mockRejectedValue(new Error("server exploded"));
+
+    await plugin.pollAIOutput({ manual: true });
+
+    expect(noticeMessages.some((message) => /Pull AI output failed/.test(message))).toBe(true);
+  });
+
+  it("stays silent when an automatic poll fails", async () => {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    plugin.callHTTP = vi.fn().mockRejectedValue(new Error("server exploded"));
+
+    await plugin.pollAIOutput();
+
+    expect(noticeMessages).toHaveLength(0);
+  });
+});
+
+// ─── Plugin S4: bounded, sanitized error notices ─────────────────────────────
+
+describe("truncateForNotice", () => {
+  it("returns short text unchanged", () => {
+    expect(truncateForNotice("content is required")).toBe("content is required");
+  });
+
+  it("collapses runs of whitespace", () => {
+    expect(truncateForNotice("a\n\n  b\tc")).toBe("a b c");
+  });
+
+  it("truncates long text with an ellipsis", () => {
+    const result = truncateForNotice("x".repeat(500), 300);
+    expect(result.length).toBe(301); // 300 chars + the ellipsis
+    expect(result.endsWith("…")).toBe(true);
+  });
+});
+
+describe("Plugin S4 — error notices are bounded", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  function realHttpPlugin(): TerrestrialBrainPlugin {
+    const plugin = createTestPlugin({ tbEndpointUrl: "https://example.com/mcp" });
+    delete (plugin as unknown as Record<string, unknown>).callHTTP;
+    return plugin;
+  }
+
+  it("callHTTP truncates an oversized HTTP error body", async () => {
+    const plugin = realHttpPlugin();
+    const bigBody = "E".repeat(1000);
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => bigBody,
+    }) as unknown as typeof fetch;
+
+    let message = "";
+    try {
+      await plugin.callHTTP("get-pending-ai-output-metadata");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toContain("HTTP 500");
+    expect(message.endsWith("…")).toBe(true);
+    expect(message.length).toBeLessThan(bigBody.length);
+  });
+
+  it("callIngestNote truncates an oversized error body", async () => {
+    const plugin = realHttpPlugin();
+    delete (plugin as unknown as Record<string, unknown>).callIngestNote;
+    const bigBody = "Z".repeat(1000);
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => bigBody,
+    }) as unknown as typeof fetch;
+
+    let message = "";
+    try {
+      await plugin.callIngestNote("body", "title", "note.md");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toContain("Ingest 502");
+    expect(message.endsWith("…")).toBe(true);
+    expect(message.length).toBeLessThan(bigBody.length);
   });
 });
 
