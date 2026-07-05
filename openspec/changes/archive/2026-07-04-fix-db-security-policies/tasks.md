@@ -25,4 +25,4 @@
 - [x] 4.2 Run the plugin suite and build: `cd obsidian-plugin && npm test && npm run build` — 56 passed, 0 failed, 0 skipped, clean production build
 - [x] 4.3 Walk each scenario in `specs/database-access-control/spec.md` and confirm the implementation and a test cover it — policy shape and function ACLs additionally verified directly via `pg_policy`/`pg_proc` queries
 - [x] 4.4 Run `openspec validate fix-db-security-policies` (this CLI's verify) — change is valid; archive (`/opsx:archive`) to run together with the commit step below
-- [ ] 4.5 Commit on `bug/DbSecurityPolicies` and open a PR to `develop` (do NOT delete the branch; do NOT commit before the user asks)
+- [x] 4.5 Commit on `bug/DbSecurityPolicies` and open a PR to `develop` (do NOT delete the branch; do NOT commit before the user asks)
