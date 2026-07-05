@@ -17,6 +17,8 @@ import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import { AiProviderParseError } from "../ai/ai-provider.ts";
+import type { ThoughtRepository } from "../repositories/thought-repository.ts";
+import type { TaskRepository } from "../repositories/task-repository.ts";
 
 const USEFULNESS_REMINDER_LINES = [
   "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
@@ -61,6 +63,8 @@ export function register(
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
   aiProvider: AiProvider,
+  thoughtRepository: ThoughtRepository,
+  taskRepository: TaskRepository,
 ) {
   // Tool 1: Semantic Search
   server.registerTool(
@@ -94,13 +98,12 @@ export function register(
       "search_thoughts",
       async ({ query, limit, threshold, author, reliability }) => {
         const qEmb = await getEmbedding(aiProvider, query);
-        const { data, error } = await supabase.rpc("match_thoughts", {
-          query_embedding: qEmb,
-          match_threshold: threshold,
-          match_count: limit,
-          filter: {},
-          filter_author: author || null,
-          filter_reliability: reliability || null,
+        const { data, error } = await thoughtRepository.matchByEmbedding({
+          embedding: qEmb,
+          threshold,
+          count: limit,
+          author: author || null,
+          reliability: reliability || null,
         });
 
         if (error) {
@@ -247,33 +250,17 @@ export function register(
           include_archived,
         },
       ) => {
-        let q = supabase
-          .from("thoughts")
-          .select(
-            "id, content, metadata, created_at, updated_at, reliability, author",
-          )
-          .order("created_at", { ascending: false })
-          .limit(limit);
-
-        if (!include_archived) q = q.is("archived_at", null);
-
-        if (type) q = q.contains("metadata", { type });
-        if (topic) q = q.contains("metadata", { topics: [topic] });
-        if (person) q = q.contains("metadata", { people: [person] });
-        if (project_id) {
-          q = q.contains("metadata", {
-            references: { projects: [project_id] },
-          });
-        }
-        if (author) q = q.eq("author", author);
-        if (reliability) q = q.eq("reliability", reliability);
-        if (days) {
-          const since = new Date();
-          since.setDate(since.getDate() - days);
-          q = q.gte("created_at", since.toISOString());
-        }
-
-        const { data, error } = await q;
+        const { data, error } = await thoughtRepository.list({
+          limit,
+          includeArchived: include_archived,
+          type,
+          topic,
+          person,
+          projectId: project_id,
+          author,
+          reliability,
+          days,
+        });
 
         if (error) {
           return errorResult(`Error: ${error.message}`);
@@ -374,28 +361,8 @@ export function register(
       },
     },
     withMcpLogging("thought_stats", async ({ project_id }) => {
-      let countQuery = supabase
-        .from("thoughts")
-        .select("*", { count: "exact", head: true })
-        .is("archived_at", null);
-      if (project_id) {
-        countQuery = countQuery.contains("metadata", {
-          references: { projects: [project_id] },
-        });
-      }
-      const { count } = await countQuery;
-
-      let dataQuery = supabase
-        .from("thoughts")
-        .select("metadata, created_at")
-        .is("archived_at", null)
-        .order("created_at", { ascending: false });
-      if (project_id) {
-        dataQuery = dataQuery.contains("metadata", {
-          references: { projects: [project_id] },
-        });
-      }
-      const { data } = await dataQuery;
+      const { data: count } = await thoughtRepository.countActive(project_id);
+      const { data } = await thoughtRepository.listForStats(project_id);
 
       const types: Record<string, number> = {};
       const topics: Record<string, number> = {};
@@ -463,27 +430,20 @@ export function register(
       },
     },
     withMcpLogging("get_thought_by_id", async ({ id }) => {
-      const { data, error } = await supabase
-        .from("thoughts")
-        .select("id, content, metadata, reference_id, created_at, updated_at")
-        .eq("id", id)
-        .single();
+      const { data, error } = await thoughtRepository.findById(id);
 
       if (error) {
         return error.code === "PGRST116"
           ? textResult(`No thought found with ID "${id}".`)
           : errorResult(`Error: ${error.message}`);
       }
+      if (!data) return textResult(`No thought found with ID "${id}".`);
 
       // A fetch by ID implies the caller found the thought useful — auto-record
       // so the model doesn't need to make a separate record_useful_thoughts call.
       // Failures here must not break the fetch itself.
-      const { error: usefulnessError } = await supabase.rpc(
-        "increment_usefulness",
-        {
-          thought_ids: [data.id],
-        },
-      );
+      const { error: usefulnessError } = await thoughtRepository
+        .incrementUsefulness([data.id]);
       if (usefulnessError) {
         console.error(
           `get_thought_by_id auto-record error: ${usefulnessError.message}`,
@@ -586,6 +546,7 @@ export function register(
             ],
             supabase,
             aiProvider,
+            taskRepository,
           );
         } catch (pipelineError) {
           console.error(
@@ -614,7 +575,7 @@ export function register(
           extractMetadata(aiProvider, content),
         ]);
 
-        const { error } = await supabase.from("thoughts").insert({
+        const { error } = await thoughtRepository.insert({
           content,
           embedding,
           reliability: "reliable",
@@ -628,11 +589,8 @@ export function register(
 
         let buildsOnNote = "";
         if (builds_on && builds_on.length > 0) {
-          const { data: creditedCount, error: buildsOnError } = await supabase
-            .rpc(
-              "increment_usefulness",
-              { thought_ids: builds_on },
-            );
+          const { data: creditedCount, error: buildsOnError } =
+            await thoughtRepository.incrementUsefulness(builds_on);
           if (buildsOnError) {
             console.error(
               `capture_thought builds_on error: ${buildsOnError.message}`,
@@ -717,11 +675,8 @@ export function register(
         }
 
         // Fetch existing thought
-        const { data: existing, error: fetchError } = await supabase
-          .from("thoughts")
-          .select("id, content, reliability, author, metadata")
-          .eq("id", id)
-          .single();
+        const { data: existing, error: fetchError } = await thoughtRepository
+          .findForUpdate(id);
 
         if (fetchError || !existing) {
           return errorResult("Thought not found.");
@@ -778,10 +733,10 @@ export function register(
             updatedFields.push("author");
           }
 
-          const { error: updateError } = await supabase
-            .from("thoughts")
-            .update(updatePayload)
-            .eq("id", id);
+          const { error: updateError } = await thoughtRepository.update(
+            id,
+            updatePayload,
+          );
 
           if (updateError) {
             return errorResult(`Update failed: ${updateError.message}`);
@@ -821,10 +776,10 @@ export function register(
             };
           }
 
-          const { error: updateError } = await supabase
-            .from("thoughts")
-            .update(updatePayload)
-            .eq("id", id);
+          const { error: updateError } = await thoughtRepository.update(
+            id,
+            updatePayload,
+          );
 
           if (updateError) {
             return errorResult(`Update failed: ${updateError.message}`);
@@ -860,12 +815,8 @@ export function register(
       },
     },
     withMcpLogging("record_useful_thoughts", async ({ thought_ids }) => {
-      const { data: affectedCount, error } = await supabase.rpc(
-        "increment_usefulness",
-        {
-          thought_ids,
-        },
-      );
+      const { data: affectedCount, error } = await thoughtRepository
+        .incrementUsefulness(thought_ids);
 
       if (error) {
         return errorResult(`Failed to record usefulness: ${error.message}`);
@@ -890,12 +841,8 @@ export function register(
       },
     },
     withMcpLogging("archive_thought", async ({ id }) => {
-      const { data: thought, error: fetchError } = await supabase
-        .from("thoughts")
-        .select("id, content")
-        .eq("id", id)
-        .is("archived_at", null)
-        .single();
+      const { data: thought, error: fetchError } = await thoughtRepository
+        .findActiveById(id);
 
       if (fetchError || !thought) {
         return errorResult(
@@ -905,10 +852,7 @@ export function register(
         );
       }
 
-      const { error: archiveError } = await supabase
-        .from("thoughts")
-        .update({ archived_at: new Date().toISOString() })
-        .eq("id", id);
+      const { error: archiveError } = await thoughtRepository.archive(id);
 
       if (archiveError) {
         return errorResult(`Archive failed: ${archiveError.message}`);
@@ -932,6 +876,8 @@ const INGEST_PROVENANCE = {
 export async function handleIngestNote(
   supabase: SupabaseClient,
   aiProvider: AiProvider,
+  thoughtRepository: ThoughtRepository,
+  taskRepository: TaskRepository,
   { content, title, note_id }: {
     content: string;
     title?: string;
@@ -992,6 +938,7 @@ export async function handleIngestNote(
         [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
         supabase,
         aiProvider,
+        taskRepository,
       );
     } catch (pipelineError) {
       console.error(
@@ -1004,12 +951,7 @@ export async function handleIngestNote(
     let existingThoughts: ExistingThought[] = [];
 
     if (note_id) {
-      const { data, error } = await supabase
-        .from("thoughts")
-        .select("id, content, created_at")
-        .eq("reference_id", note_id)
-        .is("archived_at", null)
-        .order("created_at", { ascending: true });
+      const { data, error } = await thoughtRepository.findByReference(note_id);
 
       if (error) {
         throw new Error(`Failed to fetch existing thoughts: ${error.message}`);
@@ -1020,7 +962,7 @@ export async function handleIngestNote(
     // Step 5: No existing thoughts → fresh split and insert
     if (existingThoughts.length === 0) {
       const result = await freshIngest(
-        supabase,
+        thoughtRepository,
         aiProvider,
         content,
         title,
@@ -1098,10 +1040,12 @@ Return ONLY valid JSON in this exact structure:
           },
       );
     } catch (reconcileError) {
-      if (!(reconcileError instanceof AiProviderParseError)) throw reconcileError;
+      if (!(reconcileError instanceof AiProviderParseError)) {
+        throw reconcileError;
+      }
       console.warn("Reconciliation parse failed, falling back to fresh ingest");
       const result = await freshIngest(
-        supabase,
+        thoughtRepository,
         aiProvider,
         content,
         title,
@@ -1127,23 +1071,20 @@ Return ONLY valid JSON in this exact structure:
           getEmbedding(aiProvider, updateItem.content),
           extractMetadata(aiProvider, updateItem.content),
         ]);
-        const { error } = await supabase
-          .from("thoughts")
-          .update({
-            content: updateItem.content,
-            embedding,
-            note_snapshot_id: noteSnapshotId,
-            reliability: INGEST_PROVENANCE.reliability,
-            author: INGEST_PROVENANCE.author,
-            metadata: {
-              ...metadata,
-              source: "obsidian",
-              note_title: title || null,
-              updated_at: new Date().toISOString(),
-              references,
-            },
-          })
-          .eq("id", updateItem.id);
+        const { error } = await thoughtRepository.update(updateItem.id, {
+          content: updateItem.content,
+          embedding,
+          note_snapshot_id: noteSnapshotId,
+          reliability: INGEST_PROVENANCE.reliability,
+          author: INGEST_PROVENANCE.author,
+          metadata: {
+            ...metadata,
+            source: "obsidian",
+            note_title: title || null,
+            updated_at: new Date().toISOString(),
+            references,
+          },
+        });
         if (error) {
           throw new Error(
             `Update failed for ${updateItem.id}: ${error.message}`,
@@ -1162,7 +1103,7 @@ Return ONLY valid JSON in this exact structure:
           getEmbedding(aiProvider, thoughtContent as string),
           extractMetadata(aiProvider, thoughtContent as string),
         ]);
-        const { error } = await supabase.from("thoughts").insert({
+        const { error } = await thoughtRepository.insert({
           content: thoughtContent,
           embedding,
           reference_id: note_id || null,
@@ -1187,10 +1128,7 @@ Return ONLY valid JSON in this exact structure:
         // hallucinated) ID must never permanently destroy captured knowledge.
         // Archived thoughts stay retrievable and are excluded from the next
         // reconciliation fetch (which filters archived_at IS NULL).
-        const { error } = await supabase
-          .from("thoughts")
-          .update({ archived_at: new Date().toISOString() })
-          .eq("id", id);
+        const { error } = await thoughtRepository.archive(id);
         if (error) {
           throw new Error(`Archive failed for ${id}: ${error.message}`);
         }

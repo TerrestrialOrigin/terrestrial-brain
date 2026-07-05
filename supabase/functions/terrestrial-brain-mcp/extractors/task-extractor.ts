@@ -24,6 +24,7 @@ import {
 } from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
+import type { NewTaskValues } from "../repositories/task-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Content similarity
@@ -801,10 +802,10 @@ export class TaskExtractor implements Extractor {
         updates.archived_at = null;
       }
 
-      const { error: updateError } = await context.supabase
-        .from("tasks")
-        .update(updates)
-        .eq("id", match.existingTaskId);
+      const { error: updateError } = await context.taskRepository.update(
+        match.existingTaskId,
+        updates,
+      );
       if (updateError) {
         errors.push(
           `Failed to update task ${match.existingTaskId}: ${updateError.message}`,
@@ -828,7 +829,7 @@ export class TaskExtractor implements Extractor {
 
       const metadata = buildTaskMetadata(note.source, checkbox.sectionHeading);
 
-      const insertData: Record<string, unknown> = {
+      const insertData: NewTaskValues = {
         content,
         status,
         reference_id: note.referenceId,
@@ -847,11 +848,9 @@ export class TaskExtractor implements Extractor {
         insertData.archived_at = new Date().toISOString();
       }
 
-      const { data: newTask, error } = await context.supabase
-        .from("tasks")
-        .insert(insertData)
-        .select("id, content")
-        .single();
+      const { data: newTask, error } = await context.taskRepository.insert(
+        insertData,
+      );
 
       if (!error && newTask) {
         taskIdByCheckboxIndex.set(checkboxIndex, newTask.id);
@@ -875,10 +874,10 @@ export class TaskExtractor implements Extractor {
       if (checkbox.parentIndex !== null) {
         const parentId = taskIdByCheckboxIndex.get(checkbox.parentIndex) ||
           null;
-        const { error: parentError } = await context.supabase
-          .from("tasks")
-          .update({ parent_id: parentId })
-          .eq("id", match.existingTaskId);
+        const { error: parentError } = await context.taskRepository.update(
+          match.existingTaskId,
+          { parent_id: parentId },
+        );
         if (parentError) {
           errors.push(
             `Failed to update parent_id for task ${match.existingTaskId}: ${parentError.message}`,
@@ -890,11 +889,9 @@ export class TaskExtractor implements Extractor {
     // --- Phase 5: Archive tasks whose checkboxes were removed from the note ---
     if (unmatchedTaskIds.length > 0) {
       for (const taskId of unmatchedTaskIds) {
-        const { error: archiveError } = await context.supabase
-          .from("tasks")
-          .update({ archived_at: new Date().toISOString(), status: "done" })
-          .eq("id", taskId)
-          .is("archived_at", null); // Only archive if not already archived
+        // Only archive if not already archived (guarded in the repository).
+        const { error: archiveError } = await context.taskRepository
+          .archiveIfActive(taskId);
         if (archiveError) {
           errors.push(
             `Failed to archive task ${taskId}: ${archiveError.message}`,

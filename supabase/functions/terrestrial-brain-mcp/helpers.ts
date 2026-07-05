@@ -1,6 +1,8 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import type { AiProvider } from "./ai/ai-provider.ts";
 import { AiProviderParseError } from "./ai/ai-provider.ts";
+import { resolveNames } from "./repositories/name-resolution.ts";
+import type { ThoughtRepository } from "./repositories/thought-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Backwards-compatible references reader
@@ -16,35 +18,28 @@ export function getProjectRefs(metadata: Record<string, unknown>): string[] {
   if (Array.isArray(refs.projects)) return refs.projects as string[];
   if (typeof refs.project_id === "string") return [refs.project_id];
   return [];
-};
+}
 
 /**
  * Resolves project UUIDs to human-readable project names via a single batch query.
  * Falls back to the raw UUID for any project not found in the database.
+ *
+ * Thin delegate over the shared `resolveNames` helper (fix-plan Step 16) — the
+ * only difference from the generic helper is the raw-id fallback for ids the
+ * query did not return, which this function's callers rely on. (Step 17 migrates
+ * those callers to `resolveNames` directly and removes this wrapper.)
  */
 export async function resolveProjectNames(
   supabase: SupabaseClient,
   projectUuids: string[],
 ): Promise<Map<string, string>> {
-  const nameMap = new Map<string, string>();
-  if (projectUuids.length === 0) return nameMap;
-
-  const uniqueUuids = [...new Set(projectUuids)];
-  const { data, error } = await supabase
-    .from("projects")
-    .select("id, name")
-    .in("id", uniqueUuids);
-
-  if (error) {
-    console.error(`Project name resolution failed: ${error.message}`);
-    for (const uuid of uniqueUuids) nameMap.set(uuid, uuid);
-    return nameMap;
-  }
-
-  for (const project of data || []) {
-    nameMap.set(project.id, project.name);
-  }
-  for (const uuid of uniqueUuids) {
+  const nameMap = await resolveNames(
+    supabase,
+    "projects",
+    projectUuids,
+    "name",
+  );
+  for (const uuid of new Set(projectUuids)) {
     if (!nameMap.has(uuid)) nameMap.set(uuid, uuid);
   }
   return nameMap;
@@ -59,7 +54,10 @@ export function getEmbedding(
   return aiProvider.getEmbedding(text);
 }
 
-const UNCATEGORIZED_METADATA = { topics: ["uncategorized"], type: "observation" };
+const UNCATEGORIZED_METADATA = {
+  topics: ["uncategorized"],
+  type: "observation",
+};
 
 export async function extractMetadata(
   aiProvider: AiProvider,
@@ -72,7 +70,8 @@ export async function extractMetadata(
   try {
     return await aiProvider.completeJson(
       {
-        systemPrompt: `Extract metadata from the user's captured thought. Return JSON with:
+        systemPrompt:
+          `Extract metadata from the user's captured thought. Return JSON with:
 - "people": array of people mentioned (empty if none)
 - "action_items": array of implied to-dos (empty if none)
 - "dates_mentioned": array of dates YYYY-MM-DD (empty if none)
@@ -94,7 +93,7 @@ Only extract what's explicitly there.`,
 }
 
 export async function freshIngest(
-  supabase: SupabaseClient,
+  thoughtRepository: ThoughtRepository,
   aiProvider: AiProvider,
   content: string,
   title: string | undefined,
@@ -110,7 +109,8 @@ export async function freshIngest(
   try {
     thoughts = await aiProvider.completeJson(
       {
-        systemPrompt: `You split notes into discrete, standalone thoughts for a personal knowledge base.
+        systemPrompt:
+          `You split notes into discrete, standalone thoughts for a personal knowledge base.
 
 RULES:
 - Each thought must be fully self-contained — readable without any other context
@@ -155,7 +155,10 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
 
   if (thoughts.length === 0) {
     return {
-      content: [{ type: "text" as const, text: "No thoughts extracted — note may be empty." }],
+      content: [{
+        type: "text" as const,
+        text: "No thoughts extracted — note may be empty.",
+      }],
     };
   }
 
@@ -167,7 +170,7 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
         getEmbedding(aiProvider, thoughtContent),
         extractMetadata(aiProvider, thoughtContent),
       ]);
-      const { error } = await supabase.from("thoughts").insert({
+      const { error } = await thoughtRepository.insert({
         content: thoughtContent,
         embedding,
         reference_id: note_id || null,
@@ -178,10 +181,12 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
           note_title: title || null,
           references: pipelineRefs,
         },
-        ...(provenance ? { reliability: provenance.reliability, author: provenance.author } : {}),
+        ...(provenance
+          ? { reliability: provenance.reliability, author: provenance.author }
+          : {}),
       });
       if (error) throw new Error(error.message);
-    })
+    }),
   );
 
   const succeeded = results.filter((r) => r.status === "fulfilled").length;
@@ -190,14 +195,26 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
   const taskCount = pipelineRefs.tasks?.length || 0;
   const projectCount = pipelineRefs.projects?.length || 0;
   const extractionParts: string[] = [];
-  if (taskCount > 0) extractionParts.push(`${taskCount} task${taskCount !== 1 ? "s" : ""} detected`);
-  if (projectCount > 0) extractionParts.push(`${projectCount} project${projectCount !== 1 ? "s" : ""} linked`);
-  const extractionSuffix = extractionParts.length > 0 ? ` — ${extractionParts.join(", ")}` : "";
+  if (taskCount > 0) {
+    extractionParts.push(
+      `${taskCount} task${taskCount !== 1 ? "s" : ""} detected`,
+    );
+  }
+  if (projectCount > 0) {
+    extractionParts.push(
+      `${projectCount} project${projectCount !== 1 ? "s" : ""} linked`,
+    );
+  }
+  const extractionSuffix = extractionParts.length > 0
+    ? ` — ${extractionParts.join(", ")}`
+    : "";
 
   return {
     content: [{
       type: "text" as const,
-      text: `Captured ${succeeded} thought${succeeded !== 1 ? "s" : ""} from "${title || "note"}"${failed > 0 ? ` — ${failed} failed` : ""}${extractionSuffix}`,
+      text: `Captured ${succeeded} thought${succeeded !== 1 ? "s" : ""} from "${
+        title || "note"
+      }"${failed > 0 ? ` — ${failed} failed` : ""}${extractionSuffix}`,
     }],
     isError: failed === thoughts.length,
   };

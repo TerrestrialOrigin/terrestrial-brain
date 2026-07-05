@@ -2,12 +2,102 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
-import { errorResult, textResult } from "../mcp-response.ts";
+import { errorResult, McpToolResult, textResult } from "../mcp-response.ts";
+import type {
+  TaskListRow,
+  TaskRepository,
+} from "../repositories/task-repository.ts";
+import { resolveNames } from "../repositories/name-resolution.ts";
+
+/** Resolves a batch of ids to a `Map<id, displayValue>` (injected for testing). */
+type NameResolver = (ids: string[]) => Promise<Map<string, string>>;
+
+/**
+ * Formats a list of tasks into the `list_tasks` text body. Pure — no DB, no
+ * clock beyond overdue detection — so it is unit-testable directly.
+ */
+export function buildTaskListText(
+  tasks: TaskListRow[],
+  projectNames: Map<string, string>,
+  personNames: Map<string, string>,
+): string {
+  const lines = tasks.map((task, index) => {
+    const statusIcon = task.status === "done"
+      ? "[x]"
+      : task.status === "in_progress"
+      ? "[~]"
+      : "[ ]";
+    const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
+    parts.push(`   ID: ${task.id} | Status: ${task.status}`);
+    if (task.project_id && projectNames.get(task.project_id)) {
+      parts.push(`   Project: ${projectNames.get(task.project_id)}`);
+    }
+    if (task.assigned_to && personNames.get(task.assigned_to)) {
+      parts.push(`   Assigned to: ${personNames.get(task.assigned_to)}`);
+    }
+    if (task.due_by) {
+      const due = new Date(task.due_by);
+      const overdue = due < new Date() && task.status !== "done";
+      parts.push(
+        `   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`,
+      );
+    }
+    return parts.join("\n");
+  });
+
+  return `${tasks.length} task(s):\n\n${lines.join("\n\n")}`;
+}
+
+/**
+ * `list_tasks` logic, with the DB and name-resolution behind injected seams so a
+ * unit test can drive it with a fake `TaskRepository` and fake resolvers — no
+ * database (fix-plan Step 16, D5).
+ */
+export async function handleListTasks(
+  taskRepository: TaskRepository,
+  resolveProjects: NameResolver,
+  resolvePersons: NameResolver,
+  args: {
+    project_id?: string;
+    status?: string;
+    overdue_only: boolean;
+    include_archived: boolean;
+    limit: number;
+  },
+): Promise<McpToolResult> {
+  const { data, error } = await taskRepository.list({
+    limit: args.limit,
+    includeArchived: args.include_archived,
+    overdueOnly: args.overdue_only,
+    projectId: args.project_id,
+    status: args.status,
+  });
+
+  if (error) return errorResult(`Error: ${error.message}`);
+  if (!data || data.length === 0) return textResult("No tasks found.");
+
+  const projectIds = data.flatMap((task) =>
+    task.project_id ? [task.project_id] : []
+  );
+  const projectNames = projectIds.length > 0
+    ? await resolveProjects(projectIds)
+    : new Map<string, string>();
+
+  const personIds = data.flatMap((task) =>
+    task.assigned_to ? [task.assigned_to] : []
+  );
+  const personNames = personIds.length > 0
+    ? await resolvePersons(personIds)
+    : new Map<string, string>();
+
+  return textResult(buildTaskListText(data, projectNames, personNames));
+}
 
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  taskRepository: TaskRepository,
 ) {
   server.registerTool(
     "create_task",
@@ -41,21 +131,19 @@ export function register(
       async (
         { content, project_id, parent_id, due_by, status, assigned_to },
       ) => {
-        const { data, error } = await supabase
-          .from("tasks")
-          .insert({
-            content,
-            status: status || "open",
-            project_id: project_id || null,
-            parent_id: parent_id || null,
-            due_by: due_by || null,
-            assigned_to: assigned_to || null,
-          })
-          .select("id")
-          .single();
+        const { data, error } = await taskRepository.insert({
+          content,
+          status: status || "open",
+          project_id: project_id || null,
+          parent_id: parent_id || null,
+          due_by: due_by || null,
+          assigned_to: assigned_to || null,
+        });
 
-        if (error) {
-          return errorResult(`Failed to create task: ${error.message}`);
+        if (error || !data) {
+          return errorResult(
+            `Failed to create task: ${error?.message ?? "unknown error"}`,
+          );
         }
 
         return textResult(`Created task (id: ${data.id}): "${content}"`);
@@ -89,109 +177,13 @@ export function register(
     },
     withMcpLogging(
       "list_tasks",
-      async ({ project_id, status, overdue_only, include_archived, limit }) => {
-        let q = supabase
-          .from("tasks")
-          .select(
-            "id, content, status, due_by, project_id, assigned_to, archived_at, created_at",
-          )
-          .order("created_at", { ascending: false })
-          .limit(limit);
-
-        if (!include_archived) q = q.is("archived_at", null);
-        if (project_id) q = q.eq("project_id", project_id);
-        if (status) q = q.eq("status", status);
-        if (overdue_only) {
-          q = q.lt("due_by", new Date().toISOString()).neq("status", "done");
-        }
-
-        const { data, error } = await q;
-
-        if (error) {
-          return errorResult(`Error: ${error.message}`);
-        }
-
-        if (!data || data.length === 0) {
-          return textResult("No tasks found.");
-        }
-
-        // Get project names. On lookup error, log and fall back to raw ids
-        // (never a silently-empty map that would hide the failure) — finding C9.
-        const projectIds = [
-          ...new Set(data.filter((t) => t.project_id).map((t) => t.project_id)),
-        ];
-        let projectMap: Record<string, string> = {};
-        if (projectIds.length > 0) {
-          const { data: projects, error: projectsError } = await supabase
-            .from("projects")
-            .select("id, name")
-            .in("id", projectIds);
-          if (projectsError) {
-            console.error(
-              `list_tasks project-name lookup failed: ${projectsError.message}`,
-            );
-            projectMap = Object.fromEntries(
-              projectIds.map((pid) => [pid, pid]),
-            );
-          } else {
-            projectMap = Object.fromEntries(
-              (projects || []).map((p) => [p.id, p.name]),
-            );
-          }
-        }
-
-        // Get assigned person names (same log-and-fall-back-to-raw-id policy).
-        const personIds = [
-          ...new Set(
-            data.filter((t) => t.assigned_to).map((t) => t.assigned_to),
-          ),
-        ];
-        let personMap: Record<string, string> = {};
-        if (personIds.length > 0) {
-          const { data: people, error: peopleError } = await supabase
-            .from("people")
-            .select("id, name")
-            .in("id", personIds);
-          if (peopleError) {
-            console.error(
-              `list_tasks assignee lookup failed: ${peopleError.message}`,
-            );
-            personMap = Object.fromEntries(personIds.map((pid) => [pid, pid]));
-          } else {
-            personMap = Object.fromEntries(
-              (people || []).map((p) => [p.id, p.name]),
-            );
-          }
-        }
-
-        const lines = data.map((t, i) => {
-          const statusIcon = t.status === "done"
-            ? "[x]"
-            : t.status === "in_progress"
-            ? "[~]"
-            : "[ ]";
-          const parts = [`${i + 1}. ${statusIcon} ${t.content}`];
-          parts.push(`   ID: ${t.id} | Status: ${t.status}`);
-          if (t.project_id && projectMap[t.project_id]) {
-            parts.push(`   Project: ${projectMap[t.project_id]}`);
-          }
-          if (t.assigned_to && personMap[t.assigned_to]) {
-            parts.push(`   Assigned to: ${personMap[t.assigned_to]}`);
-          }
-          if (t.due_by) {
-            const due = new Date(t.due_by);
-            const overdue = due < new Date() && t.status !== "done";
-            parts.push(
-              `   Due: ${due.toLocaleDateString()}${
-                overdue ? " (OVERDUE)" : ""
-              }`,
-            );
-          }
-          return parts.join("\n");
-        });
-
-        return textResult(`${data.length} task(s):\n\n${lines.join("\n\n")}`);
-      },
+      ({ project_id, status, overdue_only, include_archived, limit }) =>
+        handleListTasks(
+          taskRepository,
+          (ids) => resolveNames(supabase, "projects", ids),
+          (ids) => resolveNames(supabase, "people", ids),
+          { project_id, status, overdue_only, include_archived, limit },
+        ),
       logger,
     ),
   );
@@ -241,10 +233,7 @@ export function register(
           return textResult("No fields to update.");
         }
 
-        const { error } = await supabase
-          .from("tasks")
-          .update(updates)
-          .eq("id", id);
+        const { error } = await taskRepository.update(id, updates);
 
         if (error) {
           return errorResult(`Update failed: ${error.message}`);
@@ -270,10 +259,7 @@ export function register(
       },
     },
     withMcpLogging("archive_task", async ({ id }) => {
-      const { error } = await supabase
-        .from("tasks")
-        .update({ archived_at: new Date().toISOString() })
-        .eq("id", id);
+      const { error } = await taskRepository.archive(id);
 
       if (error) {
         return errorResult(`Archive failed: ${error.message}`);
@@ -307,20 +293,13 @@ export function register(
         return errorResult("Error: Maximum 50 task IDs per request.");
       }
 
-      const { data, error } = await supabase
-        .from("tasks")
-        .select(
-          "id, content, status, due_by, project_id, parent_id, assigned_to, archived_at, created_at",
-        )
-        .in("id", ids);
+      const { data, error } = await taskRepository.findByIds(ids);
 
       if (error) {
         return errorResult(`Error: ${error.message}`);
       }
 
-      const foundIds = new Set(
-        (data || []).map((task: { id: string }) => task.id),
-      );
+      const foundIds = new Set((data || []).map((task) => task.id));
       const missingIds = ids.filter((requestedId: string) =>
         !foundIds.has(requestedId)
       );
@@ -331,79 +310,28 @@ export function register(
         );
       }
 
-      // Batch-resolve project names. Log + raw-id fallback on error (finding C9).
-      const projectIds = [
-        ...new Set(
-          data.filter((task) => task.project_id).map((task) => task.project_id),
-        ),
-      ];
-      let projectMap: Record<string, string> = {};
-      if (projectIds.length > 0) {
-        const { data: projects, error: projectsError } = await supabase
-          .from("projects")
-          .select("id, name")
-          .in("id", projectIds);
-        if (projectsError) {
-          console.error(
-            `get_tasks project-name lookup failed: ${projectsError.message}`,
-          );
-          projectMap = Object.fromEntries(projectIds.map((pid) => [pid, pid]));
-        } else {
-          projectMap = Object.fromEntries(
-            (projects || []).map((project) => [project.id, project.name]),
-          );
-        }
-      }
+      // Batch-resolve project, assignee, and parent-task names via the shared
+      // helper (one query each; raw-id fallback on error — finding C9).
+      const projectIds = data.flatMap((task) =>
+        task.project_id ? [task.project_id] : []
+      );
+      const projectMap = projectIds.length > 0
+        ? await resolveNames(supabase, "projects", projectIds)
+        : new Map<string, string>();
 
-      // Batch-resolve assigned person names (same policy).
-      const personIds = [
-        ...new Set(
-          data.filter((task) => task.assigned_to).map((task) =>
-            task.assigned_to
-          ),
-        ),
-      ];
-      let personMap: Record<string, string> = {};
-      if (personIds.length > 0) {
-        const { data: people, error: peopleError } = await supabase
-          .from("people")
-          .select("id, name")
-          .in("id", personIds);
-        if (peopleError) {
-          console.error(
-            `get_tasks assignee lookup failed: ${peopleError.message}`,
-          );
-          personMap = Object.fromEntries(personIds.map((pid) => [pid, pid]));
-        } else {
-          personMap = Object.fromEntries(
-            (people || []).map((person) => [person.id, person.name]),
-          );
-        }
-      }
+      const personIds = data.flatMap((task) =>
+        task.assigned_to ? [task.assigned_to] : []
+      );
+      const personMap = personIds.length > 0
+        ? await resolveNames(supabase, "people", personIds)
+        : new Map<string, string>();
 
-      // Batch-resolve parent task content (same policy).
-      const parentIds = [
-        ...new Set(
-          data.filter((task) => task.parent_id).map((task) => task.parent_id),
-        ),
-      ];
-      let parentMap: Record<string, string> = {};
-      if (parentIds.length > 0) {
-        const { data: parents, error: parentsError } = await supabase
-          .from("tasks")
-          .select("id, content")
-          .in("id", parentIds);
-        if (parentsError) {
-          console.error(
-            `get_tasks parent-task lookup failed: ${parentsError.message}`,
-          );
-          parentMap = Object.fromEntries(parentIds.map((pid) => [pid, pid]));
-        } else {
-          parentMap = Object.fromEntries(
-            (parents || []).map((parent) => [parent.id, parent.content]),
-          );
-        }
-      }
+      const parentIds = data.flatMap((task) =>
+        task.parent_id ? [task.parent_id] : []
+      );
+      const parentMap = parentIds.length > 0
+        ? await resolveNames(supabase, "tasks", parentIds, "content")
+        : new Map<string, string>();
 
       const lines = data.map((task, index) => {
         const statusIcon = task.status === "done"
@@ -413,14 +341,14 @@ export function register(
           : "[ ]";
         const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
         parts.push(`   ID: ${task.id} | Status: ${task.status}`);
-        if (task.project_id && projectMap[task.project_id]) {
-          parts.push(`   Project: ${projectMap[task.project_id]}`);
+        if (task.project_id && projectMap.get(task.project_id)) {
+          parts.push(`   Project: ${projectMap.get(task.project_id)}`);
         }
-        if (task.assigned_to && personMap[task.assigned_to]) {
-          parts.push(`   Assigned to: ${personMap[task.assigned_to]}`);
+        if (task.assigned_to && personMap.get(task.assigned_to)) {
+          parts.push(`   Assigned to: ${personMap.get(task.assigned_to)}`);
         }
-        if (task.parent_id && parentMap[task.parent_id]) {
-          parts.push(`   Parent task: ${parentMap[task.parent_id]}`);
+        if (task.parent_id && parentMap.get(task.parent_id)) {
+          parts.push(`   Parent task: ${parentMap.get(task.parent_id)}`);
         }
         if (task.due_by) {
           const due = new Date(task.due_by);
