@@ -58,6 +58,15 @@ const DEFAULT_SETTINGS: TBPluginSettings = {
   projectsFolderBase: "projects",
 };
 
+/** Outcome of a single processNote call — lets callers count real results. */
+type SyncOutcome = "synced" | "skipped" | "failed";
+
+/** Maximum automatic retries for a failed scheduled (debounced) sync. */
+const MAX_RETRY_ATTEMPTS = 3;
+
+/** Upper bound on the backoff delay between scheduled-sync retries. */
+const MAX_RETRY_DELAY_MS = 30 * 60000; // 30 minutes
+
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class TerrestrialBrainPlugin extends Plugin {
@@ -75,6 +84,10 @@ export default class TerrestrialBrainPlugin extends Plugin {
   // Tracked poll interval so it can be cleared and re-registered when settings change
   private pollIntervalId: number | null = null;
 
+  // The pollIntervalMinutes value the current interval was registered with —
+  // lets applyPollInterval() no-op when the setting has not actually changed.
+  private appliedPollIntervalMinutes: number | null = null;
+
   async onload() {
     await this.loadSettings();
 
@@ -83,6 +96,21 @@ export default class TerrestrialBrainPlugin extends Plugin {
       this.app.vault.on("modify", (file: TFile) => {
         if (file.extension !== "md") return;
         this.scheduleSync(file);
+      })
+    );
+
+    // A deleted note must not keep a pending timer or a stale hash
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if ((file as TFile).extension !== "md") return;
+        void this.handleFileDelete(file as TFile);
+      })
+    );
+
+    // A renamed note must move its timer/hash to the new path
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath: string) => {
+        void this.handleFileRename(file as TFile, oldPath);
       })
     );
 
@@ -103,31 +131,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
       id: "sync-vault-to-terrestrial-brain",
       name: "Sync entire vault to Terrestrial Brain",
       callback: async () => {
-        const files = this.app.vault.getMarkdownFiles();
-        const eligible = files.filter((f) => !this.isExcluded(f));
-        if (eligible.length === 0) {
-          new Notice("No notes to sync (all excluded or vault empty)");
-          return;
-        }
-        const notice = new Notice(`🧠 Syncing ${eligible.length} notes...`, 0);
-        let done = 0;
-        let failed = 0;
-        for (const file of eligible) {
-          this.cancelTimer(file.path);
-          try {
-            await this.processNote(file, { force: true, silent: true });
-            done++;
-          } catch {
-            failed++;
-          }
-          notice.setMessage(`🧠 Syncing vault... ${done + failed}/${eligible.length}`);
-        }
-        notice.hide();
-        new Notice(
-          failed === 0
-            ? `✅ Vault sync complete — ${done} notes sent`
-            : `⚠️ Vault sync: ${done} ok, ${failed} failed`
-        );
+        await this.syncEntireVault();
       },
     });
 
@@ -174,7 +178,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     window.setTimeout(() => this.pollAIOutput(), 2000);
 
     // Then poll on interval (tracked so it can be re-registered when settings change)
-    this.startPollInterval();
+    this.applyPollInterval();
 
     console.log("Terrestrial Brain Sync loaded");
   }
@@ -192,27 +196,57 @@ export default class TerrestrialBrainPlugin extends Plugin {
     this.debounceTimers.clear();
   }
 
-  /** Start (or restart) the AI output poll interval using current settings. */
-  private startPollInterval() {
+  /**
+   * (Re)start the AI-output poll interval, but only when `pollIntervalMinutes`
+   * actually differs from the value the current interval was registered with.
+   * This keeps ordinary saves (which no longer restart the timer) from starving
+   * the poll and prevents stale interval registrations from accumulating.
+   */
+  applyPollInterval() {
+    if (this.appliedPollIntervalMinutes === this.settings.pollIntervalMinutes) {
+      return;
+    }
     if (this.pollIntervalId !== null) {
       window.clearInterval(this.pollIntervalId);
     }
     this.pollIntervalId = this.registerInterval(
       window.setInterval(() => this.pollAIOutput(), this.settings.pollIntervalMinutes * 60000)
     );
+    this.appliedPollIntervalMinutes = this.settings.pollIntervalMinutes;
   }
 
   // ─── Per-file debounce timer ───────────────────────────────────────────────
   // Each file gets its own timer. Editing the file resets its timer.
   // Only fires after debounceMs of inactivity on that specific file.
 
-  scheduleSync(file: TFile) {
+  scheduleSync(file: TFile, attempt = 0) {
     this.cancelTimer(file.path);
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(file.path);
-      await this.processNote(file);
-    }, this.settings.syncDelayMinutes * 60000);
+      try {
+        const outcome = await this.processNote(file);
+        // A failed scheduled sync retries with capped backoff instead of
+        // silently dropping the note until its next manual edit.
+        if (outcome === "failed" && attempt < MAX_RETRY_ATTEMPTS) {
+          this.scheduleSync(file, attempt + 1);
+        }
+      } catch (error) {
+        // Guards against an unhandled rejection if processNote itself throws
+        // (e.g. the file was deleted during the debounce delay).
+        console.error("TB scheduled sync error:", error);
+        if (attempt < MAX_RETRY_ATTEMPTS) {
+          this.scheduleSync(file, attempt + 1);
+        }
+      }
+    }, this.computeSyncDelay(attempt));
     this.debounceTimers.set(file.path, timer);
+  }
+
+  /** Base debounce delay, or an exponentially-backed-off (capped) retry delay. */
+  private computeSyncDelay(attempt: number): number {
+    const base = this.settings.syncDelayMinutes * 60000;
+    if (attempt === 0) return base;
+    return Math.min(base * 2 ** attempt, MAX_RETRY_DELAY_MS);
   }
 
   cancelTimer(filePath: string) {
@@ -221,6 +255,64 @@ export default class TerrestrialBrainPlugin extends Plugin {
       clearTimeout(existing);
       this.debounceTimers.delete(filePath);
     }
+  }
+
+  /** A deleted note: drop any pending timer and its stored hash. */
+  async handleFileDelete(file: TFile) {
+    this.cancelTimer(file.path);
+    if (file.path in this.syncedHashes) {
+      delete this.syncedHashes[file.path];
+      await this.persistData();
+    }
+  }
+
+  /** A renamed note: cancel the old-path timer and re-key its hash. */
+  async handleFileRename(file: TFile, oldPath: string) {
+    this.cancelTimer(oldPath);
+    if (oldPath in this.syncedHashes) {
+      this.syncedHashes[file.path] = this.syncedHashes[oldPath];
+      delete this.syncedHashes[oldPath];
+      await this.persistData();
+    }
+  }
+
+  // ─── Manual full-vault sync ────────────────────────────────────────────────
+
+  /**
+   * Sync every eligible note, counting real outcomes from processNote's return
+   * value so a total failure reports failure instead of a false success.
+   */
+  async syncEntireVault(): Promise<{ synced: number; failed: number; skipped: number }> {
+    const eligible = this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => !this.isExcluded(file));
+
+    if (eligible.length === 0) {
+      new Notice("No notes to sync (all excluded or vault empty)");
+      return { synced: 0, failed: 0, skipped: 0 };
+    }
+
+    const notice = new Notice(`🧠 Syncing ${eligible.length} notes...`, 0);
+    let synced = 0;
+    let failed = 0;
+    let skipped = 0;
+    for (const file of eligible) {
+      this.cancelTimer(file.path);
+      const outcome = await this.processNote(file, { force: true, silent: true });
+      if (outcome === "synced") synced++;
+      else if (outcome === "failed") failed++;
+      else skipped++;
+      notice.setMessage(`🧠 Syncing vault... ${synced + failed + skipped}/${eligible.length}`);
+    }
+    notice.hide();
+
+    const skippedSuffix = skipped > 0 ? `, ${skipped} skipped` : "";
+    new Notice(
+      failed === 0
+        ? `✅ Vault sync complete — ${synced} synced${skippedSuffix}`
+        : `⚠️ Vault sync: ${synced} ok, ${failed} failed${skippedSuffix}`
+    );
+    return { synced, failed, skipped };
   }
 
   // ─── AI Output Polling ─────────────────────────────────────────────────────
@@ -258,6 +350,10 @@ export default class TerrestrialBrainPlugin extends Plugin {
       // "postponed" — do nothing; outputs remain pending in DB
     } catch (err) {
       console.error("TB Poll error:", err);
+      // A manual pull that fails must tell the user; background polls stay quiet.
+      if (options.manual) {
+        new Notice(`❌ Pull AI output failed: ${truncateForNotice((err as Error).message)}`);
+      }
     } finally {
       this.pollInProgress = false;
     }
@@ -341,25 +437,33 @@ export default class TerrestrialBrainPlugin extends Plugin {
   async processNote(
     file: TFile,
     opts: { force?: boolean; silent?: boolean } = {}
-  ) {
+  ): Promise<SyncOutcome> {
     if (this.isExcluded(file)) {
       if (opts.force && !opts.silent) {
         new Notice(`⏭️ "${file.basename}" is excluded from Terrestrial Brain`);
       }
-      return;
+      return "skipped";
     }
 
     if (!this.settings.tbEndpointUrl) {
       new Notice("⚠️ Terrestrial Brain: Set your MCP endpoint URL in settings");
-      return;
+      return "skipped";
     }
 
-    const content = await this.app.vault.read(file);
+    let content: string;
+    try {
+      content = await this.app.vault.read(file);
+    } catch (error) {
+      // The file may have been deleted between the modify event and this read.
+      console.error("TB Plugin read error:", error);
+      return "skipped";
+    }
+
     const stripped = stripFrontmatter(content).trim();
-    if (!stripped) return;
+    if (!stripped) return "skipped";
 
     const hash = simpleHash(stripped);
-    if (!opts.force && this.syncedHashes[file.path] === hash) return;
+    if (!opts.force && this.syncedHashes[file.path] === hash) return "skipped";
 
     if (!opts.silent) {
       new Notice(`🧠 Syncing "${file.basename}"...`, 2000);
@@ -374,11 +478,13 @@ export default class TerrestrialBrainPlugin extends Plugin {
       if (!opts.silent) {
         new Notice(`✅ ${result}`);
       }
+      return "synced";
     } catch (err) {
       console.error("TB Plugin error:", err);
       if (!opts.silent) {
-        new Notice(`❌ Terrestrial Brain: ${(err as Error).message}`);
+        new Notice(`❌ Terrestrial Brain: ${truncateForNotice((err as Error).message)}`);
       }
+      return "failed";
     }
   }
 
@@ -425,12 +531,13 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
     if (!response.ok) {
       const responseBody = await response.text();
-      throw new Error(`HTTP ${response.status}: ${responseBody}`);
+      console.error(`TB HTTP ${response.status} on ${endpointName}:`, responseBody);
+      throw new Error(`HTTP ${response.status}: ${truncateForNotice(responseBody)}`);
     }
 
     const result = await response.json();
     if (!result.success) {
-      throw new Error(result.error || "Unknown error");
+      throw new Error(truncateForNotice(result.error || "Unknown error"));
     }
     return result;
   }
@@ -448,12 +555,13 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`Ingest ${response.status}: ${body}`);
+      console.error(`TB Ingest ${response.status}:`, body);
+      throw new Error(`Ingest ${response.status}: ${truncateForNotice(body)}`);
     }
 
     const result = await response.json();
     if (!result.success) {
-      throw new Error(result.error || "Unknown ingest error");
+      throw new Error(truncateForNotice(result.error || "Unknown ingest error"));
     }
     return result.message || "Done";
   }
@@ -525,14 +633,20 @@ export default class TerrestrialBrainPlugin extends Plugin {
     }
   }
 
-  async saveSettings() {
+  /**
+   * Persist settings + hashes to disk. Pure persistence — no side effects.
+   * Poll-interval changes are applied separately via applyPollInterval() so
+   * frequent saves cannot starve or leak the poll timer (finding C10).
+   */
+  private async persistData() {
     await this.saveData({
       settings: this.settings,
       syncedHashes: this.syncedHashes,
     });
+  }
 
-    // Re-register the poll interval in case pollIntervalMinutes changed
-    this.startPollInterval();
+  async saveSettings() {
+    await this.persistData();
   }
 }
 
@@ -766,7 +880,9 @@ class TBSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Sync delay (minutes)")
       .setDesc(
-        "How long to wait after you stop editing before syncing. Default: 5 minutes. Minimum: 1 minute."
+        "How long to wait after you stop editing before syncing. Default: 5 minutes. Minimum: 1 minute. " +
+        `A sync that fails is retried automatically up to ${MAX_RETRY_ATTEMPTS} times with increasing delay; ` +
+        "if it still fails, the note re-syncs on your next edit."
       )
       .addText((text) =>
         text
@@ -795,6 +911,8 @@ class TBSettingTab extends PluginSettingTab {
             if (!isNaN(parsed) && parsed >= 1) {
               this.plugin.settings.pollIntervalMinutes = parsed;
               await this.plugin.saveSettings();
+              // Persistence no longer restarts the timer — apply the change here.
+              this.plugin.applyPollInterval();
             }
           })
       );
@@ -825,6 +943,18 @@ export function formatFileSize(bytes: number): string {
 
 export function stripFrontmatter(content: string): string {
   return content.replace(/^---[\s\S]*?---\n?/, "");
+}
+
+/**
+ * Bound and sanitize text before showing it in a user-facing Notice.
+ * Collapses whitespace and truncates to `maxLength`, so a large or malformed
+ * server response body (e.g. an HTML error page or stack trace) is not shown
+ * verbatim to the user. Full detail is logged to the console separately.
+ */
+export function truncateForNotice(text: string, maxLength = 300): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= maxLength) return collapsed;
+  return `${collapsed.slice(0, maxLength)}…`;
 }
 
 export function simpleHash(str: string): string {
