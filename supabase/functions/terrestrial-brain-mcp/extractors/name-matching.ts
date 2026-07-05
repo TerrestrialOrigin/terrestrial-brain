@@ -14,6 +14,50 @@ export interface KnownPerson {
 const MINIMUM_PART_LENGTH = 2;
 
 /**
+ * Matches a single Unicode "word character": any letter or number. Used to
+ * decide word boundaries so a name is only matched as a whole word. Unicode
+ * property escapes (with the `u` flag) ensure accented letters (e.g. "é" in
+ * "José") count as word characters rather than as boundaries.
+ */
+const WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+/**
+ * Returns true when the substring at [index, index + length) in `text` is
+ * bounded by word boundaries on both sides — that is, the character
+ * immediately before and immediately after the substring is either absent
+ * (start/end of text) or a non-word character. Shared by both matching tiers
+ * so a name embedded inside a larger word (e.g. "Ann" in "Planning") is not
+ * treated as a match.
+ */
+function isWordBoundaryMatch(
+  text: string,
+  index: number,
+  length: number,
+): boolean {
+  const charBefore = index > 0 ? text[index - 1] : "";
+  const afterIndex = index + length;
+  const charAfter = afterIndex < text.length ? text[afterIndex] : "";
+  const boundaryBefore = charBefore === "" || !WORD_CHARACTER.test(charBefore);
+  const boundaryAfter = charAfter === "" || !WORD_CHARACTER.test(charAfter);
+  return boundaryBefore && boundaryAfter;
+}
+
+/**
+ * Finds the earliest occurrence of `needle` in `text` that sits on word
+ * boundaries, or -1 when no whole-word occurrence exists. Scans past
+ * occurrences embedded inside larger words rather than giving up on the first
+ * raw hit, preserving the "earliest match" contract for whole-word matches.
+ */
+function indexOfWholeWord(text: string, needle: string): number {
+  let position = text.indexOf(needle);
+  while (position !== -1) {
+    if (isWordBoundaryMatch(text, position, needle.length)) return position;
+    position = text.indexOf(needle, position + 1);
+  }
+  return -1;
+}
+
+/**
  * Splits a name into lowercase parts, filtering out parts shorter
  * than MINIMUM_PART_LENGTH.
  */
@@ -95,7 +139,7 @@ export function findPersonInText(
   for (const person of knownPeople) {
     const nameLower = person.name.toLowerCase();
     if (nameLower.length < MINIMUM_PART_LENGTH) continue;
-    const position = textLower.indexOf(nameLower);
+    const position = indexOfWholeWord(textLower, nameLower);
     if (position !== -1 && position < earliestPosition) {
       earliestPosition = position;
       earliestPersonId = person.id;
@@ -111,17 +155,9 @@ export function findPersonInText(
 
   for (const person of knownPeople) {
     const personParts = namePartsOf(person.name);
-    const hasPartInText = personParts.some((part) => {
-      const position = textLower.indexOf(part);
-      if (position === -1) return false;
-      // Ensure word boundary: the match should not be in the middle of a word
-      const charBefore = position > 0 ? textLower[position - 1] : " ";
-      const charAfter =
-        position + part.length < textLower.length
-          ? textLower[position + part.length]
-          : " ";
-      return /\W/.test(charBefore) && /\W/.test(charAfter);
-    });
+    const hasPartInText = personParts.some(
+      (part) => indexOfWholeWord(textLower, part) !== -1,
+    );
     if (hasPartInText) {
       partialTextMatches.push(person);
     }
