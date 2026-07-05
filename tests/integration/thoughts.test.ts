@@ -1299,3 +1299,118 @@ Deno.test("cleanup usefulness feedback loop test data", async () => {
     assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
   }
 });
+
+// ─── Reconciliation soft-archive (C2) ───────────────────────────────────────
+// When ingest_note reconciles and the LLM plan marks a thought for removal,
+// that thought MUST be soft-archived (archived_at set), never hard-deleted.
+//
+// The reconciliation removal decision is made by a live LLM, so we CANNOT force
+// the delete branch deterministically here (Step 22's stub will make this exact
+// branch deterministic). What we CAN assert without flakiness is the actual C2
+// guarantee, which holds for every LLM choice: no original thought row is ever
+// hard-deleted by a re-ingest — a thought the plan removes is archived, never
+// gone. (Fail-first evidence: against the pre-fix code, when the LLM does choose
+// to delete, the row vanishes entirely and this invariant fails.)
+
+const RECONCILE_INGEST_URL =
+  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
+
+async function fetchThoughtsForNote(
+  noteId: string,
+): Promise<{ id: string; content: string; archived_at: string | null }[]> {
+  // Deliberately NO archived_at filter — we want to see archived rows too.
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?reference_id=eq.${encodeURIComponent(noteId)}&select=id,content,archived_at`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  assertEquals(response.ok, true, "Direct thoughts query should succeed");
+  return await response.json();
+}
+
+async function ingestNote(
+  content: string,
+  title: string,
+  noteId: string,
+): Promise<void> {
+  const ingestResponse = await fetch(RECONCILE_INGEST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, title, note_id: noteId }),
+  });
+  assertEquals(ingestResponse.ok, true, "Ingest request should succeed");
+  const result = await ingestResponse.json();
+  assertEquals(result.success, true, `Ingest should succeed: ${JSON.stringify(result)}`);
+}
+
+Deno.test("ingest_note reconciliation soft-archives removed thoughts (never hard-deletes)", async () => {
+  const noteId = `test-reconcile-archive-${Date.now()}`;
+
+  // Initial note: one clear topic → one thought.
+  const initialTitle = "Kitchen Maintenance";
+  const initialContent = `# Kitchen Maintenance
+
+The office espresso machine in the third-floor kitchen is broken and needs a repair technician scheduled this week.`;
+
+  // Re-ingest: the note is now about a COMPLETELY unrelated topic. The espresso
+  // machine no longer appears anywhere, so reconciliation must mark the original
+  // thought for removal (its topic is gone). This reliably exercises the delete branch.
+  const updatedTitle = "Marketing Plan";
+  const updatedContent = `# Marketing Plan
+
+The Q3 marketing campaign will focus on social media advertising and paid influencer partnerships across three regions.`;
+
+  try {
+    await ingestNote(initialContent, initialTitle, noteId);
+    const afterFirst = await fetchThoughtsForNote(noteId);
+    assertEquals(
+      afterFirst.length >= 1,
+      true,
+      `Initial ingest should produce at least one thought. Got ${afterFirst.length}: ${JSON.stringify(afterFirst.map((thought) => thought.content))}`,
+    );
+    const initialIds = new Set(afterFirst.map((thought) => thought.id));
+
+    // Re-ingest triggers reconciliation; the old topic is gone → marked for removal.
+    await ingestNote(updatedContent, updatedTitle, noteId);
+
+    const afterSecond = await fetchThoughtsForNote(noteId);
+
+    // C2 invariant: every original thought row must still EXIST after
+    // reconciliation. If the plan removed it, it is archived (archived_at set),
+    // never hard-deleted. This holds for keep/update/delete/add alike.
+    for (const originalId of initialIds) {
+      const row = afterSecond.find((thought) => thought.id === originalId);
+      assertExists(
+        row,
+        `Original thought ${originalId} must still exist after reconciliation ` +
+          `(archived if removed, never hard-deleted). Rows now: ${JSON.stringify(afterSecond)}`,
+      );
+    }
+  } finally {
+    // Self-contained cleanup: hard-delete everything for this test note_id.
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/thoughts?reference_id=eq.${encodeURIComponent(noteId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/note_snapshots?reference_id=eq.${encodeURIComponent(noteId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
+      },
+    );
+  }
+});

@@ -388,7 +388,7 @@ Deno.test("update_document updates title only (no thought churn)", async () => {
   assertEquals(afterDocs[0].updated_at !== originalUpdatedAt, true, "updated_at should have refreshed");
 });
 
-Deno.test("update_document updates content — deletes old thoughts, re-extracts refs, returns thoughts_required", async () => {
+Deno.test("update_document updates content — archives old thoughts, re-extracts refs, returns thoughts_required", async () => {
   // Create a document
   const createResult = await callTool("write_document", {
     title: "Content Update Test",
@@ -422,6 +422,7 @@ Deno.test("update_document updates content — deletes old thoughts, re-extracts
   const thoughts: { id: string }[] = await thoughtResp.json();
   assertEquals(thoughts.length, 1, "Should have the linked thought before update");
   const thoughtId = thoughts[0].id;
+  cleanupThoughtIds.push(thoughtId);
 
   // Update the document content
   const newContent = "Completely new content after update.";
@@ -434,9 +435,10 @@ Deno.test("update_document updates content — deletes old thoughts, re-extracts
   assertStringIncludes(updateResult, "Document updated");
   assertStringIncludes(updateResult, "thoughts_required: true");
 
-  // Verify old thought was deleted
-  const deletedThoughtResp = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=id`,
+  // Verify old thought was soft-archived (NOT hard-deleted): the row must still
+  // exist with archived_at set. (Query includes archived rows — no filter.)
+  const archivedThoughtResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=id,archived_at`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -444,8 +446,9 @@ Deno.test("update_document updates content — deletes old thoughts, re-extracts
       },
     },
   );
-  const deletedThoughts: { id: string }[] = await deletedThoughtResp.json();
-  assertEquals(deletedThoughts.length, 0, "Linked thought should have been deleted after content update");
+  const archivedThoughts: { id: string; archived_at: string | null }[] = await archivedThoughtResp.json();
+  assertEquals(archivedThoughts.length, 1, "Linked thought should still exist (archived, not deleted) after content update");
+  assertExists(archivedThoughts[0].archived_at, "Linked thought should have archived_at set after content update");
 
   // Verify content was updated verbatim
   const docResp = await fetch(
@@ -459,6 +462,74 @@ Deno.test("update_document updates content — deletes old thoughts, re-extracts
   );
   const docs: { content: string }[] = await docResp.json();
   assertEquals(docs[0].content, newContent, "Content should be updated verbatim");
+});
+
+Deno.test("update_document with a failing document update leaves linked thoughts untouched (C3 ordering)", async () => {
+  // Create a document
+  const createResult = await callTool("write_document", {
+    title: "Ordering Failure Test",
+    content: "Original content for the ordering-failure test.",
+    project_id: TEST_PROJ_ID,
+    references: { people: [], tasks: [] },
+  });
+  const idMatch = createResult.match(/id: ([0-9a-f-]+)/);
+  assertExists(idMatch);
+  const docId = idMatch![1];
+  cleanupDocumentIds.push(docId);
+
+  // Link a thought to this document
+  const thoughtContent = `Ordering-failure linked thought ${Date.now()}`;
+  await callTool("capture_thought", {
+    content: thoughtContent,
+    document_ids: [docId],
+  });
+  const thoughtResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(thoughtContent)}&select=id,archived_at`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const linked: { id: string; archived_at: string | null }[] = await thoughtResp.json();
+  assertEquals(linked.length, 1, "Should have the linked thought before the failing update");
+  const thoughtId = linked[0].id;
+  cleanupThoughtIds.push(thoughtId);
+
+  // Update the document with new content AND an invalid project_id (FK violation).
+  // The document UPDATE must fail — and because cleanup runs only AFTER a
+  // successful update, the linked thought must remain untouched (active).
+  const invalidProjectId = "00000000-0000-0000-0000-0000000000ff";
+  let threw = false;
+  try {
+    await callTool("update_document", {
+      id: docId,
+      content: "New content that should never persist because the update fails.",
+      project_id: invalidProjectId,
+    });
+  } catch (_error) {
+    threw = true;
+  }
+  assertEquals(threw, true, "update_document should error on an invalid project_id (FK violation)");
+
+  // The linked thought must still exist and still be ACTIVE (not archived, not deleted).
+  const afterResp = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=id,archived_at`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
+  const after: { id: string; archived_at: string | null }[] = await afterResp.json();
+  assertEquals(after.length, 1, "Linked thought must still exist after a failed document update");
+  assertEquals(
+    after[0].archived_at,
+    null,
+    "Linked thought must remain active (not archived/deleted) when the document update fails",
+  );
 });
 
 Deno.test("update_document updates project_id only", async () => {

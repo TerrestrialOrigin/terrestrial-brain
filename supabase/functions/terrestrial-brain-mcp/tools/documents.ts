@@ -302,20 +302,12 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         if (content !== undefined) updates.content = content;
         if (project_id !== undefined) updates.project_id = project_id;
 
-        // If content changed, clean up stale thoughts and re-extract references
+        // If content changed, re-extract references from the new content BEFORE
+        // the update (the extracted refs are part of the update payload). Stale
+        // thought cleanup is deferred until AFTER a successful update (see below)
+        // so that a failed update never destroys the existing thoughts.
         let contentWarning = "";
         if (content !== undefined) {
-          // Delete thoughts linked to this document (same nested JSONB pattern as project filtering)
-          const { error: deleteError } = await supabase
-            .from("thoughts")
-            .delete()
-            .contains("metadata", { references: { documents: [id] } });
-
-          if (deleteError) {
-            console.error(`update_document thought cleanup error: ${deleteError.message}`);
-          }
-
-          // Re-extract references from new content
           const effectiveTitle = title ?? existing.title;
           try {
             const parsedNote = parseNote(content, effectiveTitle, null, "mcp");
@@ -332,27 +324,47 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           }
         }
 
-        // Perform the update
+        // Perform the update FIRST — before touching any thoughts.
         const { error: updateError } = await supabase
           .from("documents")
           .update(updates)
           .eq("id", id);
 
         if (updateError) {
+          // Update failed: linked thoughts are untouched and still consistent
+          // with the unchanged document content.
           return {
             content: [{ type: "text" as const, text: `Update failed: ${updateError.message}` }],
             isError: true,
           };
         }
 
+        // Update succeeded: now soft-archive the stale linked thoughts (never
+        // hard-delete). A hallucinated/wrong ID must not permanently destroy
+        // knowledge, and archived thoughts stay retrievable.
+        let cleanupWarning = "";
+        if (content !== undefined) {
+          const { error: archiveError } = await supabase
+            .from("thoughts")
+            .update({ archived_at: new Date().toISOString() })
+            .contains("metadata", { references: { documents: [id] } });
+
+          if (archiveError) {
+            // Surface the failure instead of swallowing it: the document was
+            // updated, but stale thoughts may still be active.
+            console.error(`update_document thought cleanup error: ${archiveError.message}`);
+            cleanupWarning = ` (warning: thought cleanup failed — some stale thoughts may remain active: ${archiveError.message})`;
+          }
+        }
+
         const updatedFields = Object.keys(updates).filter(key => key !== "references").join(", ");
-        const base = `Document updated: ${updatedFields}${contentWarning}`;
+        const base = `Document updated: ${updatedFields}${contentWarning}${cleanupWarning}`;
 
         if (content !== undefined) {
           return {
             content: [{
               type: "text" as const,
-              text: `${base}\nthoughts_required: true — Previous thoughts were deleted. Use capture_thought with document_ids: ["${id}"] to re-atomize the updated document.`,
+              text: `${base}\nthoughts_required: true — Previous thoughts were archived. Use capture_thought with document_ids: ["${id}"] to re-atomize the updated document.`,
             }],
           };
         }
