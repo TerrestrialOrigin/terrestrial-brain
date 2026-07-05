@@ -4,6 +4,7 @@ import { TaskExtractor } from "../../supabase/functions/terrestrial-brain-mcp/ex
 import type {
   ExtractionContext,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
+import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
 import type {
   ParsedCheckbox,
   ParsedNote,
@@ -183,6 +184,11 @@ function baseContext(
 ): ExtractionContext {
   return {
     supabase,
+    // The extractor reaches the LLM through this seam (Step 15). The real
+    // OpenRouter provider calls globalThis.fetch, which these tests stub — so an
+    // HTTP-500 stub surfaces as a provider error the extractor catches (preserve
+    // path), and a canned stub response feeds the extractor's parse/validate.
+    aiProvider: new OpenRouterAiProvider(),
     knownProjects: [],
     knownTasks: [
       {

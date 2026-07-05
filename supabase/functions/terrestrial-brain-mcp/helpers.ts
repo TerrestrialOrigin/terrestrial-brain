@@ -1,7 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-import { requireEnv } from "./env.ts";
-
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+import type { AiProvider } from "./ai/ai-provider.ts";
+import { AiProviderParseError } from "./ai/ai-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Backwards-compatible references reader
@@ -51,69 +50,44 @@ export async function resolveProjectNames(
   return nameMap;
 }
 
-export async function getEmbedding(text: string): Promise<number[]> {
-  const apiKey = requireEnv("OPENROUTER_API_KEY");
-  const r = await fetch(`${OPENROUTER_BASE}/embeddings`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openai/text-embedding-3-small",
-      input: text,
-    }),
-  });
-  if (!r.ok) {
-    const msg = await r.text().catch(() => "");
-    throw new Error(`OpenRouter embeddings failed: ${r.status} ${msg}`);
-  }
-  const d = await r.json();
-  return d.data[0].embedding;
+export function getEmbedding(
+  aiProvider: AiProvider,
+  text: string,
+): Promise<number[]> {
+  // Thin delegate over the injected seam; keeps a single import surface for the
+  // thoughts handlers and preserves the throw-on-failure contract.
+  return aiProvider.getEmbedding(text);
 }
 
 const UNCATEGORIZED_METADATA = { topics: ["uncategorized"], type: "observation" };
 
-export async function extractMetadata(text: string): Promise<Record<string, unknown>> {
-  const apiKey = requireEnv("OPENROUTER_API_KEY");
-  const r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openai/gpt-4o-mini",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `Extract metadata from the user's captured thought. Return JSON with:
+export async function extractMetadata(
+  aiProvider: AiProvider,
+  text: string,
+): Promise<Record<string, unknown>> {
+  // Metadata is best-effort enrichment: a failure (HTTP or unparseable body)
+  // must NOT abort ingestion, but it must be observable — otherwise an LLM outage
+  // renders identically to a genuinely uncategorizable thought (finding C9).
+  // Log, then degrade.
+  try {
+    return await aiProvider.completeJson(
+      {
+        systemPrompt: `Extract metadata from the user's captured thought. Return JSON with:
 - "people": array of people mentioned (empty if none)
 - "action_items": array of implied to-dos (empty if none)
 - "dates_mentioned": array of dates YYYY-MM-DD (empty if none)
 - "topics": array of 1-3 short topic tags (always at least one)
 - "type": one of "observation", "task", "idea", "reference", "person_note"
 Only extract what's explicitly there.`,
-        },
-        { role: "user", content: text },
-      ],
-    }),
-  });
-  // Metadata is best-effort enrichment: a failure must NOT abort ingestion, but
-  // it must be observable — otherwise an LLM outage renders identically to a
-  // genuinely uncategorizable thought (finding C9). Log, then degrade.
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
-    console.warn(`extractMetadata: OpenRouter returned ${r.status}, falling back to uncategorized. ${body}`);
-    return { ...UNCATEGORIZED_METADATA };
-  }
-  const d = await r.json();
-  try {
-    return JSON.parse(d.choices[0].message.content);
-  } catch (parseError) {
+        userContent: text,
+      },
+      (raw) => raw as Record<string, unknown>,
+    );
+  } catch (error) {
     console.warn(
-      `extractMetadata: could not parse LLM response, falling back to uncategorized. ${(parseError as Error).message}`,
+      `extractMetadata: falling back to uncategorized. ${
+        (error as Error).message
+      }`,
     );
     return { ...UNCATEGORIZED_METADATA };
   }
@@ -121,6 +95,7 @@ Only extract what's explicitly there.`,
 
 export async function freshIngest(
   supabase: SupabaseClient,
+  aiProvider: AiProvider,
   content: string,
   title: string | undefined,
   note_id: string | undefined,
@@ -128,20 +103,14 @@ export async function freshIngest(
   references?: Record<string, string[]>,
   provenance?: { reliability: string; author: string },
 ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
-  const apiKey = requireEnv("OPENROUTER_API_KEY");
-  const splitResponse = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openai/gpt-4o-mini",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: `You split notes into discrete, standalone thoughts for a personal knowledge base.
+  // Split the note into standalone thoughts. An HTTP failure aborts ingestion
+  // (throws); an unparseable response degrades to treating the whole note as a
+  // single thought — matching the pre-refactor behavior exactly.
+  let thoughts: string[] = [];
+  try {
+    thoughts = await aiProvider.completeJson(
+      {
+        systemPrompt: `You split notes into discrete, standalone thoughts for a personal knowledge base.
 
 RULES:
 - Each thought must be fully self-contained — readable without any other context
@@ -154,36 +123,34 @@ RULES:
 - If the entire note is already a single coherent thought, return it as a single-item array
 
 Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
-        },
-        {
-          role: "user",
-          content: title ? `Note title: ${title}\n\n${content}` : content,
-        },
-      ],
-    }),
-  });
-
-  if (!splitResponse.ok) {
-    const msg = await splitResponse.text().catch(() => "");
-    throw new Error(`OpenRouter split failed: ${splitResponse.status} ${msg}`);
-  }
-
-  const splitData = await splitResponse.json();
-  const thoughts: string[] = [];
-
-  try {
-    const parsed = JSON.parse(splitData.choices[0].message.content);
-    if (Array.isArray(parsed.thoughts)) {
-      for (const item of parsed.thoughts) {
-        if (typeof item === "string" && item.trim().length > 0) {
-          thoughts.push(item);
-        } else if (typeof item === "object" && item.thought && typeof item.thought === "string" && item.thought.trim().length > 0) {
-          thoughts.push(item.thought);
+        userContent: title ? `Note title: ${title}\n\n${content}` : content,
+      },
+      (raw): string[] => {
+        const parsed = raw as { thoughts?: unknown };
+        const collected: string[] = [];
+        if (Array.isArray(parsed.thoughts)) {
+          for (const item of parsed.thoughts) {
+            if (typeof item === "string" && item.trim().length > 0) {
+              collected.push(item);
+            } else if (
+              typeof item === "object" && item.thought &&
+              typeof item.thought === "string" && item.thought.trim().length > 0
+            ) {
+              collected.push(item.thought);
+            }
+          }
         }
-      }
+        return collected;
+      },
+    );
+  } catch (error) {
+    if (error instanceof AiProviderParseError) {
+      // Unparseable split response → keep the note as one thought.
+      thoughts = [content.trim()];
+    } else {
+      // HTTP/transport failure → abort ingestion (unchanged behavior).
+      throw error;
     }
-  } catch {
-    thoughts.push(content.trim());
   }
 
   if (thoughts.length === 0) {
@@ -197,8 +164,8 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
   const results = await Promise.allSettled(
     thoughts.map(async (thoughtContent) => {
       const [embedding, metadata] = await Promise.all([
-        getEmbedding(thoughtContent),
-        extractMetadata(thoughtContent),
+        getEmbedding(aiProvider, thoughtContent),
+        extractMetadata(aiProvider, thoughtContent),
       ]);
       const { error } = await supabase.from("thoughts").insert({
         content: thoughtContent,

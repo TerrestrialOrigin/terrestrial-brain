@@ -8,11 +8,13 @@ import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import type { AiProvider } from "../ai/ai-provider.ts";
 
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  aiProvider: AiProvider,
 ) {
   // ─── write_document ───────────────────────────────────────────────────────────
 
@@ -68,6 +70,7 @@ export function register(
                 new TaskExtractor(),
               ],
               supabase,
+              aiProvider,
             );
             resolvedReferences = extractedRefs;
           } catch (pipelineError) {
@@ -365,6 +368,7 @@ export function register(
                 new TaskExtractor(),
               ],
               supabase,
+              aiProvider,
             );
             updates.references = extractedRefs;
           } catch (pipelineError) {

@@ -13,9 +13,7 @@ import type {
   Extractor,
 } from "./pipeline.ts";
 import { findPersonByName } from "./name-matching.ts";
-import { requireEnv } from "../env.ts";
-
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+import type { AiProvider } from "../ai/ai-provider.ts";
 
 // ---------------------------------------------------------------------------
 // LLM-based person detection
@@ -29,10 +27,15 @@ interface DetectedPerson {
 /**
  * Batch LLM call to detect all person names in the note. Returns both
  * matched known people (with their IDs) and new names to auto-create.
+ *
+ * Any transport/parse failure degrades to an empty list (detection is
+ * best-effort) — the provider's typed errors are caught here so a missing
+ * person never aborts extraction.
  */
 async function detectAllPeople(
   noteContent: string,
   knownPeople: { id: string; name: string }[],
+  aiProvider: AiProvider,
 ): Promise<DetectedPerson[]> {
   if (!noteContent.trim()) return [];
 
@@ -42,21 +45,10 @@ async function detectAllPeople(
 
   const validIds = new Set(knownPeople.map((person) => person.id));
 
-  const apiKey = requireEnv("OPENROUTER_API_KEY");
   try {
-    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-4o-mini",
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
+    return await aiProvider.completeJson(
+      {
+        systemPrompt: `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
 
 For each person found:
 - If they match a known person, return their ID
@@ -70,40 +62,24 @@ Return JSON: {"people": [{"name": "Alice", "id": "uuid-if-known-or-null"}, ...]}
 
 KNOWN PEOPLE:
 ${peopleList}`,
-          },
-          {
-            role: "user",
-            content: noteContent,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      console.error(
-        `PeopleExtractor LLM call failed: ${response.status} ${errorText}`,
-      );
-      return [];
-    }
-
-    const data = await response.json();
-    const parsed = JSON.parse(data.choices[0].message.content);
-
-    if (!Array.isArray(parsed.people)) return [];
-
-    return parsed.people
-      .filter(
-        (entry: { name?: unknown; id?: unknown }) =>
-          typeof entry.name === "string" && entry.name.trim().length > 0,
-      )
-      .map((entry: { name: string; id?: string | null }) => ({
-        name: entry.name.trim(),
-        knownId:
-          typeof entry.id === "string" && validIds.has(entry.id)
-            ? entry.id
-            : null,
-      }));
+        userContent: noteContent,
+      },
+      (raw): DetectedPerson[] => {
+        const parsed = raw as { people?: unknown };
+        if (!Array.isArray(parsed.people)) return [];
+        return parsed.people
+          .filter(
+            (entry: { name?: unknown; id?: unknown }) =>
+              typeof entry.name === "string" && entry.name.trim().length > 0,
+          )
+          .map((entry: { name: string; id?: string | null }) => ({
+            name: entry.name.trim(),
+            knownId: typeof entry.id === "string" && validIds.has(entry.id)
+              ? entry.id
+              : null,
+          }));
+      },
+    );
   } catch (error) {
     console.error(
       `PeopleExtractor LLM detection error: ${(error as Error).message}`,
@@ -141,7 +117,11 @@ export class PeopleExtractor implements Extractor {
       new Map(allPeople.map((person) => [person.id, person])).values(),
     );
 
-    const detectedPeople = await detectAllPeople(noteContent, uniquePeople);
+    const detectedPeople = await detectAllPeople(
+      noteContent,
+      uniquePeople,
+      context.aiProvider,
+    );
     const resultIds: string[] = [];
 
     for (const detected of detectedPeople) {

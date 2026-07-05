@@ -22,6 +22,7 @@ import {
 import {
   PeopleExtractor,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
+import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Supabase client for direct DB access in tests
@@ -31,6 +32,11 @@ const SUPABASE_URL = "http://localhost:54321";
 const SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+// These tests drive the REAL extraction pipeline against the live LLM (via the
+// served function's OPENROUTER_API_KEY), so they inject the real OpenRouter
+// provider — the same network calls as before Step 15, now behind the seam.
+const testAiProvider = new OpenRouterAiProvider();
 
 // Seed project IDs (from seed.sql)
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
@@ -58,7 +64,7 @@ Deno.test("pipeline: single extractor returns correct references", async () => {
   };
 
   const note = parseNote("Some content", "Test", null, "obsidian");
-  const result = await runExtractionPipeline(note, [mockExtractor], supabase);
+  const result = await runExtractionPipeline(note, [mockExtractor], supabase, testAiProvider);
 
   assertExists(result.projects);
   assertEquals(result.projects, ["uuid-1", "uuid-2"]);
@@ -79,6 +85,7 @@ Deno.test("pipeline: multiple extractors compose results", async () => {
     note,
     [projectExtractor, taskExtractor],
     supabase,
+    testAiProvider,
   );
 
   assertEquals(result.projects, ["p1"]);
@@ -115,6 +122,7 @@ Deno.test("pipeline: extractors run in sequential order", async () => {
     note,
     [extractorA, extractorB, extractorC],
     supabase,
+    testAiProvider,
   );
 
   assertEquals(executionOrder, ["A", "B", "C"]);
@@ -146,6 +154,7 @@ Deno.test("pipeline: context enrichment visible to downstream extractors", async
     note,
     [enrichingExtractor, observingExtractor],
     supabase,
+    testAiProvider,
   );
 
   assertEquals(downstreamSawProject, true);
@@ -158,7 +167,7 @@ Deno.test("pipeline: extractor returning empty ids includes key in result", asyn
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  const result = await runExtractionPipeline(note, [emptyExtractor], supabase);
+  const result = await runExtractionPipeline(note, [emptyExtractor], supabase, testAiProvider);
 
   assertExists(result.projects);
   assertEquals(result.projects, []);
@@ -176,7 +185,7 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  await runExtractionPipeline(note, [inspectingExtractor], supabase);
+  await runExtractionPipeline(note, [inspectingExtractor], supabase, testAiProvider);
 
   // Seed data has at least Test Proj, Terrestrial Brain, Test Proj Backend
   const projectNames = capturedKnownProjects.map(
@@ -200,6 +209,7 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -226,6 +236,7 @@ Deno.test("ProjectExtractor: detects project from heading match", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [
       { id: TEST_PROJ_ID, name: "Test Proj" },
       { id: TERRESTRIAL_BRAIN_ID, name: "Terrestrial Brain" },
@@ -250,6 +261,7 @@ Deno.test("ProjectExtractor: heading match is case-insensitive", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -271,6 +283,7 @@ Deno.test("ProjectExtractor: heading not matching any project returns no match f
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -304,6 +317,7 @@ Deno.test("ProjectExtractor: auto-creates project from new folder", async () => 
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -354,6 +368,7 @@ Deno.test("ProjectExtractor: empty folder name is skipped", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -381,6 +396,7 @@ Deno.test("ProjectExtractor: note outside /projects/ returns no path match", asy
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -403,6 +419,7 @@ Deno.test("ProjectExtractor: note with no referenceId gets no path match", async
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -434,6 +451,7 @@ Deno.test("ProjectExtractor: deduplicates when same project matched by path and 
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -466,6 +484,7 @@ Deno.test("pipeline: ProjectExtractor wired into pipeline produces correct refer
     note,
     [new ProjectExtractor()],
     supabase,
+    testAiProvider,
   );
 
   assertExists(result.projects);
@@ -487,6 +506,7 @@ Deno.test("pipeline: ProjectExtractor with no matches returns empty projects arr
     note,
     [new ProjectExtractor()],
     supabase,
+    testAiProvider,
   );
 
   assertExists(result.projects);
@@ -505,6 +525,7 @@ Deno.test("TaskExtractor: unchecked checkbox creates open task with reference_id
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -547,6 +568,7 @@ Deno.test("TaskExtractor: checked checkbox creates done task with archived_at", 
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -586,6 +608,7 @@ Deno.test("TaskExtractor: indented checkboxes create subtask hierarchy", async (
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -636,6 +659,7 @@ Deno.test("TaskExtractor: tasks under project heading get correct project_id", a
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -683,6 +707,7 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
   // First ingest
   const context1: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -704,6 +729,7 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
 
   const context2: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((task: { id: string; content: string; reference_id: string | null }) => ({
       id: task.id,
@@ -747,6 +773,7 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
 
   const context1: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -779,6 +806,7 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
 
   const context2: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((task: { id: string; content: string; reference_id: string | null }) => ({
       id: task.id,
@@ -821,6 +849,7 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
 
   const context1: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -853,6 +882,7 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
 
   const context2: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((task: { id: string; content: string; reference_id: string | null }) => ({
       id: task.id,
@@ -895,6 +925,7 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
 
   const context1: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -919,6 +950,7 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
 
   const context2: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((task: { id: string; content: string; reference_id: string | null }) => ({
       id: task.id,
@@ -961,6 +993,7 @@ Deno.test("TaskExtractor: note with no checkboxes returns empty result", async (
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -992,6 +1025,7 @@ Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed reference
     note,
     [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
     supabase,
+    testAiProvider,
   );
 
   assertExists(result.projects);
@@ -1042,7 +1076,7 @@ Deno.test("pipeline: knownTasks populated from DB for matching reference_id", as
   };
 
   const note = parseNote("- [ ] New task\n", "Context", referenceId, "obsidian");
-  await runExtractionPipeline(note, [inspectingExtractor], supabase);
+  await runExtractionPipeline(note, [inspectingExtractor], supabase, testAiProvider);
 
   assertEquals(capturedKnownTasks.length, 1);
   assertEquals(capturedKnownTasks[0].id, preCreated.id);
@@ -1062,7 +1096,7 @@ Deno.test("pipeline: knownTasks empty for note with no referenceId", async () =>
   };
 
   const note = parseNote("Some content", "No Ref", null, "obsidian");
-  await runExtractionPipeline(note, [inspectingExtractor], supabase);
+  await runExtractionPipeline(note, [inspectingExtractor], supabase, testAiProvider);
 
   assertEquals(capturedKnownTasks.length, 0);
 });
@@ -1077,6 +1111,7 @@ Deno.test("PeopleExtractor: referenceKey is 'people'", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1096,6 +1131,7 @@ Deno.test("PeopleExtractor: empty knownPeople returns empty ids without LLM call
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1115,6 +1151,7 @@ Deno.test("PeopleExtractor: empty note content returns empty ids", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [{ id: ALICE_ID, name: "Alice" }],
@@ -1135,6 +1172,7 @@ Deno.test("PeopleExtractor: with known people and content returns valid result",
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1167,6 +1205,7 @@ Deno.test("PeopleExtractor: does not return unknown people", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [{ id: ALICE_ID, name: "Alice" }],
@@ -1197,7 +1236,7 @@ Deno.test("pipeline: knownPeople populated from DB", async () => {
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  await runExtractionPipeline(note, [inspectingExtractor], supabase);
+  await runExtractionPipeline(note, [inspectingExtractor], supabase, testAiProvider);
 
   // Seed data has Alice and Claude
   const peopleNames = capturedKnownPeople.map(
@@ -1219,6 +1258,7 @@ Deno.test("TaskExtractor: new task has populated metadata", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1259,6 +1299,7 @@ Deno.test("TaskExtractor: metadata refreshed on re-ingest", async () => {
 
   const context1: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1290,6 +1331,7 @@ Deno.test("TaskExtractor: metadata refreshed on re-ingest", async () => {
 
   const context2: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((task: { id: string; content: string; reference_id: string | null }) => ({
       id: task.id,
@@ -1329,6 +1371,7 @@ Deno.test("TaskExtractor: extracts due date from checkbox text", async () => {
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1367,6 +1410,7 @@ Deno.test("TaskExtractor: no date leaves due_by null and content unchanged", asy
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1403,6 +1447,7 @@ Deno.test("TaskExtractor: person in checkbox text sets assigned_to", async () =>
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1441,6 +1486,7 @@ Deno.test("TaskExtractor: person in section heading sets assigned_to", async () 
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1478,6 +1524,7 @@ Deno.test("TaskExtractor: no person match leaves assigned_to null", async () => 
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1515,6 +1562,7 @@ Deno.test("TaskExtractor: extraction_method is heading_match when project resolv
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -1550,6 +1598,7 @@ Deno.test("TaskExtractor: extraction_method is file_path when project from pipel
 
   const context: ExtractionContext = {
     supabase,
+    aiProvider: testAiProvider,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -1586,6 +1635,7 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
     note,
     [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
     supabase,
+    testAiProvider,
   );
 
   assertExists(result.tasks);
