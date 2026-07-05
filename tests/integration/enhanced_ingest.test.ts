@@ -2,105 +2,48 @@ import {
   assertEquals,
   assertExists,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createClient } from "@supabase/supabase-js";
 import { getProjectRefs } from "../../supabase/functions/terrestrial-brain-mcp/helpers.ts";
+import {
+  callHTTP,
+  callIngestNote,
+  callTool,
+  createServiceClient,
+} from "../helpers/mcp-client.ts";
 
-// ---------------------------------------------------------------------------
-// Supabase client + MCP tool caller
-// ---------------------------------------------------------------------------
-
-const SUPABASE_URL = "http://localhost:54321";
-const SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-
-const BASE =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
-
-async function callTool(
-  name: string,
-  args: Record<string, unknown>,
-): Promise<string> {
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args },
-    }),
-  });
-
-  const text = await res.text();
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find((line) => line.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    if (parsed.result?.isError)
-      throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-    return parsed.result?.content?.[0]?.text || "";
-  }
-  const parsed = JSON.parse(text);
-  if (parsed.result?.isError)
-    throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-  return parsed.result?.content?.[0]?.text || "";
-}
-
-function httpUrl(endpoint: string): string {
-  return `http://localhost:54321/functions/v1/terrestrial-brain-mcp/${endpoint}?key=dev-test-key-123`;
-}
-
-async function callHTTP(
-  endpoint: string,
-  body?: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const response = await fetch(httpUrl(endpoint), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  return await response.json();
-}
-
-const INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
-
-async function callIngestNote(args: {
-  content: string;
-  title?: string;
-  note_id?: string;
-}): Promise<string> {
-  const res = await fetch(INGEST_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(args),
-  });
-  const body = await res.json();
-  if (!body.success) throw new Error(body.error || "Ingest failed");
-  return body.message || "";
-}
+const supabase = createServiceClient();
 
 // Seed project IDs (from seed.sql)
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 
-// Track entities for cleanup
-const testNoteIds: string[] = [];
-const testTaskReferenceIds: string[] = [];
+// Delete all rows a note-based test created, keyed by its reference_id.
+async function cleanupByReference(referenceId: string): Promise<void> {
+  await supabase.from("thoughts").delete().eq("reference_id", referenceId);
+  await supabase.from("tasks").delete().eq("reference_id", referenceId);
+  await supabase.from("note_snapshots").delete().eq("reference_id", referenceId);
+}
+
+// Wrapper that gives each note/ingest test its own uniquely-named fixture and
+// tears it down in `finally`, so tests are self-contained and never leak rows.
+function withNoteFixture(
+  name: string,
+  referenceIdPrefix: string,
+  run: (referenceId: string) => Promise<void>,
+): void {
+  Deno.test(name, async () => {
+    const referenceId = `${referenceIdPrefix}-${Date.now()}.md`;
+    try {
+      await run(referenceId);
+    } finally {
+      await cleanupByReference(referenceId);
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // 5.1 — ingest_note with checkboxes populates tasks table
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: checkboxes create task rows", async () => {
-  const noteId = `test/enhanced-ingest/tasks-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-  testTaskReferenceIds.push(noteId);
-
+withNoteFixture("ingest_note: checkboxes create task rows", "test/enhanced-ingest/tasks", async (noteId) => {
   const noteContent = `# Sprint Tasks
 
 - [ ] Fix the login page
@@ -138,11 +81,7 @@ Deno.test("ingest_note: checkboxes create task rows", async () => {
 // 5.2 — ingest_note thoughts have references.tasks array
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: thoughts have metadata.references with tasks and projects", async () => {
-  const noteId = `test/enhanced-ingest/refs-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-  testTaskReferenceIds.push(noteId);
-
+withNoteFixture("ingest_note: thoughts have metadata.references with tasks and projects", "test/enhanced-ingest/refs", async (noteId) => {
   const noteContent = `# Test Proj
 - [ ] Fix record lookup
 Some notes about the Test Proj record integration.
@@ -185,10 +124,7 @@ Some notes about the Test Proj record integration.
 // 5.3 — ingest_note stores note content in note_snapshots
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: stores note snapshot", async () => {
-  const noteId = `test/enhanced-ingest/snapshot-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-
+withNoteFixture("ingest_note: stores note snapshot", "test/enhanced-ingest/snapshot", async (noteId) => {
   const noteContent = "A simple note for snapshot testing.";
 
   await callIngestNote({
@@ -215,10 +151,7 @@ Deno.test("ingest_note: stores note snapshot", async () => {
 // 5.4 — ingest_note re-sync updates snapshot (not duplicated)
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: re-sync updates snapshot, no duplicates", async () => {
-  const noteId = `test/enhanced-ingest/resync-snapshot-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-
+withNoteFixture("ingest_note: re-sync updates snapshot, no duplicates", "test/enhanced-ingest/resync-snapshot", async (noteId) => {
   // First ingest
   await callIngestNote({
     content: "Version 1 of the note.",
@@ -252,10 +185,7 @@ Deno.test("ingest_note: re-sync updates snapshot, no duplicates", async () => {
 // 5.4b — ingest_note skips processing when content is unchanged
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: unchanged content is skipped (no duplicate thoughts)", async () => {
-  const noteId = `test/enhanced-ingest/unchanged-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-
+withNoteFixture("ingest_note: unchanged content is skipped (no duplicate thoughts)", "test/enhanced-ingest/unchanged", async (noteId) => {
   const noteContent = "Obsidian Sync should not cause duplicate ingestion of unchanged notes.";
 
   // First ingest — should process normally
@@ -303,10 +233,7 @@ Deno.test("ingest_note: unchanged content is skipped (no duplicate thoughts)", a
   );
 });
 
-Deno.test("ingest_note: changed content is NOT skipped", async () => {
-  const noteId = `test/enhanced-ingest/changed-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-
+withNoteFixture("ingest_note: changed content is NOT skipped", "test/enhanced-ingest/changed", async (noteId) => {
   // First ingest
   await callIngestNote({
     content: "Version 1 of a note about content change detection.",
@@ -332,11 +259,7 @@ Deno.test("ingest_note: changed content is NOT skipped", async () => {
 // 5.5 — ingest_note re-sync with checkbox state change updates task status
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: re-sync with checkbox state change updates task", async () => {
-  const noteId = `test/enhanced-ingest/task-update-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-  testTaskReferenceIds.push(noteId);
-
+withNoteFixture("ingest_note: re-sync with checkbox state change updates task", "test/enhanced-ingest/task-update", async (noteId) => {
   // First ingest: unchecked
   await callIngestNote({
     content: "- [ ] Ship the feature\n",
@@ -375,22 +298,24 @@ Deno.test("ingest_note: re-sync with checkbox state change updates task", async 
 // ---------------------------------------------------------------------------
 
 Deno.test("capture_thought: content with checkbox creates task", async () => {
-  const result = await callTool("capture_thought", {
-    content: "Reminder for later:\n- [ ] Review the pull request\n",
-  });
-  assertExists(result);
+  try {
+    const result = await callTool("capture_thought", {
+      content: "Reminder for later:\n- [ ] Review the pull request\n",
+    });
+    assertExists(result);
 
-  // The task should exist — find by content
-  const { data: tasks } = await supabase
-    .from("tasks")
-    .select("id, content, status, reference_id")
-    .eq("content", "Review the pull request");
+    // The task should exist — find by content
+    const { data: tasks } = await supabase
+      .from("tasks")
+      .select("id, content, status, reference_id")
+      .eq("content", "Review the pull request");
 
-  assertExists(tasks);
-  assertEquals(tasks.length >= 1, true, "Task should be created from capture_thought checkbox");
-
-  // Track for cleanup — tasks from capture_thought have null reference_id
-  // We'll clean up by content match
+    assertExists(tasks);
+    assertEquals(tasks.length >= 1, true, "Task should be created from capture_thought checkbox");
+  } finally {
+    // Tasks from capture_thought have null reference_id — clean up by content.
+    await supabase.from("tasks").delete().eq("content", "Review the pull request");
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -419,10 +344,7 @@ Deno.test("getProjectRefs: returns empty for no references", () => {
 // 5.8 — ingest_note thoughts have note_snapshot_id set
 // ---------------------------------------------------------------------------
 
-Deno.test("ingest_note: thoughts have note_snapshot_id set", async () => {
-  const noteId = `test/enhanced-ingest/snapshot-link-${Date.now()}.md`;
-  testNoteIds.push(noteId);
-
+withNoteFixture("ingest_note: thoughts have note_snapshot_id set", "test/enhanced-ingest/snapshot-link", async (noteId) => {
   await callIngestNote({
     content: "A thought about linking snapshots.",
     title: "Snapshot Link",
@@ -458,11 +380,7 @@ Deno.test("ingest_note: thoughts have note_snapshot_id set", async () => {
 // 7.1 — Option 4 round-trip: create_tasks_with_output → ingest → no duplicates
 // ---------------------------------------------------------------------------
 
-Deno.test("option4: create_tasks_with_output creates tasks and ai_output", async () => {
-  const filePath = `test/option4/sprint-tasks-${Date.now()}.md`;
-  testNoteIds.push(filePath);
-  testTaskReferenceIds.push(filePath);
-
+withNoteFixture("option4: create_tasks_with_output creates tasks and ai_output", "test/option4/sprint-tasks", async (filePath) => {
   const result = await callTool("create_tasks_with_output", {
     title: "Test Proj Sprint Plan",
     file_path: filePath,
@@ -494,21 +412,29 @@ Deno.test("option4: create_tasks_with_output creates tasks and ai_output", async
   assertEquals(tasks[0].status, "open");
 });
 
-Deno.test("option4: round-trip — ingest of delivered content creates no duplicate tasks", async () => {
-  // Find the file_path from the previous test (most recent option4 test)
+withNoteFixture("option4: round-trip — ingest of delivered content creates no duplicate tasks", "test/option4/round-trip", async (filePath) => {
+  // Self-contained: create this test's own tasks + ai_output, then round-trip.
+  await callTool("create_tasks_with_output", {
+    title: "Test Proj Sprint Plan",
+    file_path: filePath,
+    tasks: [
+      { content: "Implement record lookup caching", project_id: TEST_PROJ_ID, status: "open" },
+      { content: "Write integration tests for caching", project_id: TEST_PROJ_ID, status: "open" },
+      { content: "Deploy to staging", project_id: TEST_PROJ_ID, status: "open" },
+    ],
+    source_context: "Option 4 round-trip integration test",
+  });
+
   const { data: existingTasks } = await supabase
     .from("tasks")
     .select("id, content, reference_id")
-    .like("reference_id", "test/option4/sprint-tasks-%")
+    .eq("reference_id", filePath)
     .order("created_at", { ascending: true });
 
   assertExists(existingTasks);
   assertEquals(existingTasks.length >= 3, true, "Pre-created tasks should exist");
 
-  const filePath = existingTasks[0].reference_id!;
-  const taskCountBefore = existingTasks.filter(
-    (task: { reference_id: string | null }) => task.reference_id === filePath,
-  ).length;
+  const taskCountBefore = existingTasks.length;
 
   // Get the ai_output content (the markdown that would be delivered to vault)
   const pendingResult = await callHTTP("get-pending-ai-output");
@@ -565,10 +491,7 @@ Deno.test("option4: round-trip — ingest of delivered content creates no duplic
   await callHTTP("mark-ai-output-picked-up", { ids: [matchingOutput.id] });
 });
 
-Deno.test("option4: create_tasks_with_output with subtask hierarchy", async () => {
-  const filePath = `test/option4/subtasks-${Date.now()}.md`;
-  testNoteIds.push(filePath);
-  testTaskReferenceIds.push(filePath);
+withNoteFixture("option4: create_tasks_with_output with subtask hierarchy", "test/option4/subtasks", async (filePath) => {
 
   const result = await callTool("create_tasks_with_output", {
     title: "Subtask Test",
@@ -613,11 +536,7 @@ Deno.test("option4: create_tasks_with_output with subtask hierarchy", async () =
   }
 });
 
-Deno.test("option4: create_tasks_with_output with done tasks", async () => {
-  const filePath = `test/option4/done-tasks-${Date.now()}.md`;
-  testNoteIds.push(filePath);
-  testTaskReferenceIds.push(filePath);
-
+withNoteFixture("option4: create_tasks_with_output with done tasks", "test/option4/done-tasks", async (filePath) => {
   const result = await callTool("create_tasks_with_output", {
     title: "Mixed Status Tasks",
     file_path: filePath,
@@ -673,31 +592,4 @@ Deno.test("option4: create_tasks_with_output with empty tasks returns error", as
       "Error should mention empty tasks",
     );
   }
-});
-
-// ---------------------------------------------------------------------------
-// Cleanup
-// ---------------------------------------------------------------------------
-
-Deno.test("cleanup: remove test thoughts", async () => {
-  for (const noteId of testNoteIds) {
-    await supabase.from("thoughts").delete().eq("reference_id", noteId);
-  }
-  assertEquals(true, true);
-});
-
-Deno.test("cleanup: remove test tasks", async () => {
-  for (const referenceId of testTaskReferenceIds) {
-    await supabase.from("tasks").delete().eq("reference_id", referenceId);
-  }
-  // Also clean up capture_thought tasks
-  await supabase.from("tasks").delete().eq("content", "Review the pull request");
-  assertEquals(true, true);
-});
-
-Deno.test("cleanup: remove test snapshots", async () => {
-  for (const noteId of testNoteIds) {
-    await supabase.from("note_snapshots").delete().eq("reference_id", noteId);
-  }
-  assertEquals(true, true);
 });

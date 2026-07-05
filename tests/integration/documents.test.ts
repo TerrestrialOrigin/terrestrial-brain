@@ -1,44 +1,13 @@
 import { assertEquals, assertExists, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-
-const BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
-const SUPABASE_URL = "http://localhost:54321";
-const SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+import {
+  callTool,
+  MCP_BASE,
+  SUPABASE_SERVICE_KEY,
+  SUPABASE_URL,
+} from "../helpers/mcp-client.ts";
 
 // Known seed project from seed.sql
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
-
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args },
-    }),
-  });
-
-  const text = await res.text();
-
-  // Handle SSE response
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(line => line.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-    return parsed.result?.content?.[0]?.text || "";
-  }
-
-  // Handle JSON response
-  const parsed = JSON.parse(text);
-  if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-  return parsed.result?.content?.[0]?.text || "";
-}
 
 // Track IDs for cleanup
 const cleanupDocumentIds: string[] = [];
@@ -602,7 +571,7 @@ Deno.test("update_document returns error for non-existent document ID", async ()
 
 Deno.test("write_document description mentions update_document", async () => {
   // Call list tools to check the description
-  const res = await fetch(BASE, {
+  const res = await fetch(MCP_BASE, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

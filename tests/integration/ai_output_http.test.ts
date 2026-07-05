@@ -2,58 +2,11 @@ import {
   assertEquals,
   assertExists,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-
-// ---------------------------------------------------------------------------
-// Test infrastructure
-// ---------------------------------------------------------------------------
-
-const MCP_BASE =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
-
-function httpUrl(endpoint: string): string {
-  return `http://localhost:54321/functions/v1/terrestrial-brain-mcp/${endpoint}?key=dev-test-key-123`;
-}
-
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch(MCP_BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args },
-    }),
-  });
-
-  const text = await res.text();
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find((line) => line.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-    return parsed.result?.content?.[0]?.text || "";
-  }
-  const parsed = JSON.parse(text);
-  if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-  return parsed.result?.content?.[0]?.text || "";
-}
-
-async function callHTTP(
-  endpoint: string,
-  body?: Record<string, unknown>,
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  const response = await fetch(httpUrl(endpoint), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const responseBody = await response.json();
-  return { status: response.status, body: responseBody };
-}
+import {
+  callHTTPWithStatus as callHTTP,
+  callTool,
+  MCP_BASE,
+} from "../helpers/mcp-client.ts";
 
 // ---------------------------------------------------------------------------
 // /get-pending-ai-output-metadata HTTP endpoint tests

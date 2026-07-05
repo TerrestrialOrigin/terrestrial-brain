@@ -1,38 +1,10 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
-
-const BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
-
-async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name, arguments: args }
-    })
-  });
-
-  const text = await res.text();
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(l => l.startsWith("data:"));
-    if (!dataLine) throw new Error("No data in SSE response");
-    const parsed = JSON.parse(dataLine.slice(5).trim());
-    if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-    return parsed.result?.content?.[0]?.text || "";
-  }
-  const parsed = JSON.parse(text);
-  if (parsed.result?.isError) throw new Error(parsed.result.content?.[0]?.text || "Tool error");
-  return parsed.result?.content?.[0]?.text || "";
-}
-
-const SUPABASE_URL = "http://localhost:54321";
-const SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+import {
+  callTool,
+  callToolRaw,
+  SUPABASE_SERVICE_KEY,
+  SUPABASE_URL,
+} from "../helpers/mcp-client.ts";
 
 // ─── Thoughts Tests ──────────────────────────────────────────────────────────
 
@@ -736,36 +708,30 @@ Deno.test("archive_thought archives a thought", async () => {
 });
 
 Deno.test("archive_thought on already-archived thought returns error", async () => {
-  // Use the thought archived in the previous test
-  const thoughtId = ARCHIVE_THOUGHT_CLEANUP_IDS[0];
-  assertExists(thoughtId, "Need an archived thought ID from previous test");
+  // Self-contained: create and archive our own thought, then archive it again.
+  const uniqueContent = `Already-archived test thought ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent, author: "test-archive-twice" });
 
-  const res = await fetch(BASE, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
     },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/call",
-      params: { name: "archive_thought", arguments: { id: thoughtId } }
-    })
-  });
-  const text = await res.text();
-  let resultText: string;
-  let isError: boolean;
-  if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(l => l.startsWith("data:"));
-    const parsed = JSON.parse(dataLine!.slice(5).trim());
-    resultText = parsed.result?.content?.[0]?.text || "";
-    isError = !!parsed.result?.isError;
-  } else {
-    const parsed = JSON.parse(text);
-    resultText = parsed.result?.content?.[0]?.text || "";
-    isError = !!parsed.result?.isError;
-  }
+  );
+  assertEquals(response.ok, true);
+  const thoughts: { id: string }[] = await response.json();
+  assertEquals(thoughts.length, 1);
+  const thoughtId = thoughts[0].id;
+  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+
+  // First archive succeeds.
+  await callTool("archive_thought", { id: thoughtId });
+
+  // Second archive on the now-archived thought must return an error.
+  const { text: resultText, isError } = await callToolRaw("archive_thought", { id: thoughtId });
 
   assertEquals(isError, true, `Should return error for already-archived thought. Got: ${resultText}`);
   assertEquals(
