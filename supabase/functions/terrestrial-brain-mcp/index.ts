@@ -45,6 +45,26 @@ registerDocuments(server, supabase, logger);
 
 // ─── Hono App with Auth Check ─────────────────────────────────────────────────
 
+/**
+ * Constant-time access-key comparison. Both values are hashed to fixed-length
+ * SHA-256 digests first (removes the length side channel), then compared with
+ * a branch-free XOR fold so the comparison never short-circuits.
+ */
+async function accessKeyMatches(providedKey: string, expectedKey: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [providedDigest, expectedDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(providedKey)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expectedKey)),
+  ]);
+  const providedBytes = new Uint8Array(providedDigest);
+  const expectedBytes = new Uint8Array(expectedDigest);
+  let difference = 0;
+  for (let index = 0; index < providedBytes.length; index++) {
+    difference |= providedBytes[index] ^ expectedBytes[index];
+  }
+  return difference === 0;
+}
+
 const app = new Hono();
 
 app.use("*", cors({
@@ -59,8 +79,10 @@ app.use("*", cors({
 
 app.all("*", async (c) => {
   const url = new URL(c.req.url);
-  const provided = c.req.header("x-brain-key") || url.searchParams.get("key");
-  if (!provided || provided !== MCP_ACCESS_KEY) {
+  // x-brain-key header is the primary mechanism; ?key= is a deprecated
+  // fallback kept for MCP clients that cannot set custom headers.
+  const providedKey = c.req.header("x-brain-key") || url.searchParams.get("key");
+  if (!providedKey || !(await accessKeyMatches(providedKey, MCP_ACCESS_KEY))) {
     return c.json({ error: "Invalid or missing access key" }, 401);
   }
 

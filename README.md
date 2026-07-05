@@ -47,7 +47,7 @@ AI Agents (Claude, etc.) -+---> Search thoughts semantically
 - **AI output workflow** -- AI agents can submit content (summaries, analyses, plans) to an `ai_output` table. The plugin polls for pending output, presents it for human review (accept/reject/postpone), and writes accepted content back into your vault. Batch task creation with auto-generated markdown checklists is also supported.
 - **Function call logging** -- Every MCP tool call and HTTP endpoint invocation is logged with input, response size, record count, errors, and caller IP address for a complete audit trail.
 - **MCP server** -- 31 tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
-- **Row-Level Security** -- All database tables have RLS enabled with access-key authentication.
+- **Security model** -- A single shared secret (`MCP_ACCESS_KEY`) enforced at the edge function is the system's security boundary; send it via the `x-brain-key` request header (the `?key=` query parameter still works but is deprecated). The edge function talks to the database with the service-role key; Row-Level Security's role is to lock the public anon key out of all data entirely. See [ThreatModel.md](ThreatModel.md) for the full analysis.
 
 ## Project Structure
 
@@ -266,11 +266,12 @@ cp obsidian-plugin/manifest.json /path/to/your/vault/.obsidian/plugins/terrestri
 #### 6d. Configure the plugin
 
 1. Go to **Settings > Terrestrial Brain** (in the Community plugins section).
-2. Set **Endpoint URL** to:
+2. Set **Endpoint URL** to (no `?key=` — the key goes in the next field):
    ```
-   https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp?key=<your-mcp-access-key>
+   https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp
    ```
-3. Adjust other settings as desired:
+3. Set **Access key** to your `MCP_ACCESS_KEY`. The plugin sends it as an `x-brain-key` request header, never in the URL. (If you paste an old-style URL that still contains `?key=`, the plugin moves the key into this field automatically.)
+4. Adjust other settings as desired:
    - **Sync delay** (minutes before a saved note is synced, default 5)
    - **Poll interval** (minutes between checking for AI output, default 10)
    - **Exclude tag** (notes with this tag are not synced)
@@ -278,7 +279,7 @@ cp obsidian-plugin/manifest.json /path/to/your/vault/.obsidian/plugins/terrestri
 
 ### Step 7: Connect AI Agents via MCP
 
-Any MCP-compatible AI agent can connect to your Terrestrial Brain. Here's how to configure common ones:
+Any MCP-compatible AI agent can connect to your Terrestrial Brain. Authentication uses the `x-brain-key` request header when the client supports custom headers. The `?key=` query parameter shown below is **deprecated** — it is kept only for MCP clients that cannot set custom headers (keys in URLs can end up in proxy logs and request traces). Here's how to configure common ones:
 
 #### Claude Desktop
 
@@ -397,7 +398,7 @@ See [docs/upgrade.md](docs/upgrade.md) for detailed upgrade instructions and saf
 
 | Secret | Required | Description |
 |---|---|---|
-| `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server. Use a strong random string. |
+| `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-brain-key` header; `?key=` is deprecated). Use a strong random string. |
 | `OPENROUTER_API_KEY` | Yes | Used for LLM calls (metadata extraction, embeddings). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
 
 ---
@@ -407,7 +408,7 @@ See [docs/upgrade.md](docs/upgrade.md) for detailed upgrade instructions and saf
 - **`operator does not exist: extensions.vector <=> extensions.vector`** -- The pgvector extension is not enabled. Go to Supabase dashboard > Database > Extensions and enable `vector`.
 - **Edge function returns 401** -- Check that `MCP_ACCESS_KEY` is set correctly: `npx supabase secrets list --project-ref <your-project-ref>`.
 - **`413 request entity too large`** -- Your SQL import file is too big. See [docs/fresh-install.md](docs/fresh-install.md) Step 5 for batch splitting instructions.
-- **Notes not syncing** -- Check the Obsidian developer console (Ctrl+Shift+I) for errors. Verify the endpoint URL in plugin settings is correct and includes the `?key=` parameter.
+- **Notes not syncing** -- Check the Obsidian developer console (Ctrl+Shift+I) for errors. Verify the endpoint URL in plugin settings is correct and that the **Access key** field contains your `MCP_ACCESS_KEY`.
 
 ---
 
