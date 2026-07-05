@@ -3,6 +3,7 @@ import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { validateFilePath } from "../validators.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { errorResult, textResult } from "../mcp-response.ts";
 
 // ---------------------------------------------------------------------------
 // Task input type for create_tasks_with_output
@@ -148,7 +149,9 @@ export async function handleGetPendingAIOutput(supabase: SupabaseClient) {
   return { data: data || [] };
 }
 
-export async function handleGetPendingAIOutputMetadata(supabase: SupabaseClient) {
+export async function handleGetPendingAIOutputMetadata(
+  supabase: SupabaseClient,
+) {
   const { data, error } = await supabase
     .rpc("get_pending_ai_output_metadata");
 
@@ -156,7 +159,10 @@ export async function handleGetPendingAIOutputMetadata(supabase: SupabaseClient)
   return { data: data || [] };
 }
 
-export async function handleFetchAIOutputContent(supabase: SupabaseClient, ids: string[]) {
+export async function handleFetchAIOutputContent(
+  supabase: SupabaseClient,
+  ids: string[],
+) {
   const { data, error } = await supabase
     .from("ai_output")
     .select("id, content")
@@ -168,31 +174,47 @@ export async function handleFetchAIOutputContent(supabase: SupabaseClient, ids: 
   return { data: data || [] };
 }
 
-export async function handleMarkAIOutputPickedUp(supabase: SupabaseClient, ids: string[]) {
+export async function handleMarkAIOutputPickedUp(
+  supabase: SupabaseClient,
+  ids: string[],
+) {
   const { error } = await supabase
     .from("ai_output")
     .update({ picked_up: true, picked_up_at: new Date().toISOString() })
     .in("id", ids);
 
   if (error) return { error: error.message };
-  return { message: `Marked ${ids.length} output${ids.length > 1 ? "s" : ""} as picked up.` };
+  return {
+    message: `Marked ${ids.length} output${
+      ids.length > 1 ? "s" : ""
+    } as picked up.`,
+  };
 }
 
-export async function handleRejectAIOutput(supabase: SupabaseClient, ids: string[]) {
+export async function handleRejectAIOutput(
+  supabase: SupabaseClient,
+  ids: string[],
+) {
   const { error } = await supabase
     .from("ai_output")
     .update({ rejected: true, rejected_at: new Date().toISOString() })
     .in("id", ids);
 
   if (error) return { error: error.message };
-  return { message: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.` };
+  return {
+    message: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // MCP tool registration — only AI-facing tools remain
 // ---------------------------------------------------------------------------
 
-export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
+export function register(
+  server: McpServer,
+  supabase: SupabaseClient,
+  logger: FunctionCallLogger,
+) {
   server.registerTool(
     "create_ai_output",
     {
@@ -205,19 +227,23 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "For task lists specifically, prefer create_tasks_with_output — it creates both structured task rows and a checklist document.",
       inputSchema: {
         title: z.string().describe("Human-readable title for this output"),
-        content: z.string().describe("Full markdown body — stored exactly as provided"),
-        file_path: z.string().describe("Target vault-relative path including filename, e.g. 'projects/TerrestrialCore/PhaseTwoPlan.md'"),
-        source_context: z.string().optional().describe("What prompted this output (for provenance tracking)"),
+        content: z.string().describe(
+          "Full markdown body — stored exactly as provided",
+        ),
+        file_path: z.string().describe(
+          "Target vault-relative path including filename, e.g. 'projects/TerrestrialCore/PhaseTwoPlan.md'",
+        ),
+        source_context: z.string().optional().describe(
+          "What prompted this output (for provenance tracking)",
+        ),
       },
     },
-    withMcpLogging("create_ai_output", async ({ title, content, file_path, source_context }) => {
-      try {
+    withMcpLogging(
+      "create_ai_output",
+      async ({ title, content, file_path, source_context }) => {
         const pathError = validateFilePath(file_path);
         if (pathError) {
-          return {
-            content: [{ type: "text" as const, text: pathError }],
-            isError: true,
-          };
+          return errorResult(pathError);
         }
 
         const { data, error } = await supabase
@@ -232,22 +258,15 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .single();
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to create AI output: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Failed to create AI output: ${error.message}`);
         }
 
-        return {
-          content: [{ type: "text" as const, text: `Created AI output "${title}" (id: ${data.id})\nWill appear at: ${file_path}` }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `Created AI output "${title}" (id: ${data.id})\nWill appear at: ${file_path}`,
+        );
+      },
+      logger,
+    ),
   );
 
   server.registerTool(
@@ -265,7 +284,9 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Supports subtask hierarchy via parent_index, person assignment via assigned_to, and project linking via project_id. " +
         "Assigned person names appear as @Name suffixes in the generated markdown.",
       inputSchema: {
-        title: z.string().describe("Human-readable title for the output document"),
+        title: z.string().describe(
+          "Human-readable title for the output document",
+        ),
         file_path: z.string().describe(
           "Target vault-relative path including filename, e.g. 'projects/Test Proj/sprint-tasks.md'",
         ),
@@ -305,26 +326,16 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .describe("What prompted this output (for provenance tracking)"),
       },
     },
-    withMcpLogging("create_tasks_with_output", async ({ title, file_path, tasks, source_context }) => {
-      try {
+    withMcpLogging(
+      "create_tasks_with_output",
+      async ({ title, file_path, tasks, source_context }) => {
         const pathError = validateFilePath(file_path);
         if (pathError) {
-          return {
-            content: [{ type: "text" as const, text: pathError }],
-            isError: true,
-          };
+          return errorResult(pathError);
         }
 
         if (!tasks || tasks.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: "At least one task is required.",
-              },
-            ],
-            isError: true,
-          };
+          return errorResult("At least one task is required.");
         }
 
         // Fetch project names for markdown headings
@@ -335,14 +346,13 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         // hierarchy fails loudly instead of silently flattening (finding C4).
         const parentError = validateParentIndices(typedTasks);
         if (parentError) {
-          return {
-            content: [{ type: "text" as const, text: parentError }],
-            isError: true,
-          };
+          return errorResult(parentError);
         }
         const projectIds = [
           ...new Set(
-            typedTasks.filter((task) => task.project_id).map((task) => task.project_id!),
+            typedTasks.filter((task) => task.project_id).map((task) =>
+              task.project_id!
+            ),
           ),
         ];
         let projectNameMap: Record<string, string> = {};
@@ -353,8 +363,12 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .in("id", projectIds);
           // Log + raw-id fallback on error, never a silently-empty map (finding C9).
           if (projectsError) {
-            console.error(`create_tasks_with_output project-name lookup failed: ${projectsError.message}`);
-            projectNameMap = Object.fromEntries(projectIds.map((pid) => [pid, pid]));
+            console.error(
+              `create_tasks_with_output project-name lookup failed: ${projectsError.message}`,
+            );
+            projectNameMap = Object.fromEntries(
+              projectIds.map((pid) => [pid, pid]),
+            );
           } else {
             projectNameMap = Object.fromEntries(
               (projects || []).map((project: { id: string; name: string }) => [
@@ -368,7 +382,9 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         // Fetch person names for markdown assignee labels
         const personIds = [
           ...new Set(
-            typedTasks.filter((task) => task.assigned_to).map((task) => task.assigned_to!),
+            typedTasks.filter((task) => task.assigned_to).map((task) =>
+              task.assigned_to!
+            ),
           ),
         ];
         let personNameMap: Record<string, string> = {};
@@ -378,8 +394,12 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             .select("id, name")
             .in("id", personIds);
           if (peopleError) {
-            console.error(`create_tasks_with_output assignee lookup failed: ${peopleError.message}`);
-            personNameMap = Object.fromEntries(personIds.map((pid) => [pid, pid]));
+            console.error(
+              `create_tasks_with_output assignee lookup failed: ${peopleError.message}`,
+            );
+            personNameMap = Object.fromEntries(
+              personIds.map((pid) => [pid, pid]),
+            );
           } else {
             personNameMap = Object.fromEntries(
               (people || []).map((person: { id: string; name: string }) => [
@@ -433,18 +453,14 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
                 .delete()
                 .in("id", taskIds);
               rollbackNote = rollbackError
-                ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${taskIds.join(", ")}.`
+                ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${
+                  taskIds.join(", ")
+                }.`
                 : ` Rolled back ${taskIds.length} already-inserted task(s).`;
             }
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Failed to create task "${task.content}": ${error.message}.${rollbackNote}`,
-                },
-              ],
-              isError: true,
-            };
+            return errorResult(
+              `Failed to create task "${task.content}": ${error.message}.${rollbackNote}`,
+            );
           }
 
           dbIdByIndex.set(index, data.id);
@@ -452,7 +468,12 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         }
 
         // Generate markdown from structured task data
-        const markdown = generateTaskMarkdown(title, tasks, projectNameMap, personNameMap);
+        const markdown = generateTaskMarkdown(
+          title,
+          tasks,
+          projectNameMap,
+          personNameMap,
+        );
 
         // Create ai_output row
         const { data: outputData, error: outputError } = await supabase
@@ -471,36 +492,18 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           if (taskIds.length > 0) {
             await supabase.from("tasks").delete().in("id", taskIds);
           }
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Failed to create AI output (tasks rolled back): ${outputError.message}`,
-              },
-            ],
-            isError: true,
-          };
+          return errorResult(
+            `Failed to create AI output (tasks rolled back): ${outputError.message}`,
+          );
         }
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                `Created ${taskIds.length} task(s) and AI output "${title}" (output id: ${outputData.id})\n` +
-                `Task IDs: ${taskIds.join(", ")}\n` +
-                `Will appear at: ${file_path}`,
-            },
-          ],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [
-            { type: "text" as const, text: `Error: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }, logger),
+        return textResult(
+          `Created ${taskIds.length} task(s) and AI output "${title}" (output id: ${outputData.id})\n` +
+            `Task IDs: ${taskIds.join(", ")}\n` +
+            `Will appear at: ${file_path}`,
+        );
+      },
+      logger,
+    ),
   );
 }

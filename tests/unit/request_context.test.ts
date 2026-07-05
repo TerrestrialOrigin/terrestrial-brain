@@ -51,9 +51,12 @@ Deno.test("concurrent request scopes log their own IP, never cross-attributed (C
   const { logger, recordedIpByMarker } = createRecordingLogger();
 
   // A trivial handler; the IP is captured by withMcpLogging before it runs.
+  // It ignores its args but must declare them: the now-generic withMcpLogging
+  // infers the wrapped fn's arg tuple from the handler, and the wrapped fn is
+  // called with the tool input (below), which the wrapper forwards to logCall.
   const handler = withMcpLogging(
     "list_projects",
-    () =>
+    (_args: Record<string, unknown>) =>
       Promise.resolve({
         content: [{ type: "text" as const, text: "ok" }],
       }),
@@ -84,7 +87,8 @@ Deno.test("request IP is null outside any request context", async () => {
   const { logger, recordedIpByMarker } = createRecordingLogger();
   const handler = withMcpLogging(
     "list_projects",
-    () => Promise.resolve({ content: [{ type: "text" as const, text: "ok" }] }),
+    (_args: Record<string, unknown>) =>
+      Promise.resolve({ content: [{ type: "text" as const, text: "ok" }] }),
     logger,
   );
 

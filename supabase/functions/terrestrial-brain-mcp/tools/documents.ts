@@ -7,8 +7,13 @@ import { ProjectExtractor } from "../extractors/project-extractor.ts";
 import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { errorResult, textResult } from "../mcp-response.ts";
 
-export function register(server: McpServer, supabase: SupabaseClient, logger: FunctionCallLogger) {
+export function register(
+  server: McpServer,
+  supabase: SupabaseClient,
+  logger: FunctionCallLogger,
+) {
   // ─── write_document ───────────────────────────────────────────────────────────
 
   server.registerTool(
@@ -25,17 +30,28 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "To edit an existing document later, use update_document.",
       inputSchema: {
         title: z.string().describe("Document title"),
-        content: z.string().describe("Full document text in markdown — stored verbatim, never modified"),
+        content: z.string().describe(
+          "Full document text in markdown — stored verbatim, never modified",
+        ),
         project_id: z.string().describe("UUID of the owning project"),
-        file_path: z.string().optional().describe("Vault-relative path if this came from Obsidian — provenance only, not a write target"),
+        file_path: z.string().optional().describe(
+          "Vault-relative path if this came from Obsidian — provenance only, not a write target",
+        ),
         references: z.object({
-          people: z.string().array().optional().default([]).describe("UUIDs of referenced people"),
-          tasks: z.string().array().optional().default([]).describe("UUIDs of referenced tasks"),
-        }).optional().describe("Explicit references — if omitted, extracted automatically from content"),
+          people: z.string().array().optional().default([]).describe(
+            "UUIDs of referenced people",
+          ),
+          tasks: z.string().array().optional().default([]).describe(
+            "UUIDs of referenced tasks",
+          ),
+        }).optional().describe(
+          "Explicit references — if omitted, extracted automatically from content",
+        ),
       },
     },
-    withMcpLogging("write_document", async ({ title, content, project_id, file_path, references }) => {
-      try {
+    withMcpLogging(
+      "write_document",
+      async ({ title, content, project_id, file_path, references }) => {
         let resolvedReferences: Record<string, string[]> = references
           ? { people: references.people || [], tasks: references.tasks || [] }
           : {};
@@ -46,12 +62,20 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             const parsedNote = parseNote(content, title, null, "mcp");
             const extractedRefs = await runExtractionPipeline(
               parsedNote,
-              [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
+              [
+                new ProjectExtractor(),
+                new PeopleExtractor(),
+                new TaskExtractor(),
+              ],
               supabase,
             );
             resolvedReferences = extractedRefs;
           } catch (pipelineError) {
-            console.error(`write_document extraction pipeline error: ${(pipelineError as Error).message}`);
+            console.error(
+              `write_document extraction pipeline error: ${
+                (pipelineError as Error).message
+              }`,
+            );
             resolvedReferences = { people: [], tasks: [] };
           }
         }
@@ -69,35 +93,39 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .single();
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Failed to store document: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Failed to store document: ${error.message}`);
         }
 
         const refParts: string[] = [];
         const peopleCount = (resolvedReferences.people || []).length;
         const taskCount = (resolvedReferences.tasks || []).length;
         const projectCount = (resolvedReferences.projects || []).length;
-        if (peopleCount > 0) refParts.push(`${peopleCount} ${peopleCount !== 1 ? "people" : "person"}`);
-        if (taskCount > 0) refParts.push(`${taskCount} task${taskCount !== 1 ? "s" : ""}`);
-        if (projectCount > 0) refParts.push(`${projectCount} project${projectCount !== 1 ? "s" : ""}`);
-        const refSuffix = refParts.length > 0 ? ` | References: ${refParts.join(", ")}` : "";
+        if (peopleCount > 0) {
+          refParts.push(
+            `${peopleCount} ${peopleCount !== 1 ? "people" : "person"}`,
+          );
+        }
+        if (taskCount > 0) {
+          refParts.push(
+            `${taskCount} task${taskCount !== 1 ? "s" : ""}`,
+          );
+        }
+        if (projectCount > 0) {
+          refParts.push(
+            `${projectCount} project${projectCount !== 1 ? "s" : ""}`,
+          );
+        }
+        const refSuffix = refParts.length > 0
+          ? ` | References: ${refParts.join(", ")}`
+          : "";
 
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Document stored: "${data.title}" (id: ${data.id})${refSuffix}\n` +
-              `thoughts_required: true — Use capture_thought with document_ids: ["${data.id}"] to atomize this document into searchable thoughts.`,
-          }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `Document stored: "${data.title}" (id: ${data.id})${refSuffix}\n` +
+            `thoughts_required: true — Use capture_thought with document_ids: ["${data.id}"] to atomize this document into searchable thoughts.`,
+        );
+      },
+      logger,
+    ),
   );
 
   // ─── get_document ─────────────────────────────────────────────────────────────
@@ -114,62 +142,53 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       },
     },
     withMcpLogging("get_document", async ({ id }) => {
-      try {
-        const { data, error } = await supabase
-          .from("documents")
-          .select("*")
-          .eq("id", id)
-          .single();
+      const { data, error } = await supabase
+        .from("documents")
+        .select("*")
+        .eq("id", id)
+        .single();
 
-        if (error) {
-          const message = error.code === "PGRST116"
-            ? `No document found with ID "${id}".`
-            : `Error: ${error.message}`;
-          return {
-            content: [{ type: "text" as const, text: message }],
-            isError: error.code !== "PGRST116",
-          };
-        }
-
-        // Resolve project name. Log + raw-id fallback on error (finding C9) so a
-        // failed lookup is not indistinguishable from "unknown project".
-        let projectName = "unknown";
-        const { data: project, error: projectError } = await supabase
-          .from("projects")
-          .select("name")
-          .eq("id", data.project_id)
-          .single();
-        if (projectError) {
-          console.error(`get_document project-name lookup failed: ${projectError.message}`);
-          projectName = data.project_id;
-        } else if (project) {
-          projectName = project.name;
-        }
-
-        const refs = (data.references || {}) as Record<string, string[]>;
-        const lines: string[] = [
-          `Title: ${data.title}`,
-          `ID: ${data.id}`,
-          `Project: ${projectName} (${data.project_id})`,
-        ];
-        if (data.file_path) lines.push(`File path: ${data.file_path}`);
-        if (refs.people?.length) lines.push(`People: ${refs.people.join(", ")}`);
-        if (refs.tasks?.length) lines.push(`Tasks: ${refs.tasks.join(", ")}`);
-        if (refs.projects?.length) lines.push(`Projects: ${refs.projects.join(", ")}`);
-        lines.push(`Created: ${new Date(data.created_at).toLocaleDateString()}`);
-        lines.push(`Updated: ${new Date(data.updated_at).toLocaleDateString()}`);
-        lines.push(`\n---\n\n${data.content}`);
-
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
+      if (error) {
+        return error.code === "PGRST116"
+          ? textResult(`No document found with ID "${id}".`)
+          : errorResult(`Error: ${error.message}`);
       }
-    }, logger)
+
+      // Resolve project name. Log + raw-id fallback on error (finding C9) so a
+      // failed lookup is not indistinguishable from "unknown project".
+      let projectName = "unknown";
+      const { data: project, error: projectError } = await supabase
+        .from("projects")
+        .select("name")
+        .eq("id", data.project_id)
+        .single();
+      if (projectError) {
+        console.error(
+          `get_document project-name lookup failed: ${projectError.message}`,
+        );
+        projectName = data.project_id;
+      } else if (project) {
+        projectName = project.name;
+      }
+
+      const refs = (data.references || {}) as Record<string, string[]>;
+      const lines: string[] = [
+        `Title: ${data.title}`,
+        `ID: ${data.id}`,
+        `Project: ${projectName} (${data.project_id})`,
+      ];
+      if (data.file_path) lines.push(`File path: ${data.file_path}`);
+      if (refs.people?.length) lines.push(`People: ${refs.people.join(", ")}`);
+      if (refs.tasks?.length) lines.push(`Tasks: ${refs.tasks.join(", ")}`);
+      if (refs.projects?.length) {
+        lines.push(`Projects: ${refs.projects.join(", ")}`);
+      }
+      lines.push(`Created: ${new Date(data.created_at).toLocaleDateString()}`);
+      lines.push(`Updated: ${new Date(data.updated_at).toLocaleDateString()}`);
+      lines.push(`\n---\n\n${data.content}`);
+
+      return textResult(lines.join("\n"));
+    }, logger),
   );
 
   // ─── list_documents ───────────────────────────────────────────────────────────
@@ -185,16 +204,25 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         "Returns metadata only (no content body). Use get_document with a specific ID to retrieve full content.",
       inputSchema: {
         project_id: z.string().optional().describe("Filter by project UUID"),
-        title_contains: z.string().optional().describe("Case-insensitive substring match against document title"),
-        search: z.string().optional().describe("Case-insensitive substring match against document content"),
-        limit: z.number().optional().default(20).describe("Max results (default 20)"),
+        title_contains: z.string().optional().describe(
+          "Case-insensitive substring match against document title",
+        ),
+        search: z.string().optional().describe(
+          "Case-insensitive substring match against document content",
+        ),
+        limit: z.number().optional().default(20).describe(
+          "Max results (default 20)",
+        ),
       },
     },
-    withMcpLogging("list_documents", async ({ project_id, title_contains, search, limit }) => {
-      try {
+    withMcpLogging(
+      "list_documents",
+      async ({ project_id, title_contains, search, limit }) => {
         let query = supabase
           .from("documents")
-          .select("id, title, project_id, file_path, references, created_at, updated_at")
+          .select(
+            "id, title, project_id, file_path, references, created_at, updated_at",
+          )
           .order("created_at", { ascending: false })
           .limit(limit);
 
@@ -205,29 +233,30 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         const { data, error } = await query;
 
         if (error) {
-          return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
-            isError: true,
-          };
+          return errorResult(`Error: ${error.message}`);
         }
 
         if (!data || data.length === 0) {
-          return { content: [{ type: "text" as const, text: "No documents found." }] };
+          return textResult("No documents found.");
         }
 
         // Resolve project names. Log + raw-id fallback on error (finding C9).
-        const projectIds = [...new Set(data.map(document => document.project_id))];
+        const projectIds = [
+          ...new Set(data.map((document) => document.project_id)),
+        ];
         const { data: projects, error: projectsError } = await supabase
           .from("projects")
           .select("id, name")
           .in("id", projectIds);
         let projectMap: Record<string, string>;
         if (projectsError) {
-          console.error(`list_documents project-name lookup failed: ${projectsError.message}`);
-          projectMap = Object.fromEntries(projectIds.map(pid => [pid, pid]));
+          console.error(
+            `list_documents project-name lookup failed: ${projectsError.message}`,
+          );
+          projectMap = Object.fromEntries(projectIds.map((pid) => [pid, pid]));
         } else {
           projectMap = Object.fromEntries(
-            (projects || []).map(project => [project.id, project.name]),
+            (projects || []).map((project) => [project.id, project.name]),
           );
         }
 
@@ -241,28 +270,29 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           if (document.file_path) parts.push(`   Path: ${document.file_path}`);
 
           const refParts: string[] = [];
-          if (refs.people?.length) refParts.push(`${refs.people.length} people`);
+          if (refs.people?.length) {
+            refParts.push(`${refs.people.length} people`);
+          }
           if (refs.tasks?.length) refParts.push(`${refs.tasks.length} tasks`);
-          if (refs.projects?.length) refParts.push(`${refs.projects.length} projects`);
-          if (refParts.length > 0) parts.push(`   References: ${refParts.join(", ")}`);
+          if (refs.projects?.length) {
+            refParts.push(`${refs.projects.length} projects`);
+          }
+          if (refParts.length > 0) {
+            parts.push(`   References: ${refParts.join(", ")}`);
+          }
 
-          parts.push(`   Created: ${new Date(document.created_at).toLocaleDateString()}`);
+          parts.push(
+            `   Created: ${new Date(document.created_at).toLocaleDateString()}`,
+          );
           return parts.join("\n");
         });
 
-        return {
-          content: [{
-            type: "text" as const,
-            text: `${data.length} document(s):\n\n${lines.join("\n\n")}`,
-          }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(
+          `${data.length} document(s):\n\n${lines.join("\n\n")}`,
+        );
+      },
+      logger,
+    ),
   );
 
   // ─── update_document ──────────────────────────────────────────────────────────
@@ -280,18 +310,25 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
       inputSchema: {
         id: z.string().describe("UUID of the document to update"),
         title: z.string().optional().describe("New document title"),
-        content: z.string().optional().describe("New full document text in markdown — replaces existing content verbatim"),
-        project_id: z.string().optional().describe("UUID of the new owning project"),
+        content: z.string().optional().describe(
+          "New full document text in markdown — replaces existing content verbatim",
+        ),
+        project_id: z.string().optional().describe(
+          "UUID of the new owning project",
+        ),
       },
     },
-    withMcpLogging("update_document", async ({ id, title, content, project_id }) => {
-      try {
+    withMcpLogging(
+      "update_document",
+      async ({ id, title, content, project_id }) => {
         // Validate at least one optional field is provided
-        if (title === undefined && content === undefined && project_id === undefined) {
-          return {
-            content: [{ type: "text" as const, text: "At least one of title, content, or project_id must be provided." }],
-            isError: true,
-          };
+        if (
+          title === undefined && content === undefined &&
+          project_id === undefined
+        ) {
+          return errorResult(
+            "At least one of title, content, or project_id must be provided.",
+          );
         }
 
         // Verify document exists and get current data for extraction context
@@ -302,10 +339,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           .single();
 
         if (fetchError || !existing) {
-          return {
-            content: [{ type: "text" as const, text: "Document not found." }],
-            isError: true,
-          };
+          return errorResult("Document not found.");
         }
 
         // Build update payload
@@ -325,14 +359,23 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
             const parsedNote = parseNote(content, effectiveTitle, null, "mcp");
             const extractedRefs = await runExtractionPipeline(
               parsedNote,
-              [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
+              [
+                new ProjectExtractor(),
+                new PeopleExtractor(),
+                new TaskExtractor(),
+              ],
               supabase,
             );
             updates.references = extractedRefs;
           } catch (pipelineError) {
-            console.error(`update_document extraction pipeline error: ${(pipelineError as Error).message}`);
+            console.error(
+              `update_document extraction pipeline error: ${
+                (pipelineError as Error).message
+              }`,
+            );
             updates.references = { people: [], tasks: [] };
-            contentWarning = " (warning: reference extraction failed — references reset to empty)";
+            contentWarning =
+              " (warning: reference extraction failed — references reset to empty)";
           }
         }
 
@@ -345,10 +388,7 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
         if (updateError) {
           // Update failed: linked thoughts are untouched and still consistent
           // with the unchanged document content.
-          return {
-            content: [{ type: "text" as const, text: `Update failed: ${updateError.message}` }],
-            isError: true,
-          };
+          return errorResult(`Update failed: ${updateError.message}`);
         }
 
         // Update succeeded: now soft-archive the stale linked thoughts (never
@@ -364,32 +404,29 @@ export function register(server: McpServer, supabase: SupabaseClient, logger: Fu
           if (archiveError) {
             // Surface the failure instead of swallowing it: the document was
             // updated, but stale thoughts may still be active.
-            console.error(`update_document thought cleanup error: ${archiveError.message}`);
-            cleanupWarning = ` (warning: thought cleanup failed — some stale thoughts may remain active: ${archiveError.message})`;
+            console.error(
+              `update_document thought cleanup error: ${archiveError.message}`,
+            );
+            cleanupWarning =
+              ` (warning: thought cleanup failed — some stale thoughts may remain active: ${archiveError.message})`;
           }
         }
 
-        const updatedFields = Object.keys(updates).filter(key => key !== "references").join(", ");
-        const base = `Document updated: ${updatedFields}${contentWarning}${cleanupWarning}`;
+        const updatedFields = Object.keys(updates).filter((key) =>
+          key !== "references"
+        ).join(", ");
+        const base =
+          `Document updated: ${updatedFields}${contentWarning}${cleanupWarning}`;
 
         if (content !== undefined) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: `${base}\nthoughts_required: true — Previous thoughts were archived. Use capture_thought with document_ids: ["${id}"] to re-atomize the updated document.`,
-            }],
-          };
+          return textResult(
+            `${base}\nthoughts_required: true — Previous thoughts were archived. Use capture_thought with document_ids: ["${id}"] to re-atomize the updated document.`,
+          );
         }
 
-        return {
-          content: [{ type: "text" as const, text: base }],
-        };
-      } catch (err: unknown) {
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    }, logger)
+        return textResult(base);
+      },
+      logger,
+    ),
   );
 }
