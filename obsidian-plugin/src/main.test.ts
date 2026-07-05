@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the obsidian module before importing main
 // Track Notice constructions for assertion
@@ -61,7 +61,7 @@ vi.mock("obsidian", () => ({
   TFile: class {},
 }));
 
-import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildEndpointUrl } from "./main";
+import TerrestrialBrainPlugin, { stripFrontmatter, simpleHash, formatFileSize, generateCopyPath, buildEndpointUrl, extractKeyFromUrl, isInsecureEndpoint } from "./main";
 
 // ─── Helper: create a partial plugin instance for testing ────────────────────
 
@@ -75,6 +75,7 @@ function createTestPlugin(overrides: {
 
   plugin.settings = {
     tbEndpointUrl: overrides.tbEndpointUrl ?? "",
+    accessKey: "",
     excludeTag: overrides.excludeTag ?? "tbExclude",
     syncDelayMinutes: 5,
     pollIntervalMinutes: 10,
@@ -931,5 +932,225 @@ describe("processNote uses callIngestNote", () => {
       "test",
       "folder/test.md",
     );
+  });
+});
+
+// ─── x-brain-key header auth tests ───────────────────────────────────────────
+// These exercise the REAL callHTTP / callIngestNote implementations with fetch
+// mocked at the boundary (the plugin's own code is on the tested path).
+
+describe("x-brain-key header auth", () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  function mockFetchOk() {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [], message: "ok" }),
+      text: async () => "",
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return fetchMock;
+  }
+
+  function createHeaderTestPlugin(accessKey: string): TerrestrialBrainPlugin {
+    const plugin = createTestPlugin({
+      tbEndpointUrl: "https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp",
+    });
+    (plugin.settings as unknown as Record<string, unknown>).accessKey = accessKey;
+    // Remove the vi.fn() override so the real prototype implementation runs
+    delete (plugin as unknown as Record<string, unknown>).callHTTP;
+    return plugin;
+  }
+
+  it("callHTTP sends the key as x-brain-key header and keeps it out of the URL", async () => {
+    const plugin = createHeaderTestPlugin("secret123");
+    const fetchMock = mockFetchOk();
+
+    await plugin.callHTTP("get-pending-ai-output-metadata");
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0];
+    const headers = requestInit.headers as Record<string, string>;
+    expect(headers["x-brain-key"]).toBe("secret123");
+    expect(String(requestUrl)).not.toContain("key=");
+  });
+
+  it("callIngestNote sends the key as x-brain-key header and keeps it out of the URL", async () => {
+    const plugin = createHeaderTestPlugin("secret123");
+    const fetchMock = mockFetchOk();
+
+    await plugin.callIngestNote("some content", "title", "folder/note.md");
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0];
+    const headers = requestInit.headers as Record<string, string>;
+    expect(headers["x-brain-key"]).toBe("secret123");
+    expect(String(requestUrl)).not.toContain("key=");
+  });
+
+  it("callHTTP omits the x-brain-key header when accessKey is empty", async () => {
+    const plugin = createHeaderTestPlugin("");
+    const fetchMock = mockFetchOk();
+
+    await plugin.callHTTP("get-pending-ai-output-metadata");
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const headers = requestInit.headers as Record<string, string>;
+    expect(headers["x-brain-key"]).toBeUndefined();
+  });
+
+  it("callIngestNote omits the x-brain-key header when accessKey is empty", async () => {
+    const plugin = createHeaderTestPlugin("");
+    const fetchMock = mockFetchOk();
+
+    await plugin.callIngestNote("some content", "title", "folder/note.md");
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    const headers = requestInit.headers as Record<string, string>;
+    expect(headers["x-brain-key"]).toBeUndefined();
+  });
+});
+
+// ─── extractKeyFromUrl tests ─────────────────────────────────────────────────
+
+describe("extractKeyFromUrl", () => {
+  it("extracts the key and strips the query string entirely when key is the only param", () => {
+    const result = extractKeyFromUrl("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc");
+    expect(result.url).toBe("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp");
+    expect(result.key).toBe("abc");
+  });
+
+  it("preserves other query parameters", () => {
+    const result = extractKeyFromUrl("https://host/fn?foo=1&key=abc");
+    expect(result.url).toBe("https://host/fn?foo=1");
+    expect(result.key).toBe("abc");
+  });
+
+  it("returns the URL unchanged when there is no query string", () => {
+    const result = extractKeyFromUrl("https://host/fn");
+    expect(result.url).toBe("https://host/fn");
+    expect(result.key).toBe("");
+  });
+
+  it("returns the URL unchanged when the query string has no key param", () => {
+    const result = extractKeyFromUrl("https://host/fn?foo=1");
+    expect(result.url).toBe("https://host/fn?foo=1");
+    expect(result.key).toBe("");
+  });
+
+  it("decodes URL-encoded key values", () => {
+    const result = extractKeyFromUrl("https://host/fn?key=a%2Bb");
+    expect(result.key).toBe("a+b");
+  });
+});
+
+// ─── loadSettings key-in-URL migration tests ─────────────────────────────────
+
+describe("loadSettings migrates legacy ?key= URLs", () => {
+  function createMigrationTestPlugin(storedSettings: Record<string, unknown>): TerrestrialBrainPlugin {
+    const plugin = createTestPlugin();
+    // Real loadSettings must run — remove nothing (it lives on the prototype),
+    // just feed it stored data and let it write through the mocked saveData.
+    plugin.loadData = vi.fn().mockResolvedValue({ settings: storedSettings, syncedHashes: {} });
+    return plugin;
+  }
+
+  it("moves ?key= into accessKey and strips the URL on load", async () => {
+    const plugin = createMigrationTestPlugin({
+      tbEndpointUrl: "https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc",
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.accessKey).toBe("abc");
+    expect(plugin.settings.tbEndpointUrl).toBe("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp");
+  });
+
+  it("persists the migrated settings", async () => {
+    const plugin = createMigrationTestPlugin({
+      tbEndpointUrl: "https://host/fn?key=abc",
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          accessKey: "abc",
+          tbEndpointUrl: "https://host/fn",
+        }),
+      }),
+    );
+  });
+
+  it("keeps an already-set accessKey and still strips the URL", async () => {
+    const plugin = createMigrationTestPlugin({
+      tbEndpointUrl: "https://host/fn?key=urlkey",
+      accessKey: "fieldkey",
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.accessKey).toBe("fieldkey");
+    expect(plugin.settings.tbEndpointUrl).toBe("https://host/fn");
+  });
+
+  it("preserves unrelated query parameters while stripping the key", async () => {
+    const plugin = createMigrationTestPlugin({
+      tbEndpointUrl: "https://host/fn?foo=1&key=abc",
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.tbEndpointUrl).toBe("https://host/fn?foo=1");
+    expect(plugin.settings.accessKey).toBe("abc");
+  });
+
+  it("does not persist when there is nothing to migrate", async () => {
+    const plugin = createMigrationTestPlugin({
+      tbEndpointUrl: "https://host/fn",
+      accessKey: "already-set",
+    });
+
+    await plugin.loadSettings();
+
+    expect(plugin.settings.tbEndpointUrl).toBe("https://host/fn");
+    expect(plugin.settings.accessKey).toBe("already-set");
+    expect(plugin.saveData).not.toHaveBeenCalled();
+  });
+});
+
+// ─── isInsecureEndpoint tests ────────────────────────────────────────────────
+
+describe("isInsecureEndpoint", () => {
+  it("returns true for plain http to a non-local host", () => {
+    expect(isInsecureEndpoint("http://example.com/functions/v1/terrestrial-brain-mcp")).toBe(true);
+  });
+
+  it("returns true for plain http to a LAN address", () => {
+    expect(isInsecureEndpoint("http://192.168.1.10:54321/functions/v1/terrestrial-brain-mcp")).toBe(true);
+  });
+
+  it("returns false for http://localhost with a port", () => {
+    expect(isInsecureEndpoint("http://localhost:54321/functions/v1/terrestrial-brain-mcp")).toBe(false);
+  });
+
+  it("returns false for http://127.0.0.1 with a port", () => {
+    expect(isInsecureEndpoint("http://127.0.0.1:54321/functions/v1/terrestrial-brain-mcp")).toBe(false);
+  });
+
+  it("returns false for https endpoints", () => {
+    expect(isInsecureEndpoint("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp")).toBe(false);
+  });
+
+  it("returns false for an empty URL", () => {
+    expect(isInsecureEndpoint("")).toBe(false);
+  });
+
+  it("is case-insensitive about the scheme and host", () => {
+    expect(isInsecureEndpoint("HTTP://Example.com/fn")).toBe(true);
+    expect(isInsecureEndpoint("http://LOCALHOST:54321/fn")).toBe(false);
   });
 });

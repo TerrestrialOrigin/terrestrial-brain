@@ -54,13 +54,25 @@ Direct routes use the same `x-brain-key` authentication as MCP requests. Because
 
 ### Authentication
 
-GIVEN a request arrives at the MCP server
-WHEN the `x-brain-key` header or `?key=` query param matches `MCP_ACCESS_KEY`
-THEN the request is processed by the MCP transport
+#### Requirement: Constant-time access-key verification
 
-GIVEN the key is missing or does not match
-WHEN a request arrives
-THEN the server returns HTTP 401: `{"error": "Invalid or missing access key"}`
+The server SHALL verify the provided access key against `MCP_ACCESS_KEY` using a constant-time comparison (SHA-256 digest of both values, compared with a branch-free byte fold). The comparison SHALL NOT short-circuit on the first differing character and SHALL NOT leak the expected key's length.
+
+- **WHEN** a request arrives whose provided key exactly matches `MCP_ACCESS_KEY`
+- **THEN** the request is processed normally
+
+- **WHEN** a request arrives whose provided key differs from `MCP_ACCESS_KEY` (any difference — prefix match, wrong length, empty)
+- **THEN** the server returns HTTP 401 `{"error": "Invalid or missing access key"}`
+
+#### Requirement: Header-primary authentication with deprecated query-param fallback
+
+The server SHALL read the access key from the `x-brain-key` request header as the primary mechanism. When the header is absent, the server SHALL fall back to the `?key=` query parameter. The query-param mechanism is deprecated (retained only for MCP clients that cannot set custom headers). When both are present, the header takes precedence.
+
+- **WHEN** a request carries `x-brain-key: <valid key>` and no `?key=` parameter → authenticated
+- **WHEN** a request carries `?key=<valid key>` and no `x-brain-key` header → authenticated (deprecated path)
+- **WHEN** a request carries a valid `x-brain-key` header and an invalid `?key=` parameter → authenticated (the header value is the one compared)
+- **WHEN** a request carries an invalid `x-brain-key` header and a valid `?key=` parameter → HTTP 401 (the header, being present, is the value compared)
+- **WHEN** a request carries neither → HTTP 401 `{"error": "Invalid or missing access key"}`
 
 ---
 

@@ -42,6 +42,7 @@ interface ConfirmationResult {
 
 interface TBPluginSettings {
   tbEndpointUrl: string;
+  accessKey: string;
   excludeTag: string;
   syncDelayMinutes: number;
   pollIntervalMinutes: number;
@@ -50,6 +51,7 @@ interface TBPluginSettings {
 
 const DEFAULT_SETTINGS: TBPluginSettings = {
   tbEndpointUrl: "",
+  accessKey: "",
   excludeTag: "tbExclude",
   syncDelayMinutes: 5,
   pollIntervalMinutes: 10,
@@ -403,12 +405,21 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   // ─── Direct HTTP Call ───────────────────────────────────────────────────────
 
+  /** Request headers for brain calls — sends the access key via x-brain-key, never in the URL. */
+  private buildRequestHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.settings.accessKey) {
+      headers["x-brain-key"] = this.settings.accessKey;
+    }
+    return headers;
+  }
+
   async callHTTP(endpointName: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     const endpointUrl = buildEndpointUrl(this.settings.tbEndpointUrl, endpointName);
 
     const response = await fetch(endpointUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.buildRequestHeaders(),
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
 
@@ -431,7 +442,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
     const response = await fetch(ingestUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.buildRequestHeaders(),
       body: JSON.stringify({ content, title, note_id: noteId }),
     });
 
@@ -471,10 +482,35 @@ export default class TerrestrialBrainPlugin extends Plugin {
     delete (this.settings as unknown as Record<string, unknown>)["debounceMs"];
     delete (this.settings as unknown as Record<string, unknown>)["pollIntervalMs"];
 
+    // Migrate legacy key-in-URL config: move ?key= into the accessKey setting
+    const migratedKeyFromUrl = this.migrateKeyFromEndpointUrl();
+
     this.syncedHashes = data?.syncedHashes ?? {};
+
+    if (migratedKeyFromUrl) {
+      await this.saveData({
+        settings: this.settings,
+        syncedHashes: this.syncedHashes,
+      });
+    }
 
     // Prune hashes for files that no longer exist in the vault
     this.pruneStaleHashes();
+  }
+
+  /**
+   * Move a legacy `?key=` query parameter from the stored endpoint URL into the
+   * dedicated accessKey setting. Returns true when the URL was changed.
+   * An already-set accessKey wins; the URL is stripped either way.
+   */
+  private migrateKeyFromEndpointUrl(): boolean {
+    const { url, key } = extractKeyFromUrl(this.settings.tbEndpointUrl);
+    if (url === this.settings.tbEndpointUrl) return false;
+    this.settings.tbEndpointUrl = url;
+    if (key && !this.settings.accessKey) {
+      this.settings.accessKey = key;
+    }
+    return true;
   }
 
   /** Remove syncedHashes entries for files that no longer exist in the vault. */
@@ -661,16 +697,58 @@ class TBSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Terrestrial Brain MCP Endpoint URL")
-      .setDesc("Full URL including the ?key= parameter from your Supabase edge function.")
+      .setDesc(
+        "URL of your Supabase edge function, without the ?key= parameter. " +
+        "If you paste a URL that still contains ?key=, the key is moved into the Access key field automatically."
+      )
       .addText((text) =>
         text
-          .setPlaceholder("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=...")
+          .setPlaceholder("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp")
           .setValue(this.plugin.settings.tbEndpointUrl)
           .onChange(async (value) => {
-            this.plugin.settings.tbEndpointUrl = value.trim();
+            const { url, key } = extractKeyFromUrl(value.trim());
+            this.plugin.settings.tbEndpointUrl = url;
+            const keyWasExtracted = key !== "" && !this.plugin.settings.accessKey;
+            if (keyWasExtracted) {
+              this.plugin.settings.accessKey = key;
+            }
             await this.plugin.saveSettings();
+            updateInsecureWarning();
+            // Re-render so both fields show the migrated values
+            if (keyWasExtracted) {
+              this.display();
+            }
           })
       );
+
+    const insecureWarning = containerEl.createEl("p", {
+      text: "⚠️ This endpoint uses unencrypted http:// — your notes and access key would be sent in cleartext. Use https:// unless this is a local test server.",
+      cls: "setting-item-description tb-insecure-endpoint-warning",
+    });
+    insecureWarning.style.color = "var(--text-error)";
+    const updateInsecureWarning = () => {
+      insecureWarning.style.display = isInsecureEndpoint(this.plugin.settings.tbEndpointUrl)
+        ? ""
+        : "none";
+    };
+    updateInsecureWarning();
+
+    new Setting(containerEl)
+      .setName("Access key")
+      .setDesc(
+        "Your MCP access key. Sent as an x-brain-key request header — never as part of the URL. " +
+        "Stored unencrypted in this vault's plugin data. Required for syncing."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("your MCP access key")
+          .setValue(this.plugin.settings.accessKey)
+          .onChange(async (value) => {
+            this.plugin.settings.accessKey = value.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = "password";
+      });
 
     new Setting(containerEl)
       .setName("Exclude tag")
@@ -776,6 +854,49 @@ export function buildEndpointUrl(tbEndpointUrl: string, endpointName: string): s
   const basePath = tbEndpointUrl.substring(0, questionMarkIndex);
   const queryString = tbEndpointUrl.substring(questionMarkIndex);
   return `${basePath}/${endpointName}${queryString}`;
+}
+
+/**
+ * Extract a legacy `key` query parameter from an endpoint URL.
+ * Returns the URL without the `key` parameter (dropping the `?` entirely when
+ * no other parameters remain) and the extracted key (`""` when none present).
+ * String-based on purpose: the value may be a partial URL while the user is
+ * typing, which `new URL()` would throw on.
+ */
+export function extractKeyFromUrl(endpointUrl: string): { url: string; key: string } {
+  const questionMarkIndex = endpointUrl.indexOf("?");
+  if (questionMarkIndex === -1) {
+    return { url: endpointUrl, key: "" };
+  }
+  const basePath = endpointUrl.substring(0, questionMarkIndex);
+  const params = endpointUrl.substring(questionMarkIndex + 1).split("&");
+  const remainingParams: string[] = [];
+  let extractedKey = "";
+  for (const param of params) {
+    if (param.startsWith("key=")) {
+      extractedKey = decodeURIComponent(param.substring("key=".length));
+    } else if (param.length > 0) {
+      remainingParams.push(param);
+    }
+  }
+  const strippedUrl = remainingParams.length > 0
+    ? `${basePath}?${remainingParams.join("&")}`
+    : basePath;
+  return { url: strippedUrl, key: extractedKey };
+}
+
+/**
+ * True when the endpoint sends traffic in cleartext to a non-local host —
+ * plain http:// anywhere except localhost / 127.0.0.1.
+ */
+export function isInsecureEndpoint(endpointUrl: string): boolean {
+  if (!endpointUrl.toLowerCase().startsWith("http://")) {
+    return false;
+  }
+  const withoutScheme = endpointUrl.substring("http://".length);
+  const hostWithPort = withoutScheme.split(/[/?#]/)[0];
+  const host = hostWithPort.split(":")[0].toLowerCase();
+  return host !== "localhost" && host !== "127.0.0.1";
 }
 
 export async function generateCopyPath(
