@@ -16,7 +16,12 @@ import type {
   ExtractionResult,
   Extractor,
 } from "./pipeline.ts";
-import { cleanStrippedText, extractDueDate } from "./date-parser.ts";
+import {
+  cleanStrippedText,
+  extractDueDate,
+  getConfiguredTimeZone,
+  getZonedDate,
+} from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
@@ -443,10 +448,16 @@ async function inferTaskEnrichments(
   tasks: { index: number; text: string; sectionHeading: string | null }[],
   knownPeople: { id: string; name: string }[],
   referenceDate: Date = new Date(),
+  timeZone: string = "UTC",
 ): Promise<{ ok: boolean; enrichments: TaskEnrichment[] }> {
   if (tasks.length === 0) return { ok: true, enrichments: [] };
 
-  const referenceDateStr = referenceDate.toISOString().split("T")[0];
+  // Reference "today" for the LLM must be the user-zone calendar date, matching
+  // the regex path — otherwise the model resolves relatives off the UTC day.
+  const today = getZonedDate(referenceDate, timeZone);
+  const referenceDateStr = `${today.year}-${
+    String(today.month + 1).padStart(2, "0")
+  }-${String(today.day).padStart(2, "0")}`;
 
   const peopleList = knownPeople.length > 0
     ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join(
@@ -569,6 +580,12 @@ export class TaskExtractor implements Extractor {
       return { referenceKey: this.referenceKey, ids: [] };
     }
 
+    // Relative dates ("today"/"tomorrow"/weekday names) resolve against this
+    // instant, interpreted in the configured user timezone (default UTC) rather
+    // than the server's UTC clock. Read once per run — see fix-plan Step 9 / C7.
+    const userTimeZone = getConfiguredTimeZone();
+    const referenceDate = new Date();
+
     const allProjects = [
       ...context.knownProjects,
       ...context.newlyCreatedProjects,
@@ -673,7 +690,7 @@ export class TaskExtractor implements Extractor {
       let needsAIPerson = true;
 
       // Fast path: regex date extraction
-      const dateResult = extractDueDate(text);
+      const dateResult = extractDueDate(text, referenceDate, userTimeZone);
       if (dateResult.dueDate) {
         dueDateByIndex.set(index, dateResult.dueDate);
         text = dateResult.cleanedText;
@@ -729,6 +746,8 @@ export class TaskExtractor implements Extractor {
       const { ok, enrichments } = await inferTaskEnrichments(
         aiCandidates,
         uniquePeople,
+        referenceDate,
+        userTimeZone,
       );
       if (ok) {
         enrichmentRan = true;

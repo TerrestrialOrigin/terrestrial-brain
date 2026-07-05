@@ -2,29 +2,54 @@
  * Date extraction from checkbox text.
  *
  * Parses common date patterns (ISO, natural, relative) and strips matched
- * fragments from content. Includes LLM batch fallback for ambiguous cases.
+ * fragments from content. Relative dates ("today"/"tomorrow"/weekday names)
+ * and omitted-year inference resolve against the current calendar date in a
+ * configured user timezone (see `getConfiguredTimeZone`), not the server's
+ * UTC clock. Resolved dates are stored as midnight-UTC of the calendar date.
  */
-
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY")!;
 
 // ---------------------------------------------------------------------------
 // Month / day lookup tables
 // ---------------------------------------------------------------------------
 
 const MONTH_FULL: Record<string, number> = {
-  january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-  july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
 };
 
 const MONTH_SHORT: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
 };
 
 const DAY_INDEX: Record<string, number> = {
-  sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
-  thursday: 4, friday: 5, saturday: 6,
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
 };
 
 // ---------------------------------------------------------------------------
@@ -34,6 +59,86 @@ const DAY_INDEX: Record<string, number> = {
 export interface DateExtractionResult {
   cleanedText: string;
   dueDate: string | null;
+}
+
+/** The current calendar date, as seen in a particular timezone. */
+export interface ZonedDate {
+  year: number;
+  /** 0-based month, matching `Date.prototype.getMonth`. */
+  month: number;
+  day: number;
+  /** 0 = Sunday, matching `Date.prototype.getDay`. */
+  weekday: number;
+}
+
+// ---------------------------------------------------------------------------
+// Timezone-aware "today"
+// ---------------------------------------------------------------------------
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+/**
+ * Returns the wall-clock calendar date of `referenceDate` as seen in `timeZone`
+ * (an IANA zone name). Relative-date resolution uses this so "today"/"tomorrow"
+ * resolve to the user's calendar day rather than the server's UTC day.
+ *
+ * An invalid/unknown timezone throws inside `Intl.DateTimeFormat`; we catch it,
+ * warn once, and fall back to the UTC calendar date so extraction never fails.
+ */
+export function getZonedDate(referenceDate: Date, timeZone: string): ZonedDate {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      weekday: "short",
+    }).formatToParts(referenceDate);
+    const partValue = (type: string): string =>
+      parts.find((part) => part.type === type)?.value ?? "";
+    return {
+      year: parseInt(partValue("year"), 10),
+      month: parseInt(partValue("month"), 10) - 1,
+      day: parseInt(partValue("day"), 10),
+      weekday: WEEKDAY_INDEX[partValue("weekday")] ?? referenceDate.getUTCDay(),
+    };
+  } catch (error) {
+    console.warn(
+      `Invalid timezone "${timeZone}"; falling back to UTC for date resolution. ${
+        (error as Error).message
+      }`,
+    );
+    return {
+      year: referenceDate.getUTCFullYear(),
+      month: referenceDate.getUTCMonth(),
+      day: referenceDate.getUTCDate(),
+      weekday: referenceDate.getUTCDay(),
+    };
+  }
+}
+
+/** Reads the configured user timezone (IANA name), defaulting to UTC. */
+export function getConfiguredTimeZone(): string {
+  return Deno.env.get("TB_USER_TIMEZONE") ?? "UTC";
+}
+
+/** Adds `days` to a zoned calendar date, returning midnight-UTC ISO of the result. */
+function addDaysToZoned(today: ZonedDate, days: number): string | null {
+  const anchor = new Date(Date.UTC(today.year, today.month, today.day));
+  anchor.setUTCDate(anchor.getUTCDate() + days);
+  return buildISODate(
+    anchor.getUTCFullYear(),
+    anchor.getUTCMonth(),
+    anchor.getUTCDate(),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -58,32 +163,24 @@ function buildISODate(year: number, month: number, day: number): string | null {
   return date.toISOString();
 }
 
-function inferYear(month: number, day: number, referenceDate: Date): number {
-  const currentYear = referenceDate.getUTCFullYear();
-  const currentMonth = referenceDate.getUTCMonth();
-  const currentDay = referenceDate.getUTCDate();
-
-  if (month < currentMonth || (month === currentMonth && day < currentDay)) {
-    return currentYear + 1;
+function inferYear(month: number, day: number, today: ZonedDate): number {
+  if (month < today.month || (month === today.month && day < today.day)) {
+    return today.year + 1;
   }
-  return currentYear;
+  return today.year;
 }
 
-function resolveNextDayOfWeek(dayName: string, referenceDate: Date): string | null {
+function resolveNextDayOfWeek(
+  dayName: string,
+  today: ZonedDate,
+): string | null {
   const targetDay = DAY_INDEX[dayName.toLowerCase()];
   if (targetDay === undefined) return null;
 
-  const currentDay = referenceDate.getUTCDay();
-  let daysAhead = targetDay - currentDay;
+  let daysAhead = targetDay - today.weekday;
   if (daysAhead <= 0) daysAhead += 7;
 
-  const result = new Date(referenceDate);
-  result.setUTCDate(result.getUTCDate() + daysAhead);
-  return buildISODate(
-    result.getUTCFullYear(),
-    result.getUTCMonth(),
-    result.getUTCDate(),
-  );
+  return addDaysToZoned(today, daysAhead);
 }
 
 const ORDINAL_SUFFIX = /(?:st|nd|rd|th)/i;
@@ -92,29 +189,33 @@ function stripOrdinal(dayStr: string): number {
   return parseInt(dayStr.replace(ORDINAL_SUFFIX, ""), 10);
 }
 
-function parseNaturalDate(fragment: string, referenceDate: Date): string | null {
+function parseNaturalDate(fragment: string, today: ZonedDate): string | null {
   // "Month Day(, Year)" — e.g. "March 30", "March 30th", "March 30, 2026"
-  const monthFirst = fragment.match(/([A-Za-z]+)\s+(\d{1,2}(?:st|nd|rd|th)?)(?:,?\s+(\d{4}))?/i);
+  const monthFirst = fragment.match(
+    /([A-Za-z]+)\s+(\d{1,2}(?:st|nd|rd|th)?)(?:,?\s+(\d{4}))?/i,
+  );
   if (monthFirst) {
     const month = monthNameToNumber(monthFirst[1]);
     if (month !== null) {
       const day = stripOrdinal(monthFirst[2]);
       const year = monthFirst[3]
         ? parseInt(monthFirst[3], 10)
-        : inferYear(month, day, referenceDate);
+        : inferYear(month, day, today);
       return buildISODate(year, month, day);
     }
   }
 
   // "Day Month(, Year)" — e.g. "30 March", "30th March 2026"
-  const dayFirst = fragment.match(/(\d{1,2}(?:st|nd|rd|th)?)\s+([A-Za-z]+)(?:,?\s+(\d{4}))?/i);
+  const dayFirst = fragment.match(
+    /(\d{1,2}(?:st|nd|rd|th)?)\s+([A-Za-z]+)(?:,?\s+(\d{4}))?/i,
+  );
   if (dayFirst) {
     const month = monthNameToNumber(dayFirst[2]);
     if (month !== null) {
       const day = stripOrdinal(dayFirst[1]);
       const year = dayFirst[3]
         ? parseInt(dayFirst[3], 10)
-        : inferYear(month, day, referenceDate);
+        : inferYear(month, day, today);
       return buildISODate(year, month, day);
     }
   }
@@ -149,7 +250,7 @@ const dayNumber = "\\d{1,2}(?:st|nd|rd|th)?";
 
 interface DatePattern {
   regex: RegExp;
-  parse: (match: RegExpMatchArray, referenceDate: Date) => string | null;
+  parse: (match: RegExpMatchArray, today: ZonedDate) => string | null;
 }
 
 const DATE_PATTERNS: DatePattern[] = [
@@ -165,9 +266,13 @@ const DATE_PATTERNS: DatePattern[] = [
       return buildISODate(parts[0], parts[1] - 1, parts[2]);
     },
   },
-  // 2. Bare ISO date: "2026-04-01"
+  // 2. Bare ISO date: "2026-04-01".
+  //    The look-arounds require the date to be a standalone token — not flanked
+  //    by word chars, "/", ":", ".", or "-". This prevents matching dates
+  //    embedded in URLs (".../2026-04-01/..."), timestamps ("2026-04-01T..."),
+  //    or version strings ("v1.2026-04-01") and stripping them from task text.
   {
-    regex: /(\d{4}[-/]\d{1,2}[-/]\d{1,2})/,
+    regex: /(?<![\w/:.\-])(\d{4}[-/]\d{1,2}[-/]\d{1,2})(?![\w/:.\-])/,
     parse: (match) => {
       const normalized = match[1].replace(/\//g, "-");
       const parts = normalized.split("-").map(Number);
@@ -180,7 +285,7 @@ const DATE_PATTERNS: DatePattern[] = [
       `\\(?\\s*${markerPattern}\\s*:?\\s*((?:${monthPattern})\\s+${dayNumber}(?:,?\\s+\\d{4})?)\\s*\\)?`,
       "i",
     ),
-    parse: (match, ref) => parseNaturalDate(match[1], ref),
+    parse: (match, today) => parseNaturalDate(match[1], today),
   },
   // 4. Marker + "Day Month(, Year)": "(deadline: 5th August)" or "due 30 March"
   {
@@ -188,28 +293,26 @@ const DATE_PATTERNS: DatePattern[] = [
       `\\(?\\s*${markerPattern}\\s*:?\\s*(${dayNumber}\\s+(?:${monthPattern})(?:,?\\s+\\d{4})?)\\s*\\)?`,
       "i",
     ),
-    parse: (match, ref) => parseNaturalDate(match[1], ref),
+    parse: (match, today) => parseNaturalDate(match[1], today),
   },
   // 5. Marker + "tomorrow": "(by tomorrow)" or "by tomorrow"
   {
-    regex: new RegExp(`\\(?\\s*${markerPattern}\\s*:?\\s*(tomorrow)\\s*\\)?`, "i"),
-    parse: (_match, ref) => {
-      const tomorrow = new Date(ref);
-      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-      return buildISODate(
-        tomorrow.getUTCFullYear(),
-        tomorrow.getUTCMonth(),
-        tomorrow.getUTCDate(),
-      );
-    },
+    regex: new RegExp(
+      `\\(?\\s*${markerPattern}\\s*:?\\s*(tomorrow)\\s*\\)?`,
+      "i",
+    ),
+    parse: (_match, today) => addDaysToZoned(today, 1),
   },
-  // 6. Marker + day name: "(by Friday)", "due next Monday"
+  // 6. Marker + day name: "(by Friday)", "due next Monday".
+  //    "next <weekday>" resolves identically to a bare "<weekday>": the nearest
+  //    upcoming occurrence. English "next Monday" is ambiguous, so the optional
+  //    "next" is accepted but not given distinct "+1 week" semantics.
   {
     regex: new RegExp(
       `\\(?\\s*${markerPattern}\\s*:?\\s*(?:next\\s+)?(${dayNamePattern})\\s*\\)?`,
       "i",
     ),
-    parse: (match, ref) => resolveNextDayOfWeek(match[1], ref),
+    parse: (match, today) => resolveNextDayOfWeek(match[1], today),
   },
 ];
 
@@ -220,11 +323,13 @@ const DATE_PATTERNS: DatePattern[] = [
 export function extractDueDate(
   text: string,
   referenceDate: Date = new Date(),
+  timeZone: string = "UTC",
 ): DateExtractionResult {
+  const today = getZonedDate(referenceDate, timeZone);
   for (const { regex, parse } of DATE_PATTERNS) {
     const match = text.match(regex);
     if (match) {
-      const dueDate = parse(match, referenceDate);
+      const dueDate = parse(match, today);
       if (dueDate) {
         const cleanedText = cleanStrippedText(text.replace(match[0], ""));
         return { cleanedText, dueDate };
@@ -232,94 +337,4 @@ export function extractDueDate(
     }
   }
   return { cleanedText: text, dueDate: null };
-}
-
-// ---------------------------------------------------------------------------
-// Heuristic: does text contain date-like words?
-// ---------------------------------------------------------------------------
-
-const DATE_LIKE_WORDS = new RegExp(
-  `\\b(${monthPattern}|${dayNamePattern}|tomorrow|deadline|due date|next week|end of (?:week|month|quarter))\\b`,
-  "i",
-);
-
-export function containsDateLikeWords(text: string): boolean {
-  return DATE_LIKE_WORDS.test(text);
-}
-
-// ---------------------------------------------------------------------------
-// LLM batch fallback for ambiguous dates
-// ---------------------------------------------------------------------------
-
-export interface LLMDateResult {
-  taskIndex: number;
-  dueDate: string;
-  cleanedText: string;
-}
-
-export async function inferDatesFromContent(
-  texts: { index: number; text: string }[],
-  referenceDate: Date = new Date(),
-): Promise<LLMDateResult[]> {
-  if (texts.length === 0) return [];
-
-  const taskList = texts
-    .map((task) => `${task.index}: "${task.text}"`)
-    .join("\n");
-
-  const referenceDateStr = referenceDate.toISOString().split("T")[0];
-
-  try {
-    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-4o-mini",
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `You extract due dates from task descriptions. Today's date is ${referenceDateStr}. For each task that contains a date or deadline reference, return the resolved ISO date and the task text with the date fragment removed. If a task has no date, omit it.
-
-Return JSON: {"dates": [{"task_index": 0, "due_date": "2026-04-01T00:00:00.000Z", "cleaned_text": "task without date part"}, ...]}`,
-          },
-          {
-            role: "user",
-            content: `TASKS:\n${taskList}`,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      console.error(`Date inference LLM call failed: ${response.status} ${errorText}`);
-      return [];
-    }
-
-    const data = await response.json();
-    const parsed = JSON.parse(data.choices[0].message.content);
-
-    if (!Array.isArray(parsed.dates)) return [];
-
-    return parsed.dates
-      .filter(
-        (entry: { task_index?: unknown; due_date?: unknown; cleaned_text?: unknown }) =>
-          typeof entry.task_index === "number" &&
-          typeof entry.due_date === "string" &&
-          typeof entry.cleaned_text === "string" &&
-          !isNaN(new Date(entry.due_date).getTime()),
-      )
-      .map((entry: { task_index: number; due_date: string; cleaned_text: string }) => ({
-        taskIndex: entry.task_index,
-        dueDate: new Date(entry.due_date).toISOString(),
-        cleanedText: entry.cleaned_text,
-      }));
-  } catch (error) {
-    console.error(`Date inference LLM error: ${(error as Error).message}`);
-    return [];
-  }
 }
