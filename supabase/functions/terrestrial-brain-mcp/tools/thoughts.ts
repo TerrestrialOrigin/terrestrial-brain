@@ -1056,8 +1056,15 @@ Return ONLY valid JSON in this exact structure:
 
     for (const id of (plan.delete || [])) {
       ops.push((async () => {
-        const { error } = await supabase.from("thoughts").delete().eq("id", id);
-        if (error) throw new Error(`Delete failed for ${id}: ${error.message}`);
+        // Soft-archive, never hard-delete: an LLM-produced (and possibly
+        // hallucinated) ID must never permanently destroy captured knowledge.
+        // Archived thoughts stay retrievable and are excluded from the next
+        // reconciliation fetch (which filters archived_at IS NULL).
+        const { error } = await supabase
+          .from("thoughts")
+          .update({ archived_at: new Date().toISOString() })
+          .eq("id", id);
+        if (error) throw new Error(`Archive failed for ${id}: ${error.message}`);
         deleted++;
       })());
     }
