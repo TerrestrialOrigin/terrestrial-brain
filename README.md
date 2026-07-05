@@ -414,6 +414,7 @@ See [docs/upgrade.md](docs/upgrade.md) for detailed upgrade instructions and saf
 |---|---|---|
 | `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-brain-key` header; `?key=` is deprecated). Use a strong random string. |
 | `OPENROUTER_API_KEY` | Yes | Used for LLM calls (metadata extraction, embeddings). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
+| `TB_USER_TIMEZONE` | No | IANA timezone name (e.g. `America/New_York`, `Europe/Zurich`) used to resolve relative task due-dates ("today", "tomorrow", weekday names) against your local calendar day instead of UTC. Defaults to `UTC`; an invalid value falls back to `UTC` with a warning. |
 
 ---
 
