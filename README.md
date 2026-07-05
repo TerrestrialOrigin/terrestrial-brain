@@ -63,26 +63,25 @@ terrestrial-brain/
 │   ├── seed.sql                  #   Seed data for local development
 │   ├── migrations/               #   Database migrations (PostgreSQL, 22 files)
 │   └── functions/                #   Supabase Edge Functions (Deno)
-│       ├── terrestrial-brain-mcp/    # Main MCP server
-│       │   ├── index.ts              #   Hono + MCP server entry
-│       │   ├── helpers.ts            #   OpenRouter API calls
-│       │   ├── parser.ts             #   Markdown structural parser
-│       │   ├── validators.ts         #   Zod schemas
-│       │   ├── logger.ts             #   Function call audit logging
-│       │   ├── extractors/           #   LLM-based content extractors
-│       │   │   ├── pipeline.ts       #     Orchestrates all extractors
-│       │   │   ├── project-extractor.ts
-│       │   │   ├── task-extractor.ts
-│       │   │   └── people-extractor.ts
-│       │   └── tools/                #   MCP tool implementations
-│       │       ├── thoughts.ts       #     search, list, capture, stats, usefulness
-│       │       ├── projects.ts       #     CRUD + archive for projects
-│       │       ├── tasks.ts          #     CRUD + archive for tasks
-│       │       ├── people.ts         #     CRUD + archive for people
-│       │       ├── documents.ts      #     Long-form document storage
-│       │       ├── ai_output.ts      #     AI output + batch task creation
-│       │       └── queries.ts        #     Cross-table composite queries
-│       └── ingest-thought/       # Secondary edge function (Slack integration)
+│       └── terrestrial-brain-mcp/    # Main MCP server
+│           ├── index.ts              #   Hono + MCP server entry
+│           ├── helpers.ts            #   OpenRouter API calls
+│           ├── parser.ts             #   Markdown structural parser
+│           ├── validators.ts         #   Zod schemas
+│           ├── logger.ts             #   Function call audit logging
+│           ├── extractors/           #   LLM-based content extractors
+│           │   ├── pipeline.ts       #     Orchestrates all extractors
+│           │   ├── project-extractor.ts
+│           │   ├── task-extractor.ts
+│           │   └── people-extractor.ts
+│           └── tools/                #   MCP tool implementations
+│               ├── thoughts.ts       #     search, list, capture, stats, usefulness
+│               ├── projects.ts       #     CRUD + archive for projects
+│               ├── tasks.ts          #     CRUD + archive for tasks
+│               ├── people.ts         #     CRUD + archive for people
+│               ├── documents.ts      #     Long-form document storage
+│               ├── ai_output.ts      #     AI output + batch task creation
+│               └── queries.ts        #     Cross-table composite queries
 ├── tests/                        # Node.js integration tests (Vitest)
 │   └── integration/
 ├── test-vault/                   # Sample Obsidian vault for development
@@ -211,25 +210,10 @@ npx supabase secrets set \
   --project-ref <your-project-ref>
 ```
 
-Optional -- if you want Slack integration:
-
-```bash
-npx supabase secrets set \
-  SLACK_BOT_TOKEN=<your-slack-bot-token> \
-  SLACK_CAPTURE_CHANNEL=<your-slack-channel-id> \
-  --project-ref <your-project-ref>
-```
-
 #### 5d. Deploy edge functions
 
 ```bash
 npx supabase functions deploy terrestrial-brain-mcp --project-ref <your-project-ref>
-```
-
-If you want the Slack integration too:
-
-```bash
-npx supabase functions deploy ingest-thought --project-ref <your-project-ref>
 ```
 
 #### 5e. Verify the deployment
@@ -415,8 +399,6 @@ See [docs/upgrade.md](docs/upgrade.md) for detailed upgrade instructions and saf
 |---|---|---|
 | `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server. Use a strong random string. |
 | `OPENROUTER_API_KEY` | Yes | Used for LLM calls (metadata extraction, embeddings). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
-| `SLACK_BOT_TOKEN` | No | Only needed for Slack integration (`ingest-thought` function). |
-| `SLACK_CAPTURE_CHANNEL` | No | Only needed for Slack integration. The Slack channel ID to listen on. |
 
 ---
 

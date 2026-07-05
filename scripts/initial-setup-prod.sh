@@ -65,8 +65,6 @@ echo "  The following secrets are required:"
 echo ""
 echo "    OPENROUTER_API_KEY    — API key from https://openrouter.ai"
 echo "    MCP_ACCESS_KEY        — Shared secret for authenticating MCP requests"
-echo "    SLACK_BOT_TOKEN       — Slack bot token (for ingest-thought function)"
-echo "    SLACK_CAPTURE_CHANNEL — Slack channel ID for captures"
 echo ""
 echo "  Note: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are automatically"
 echo "  available to edge functions — you do not need to set them."
@@ -78,17 +76,8 @@ REPLY=${REPLY:-Y}
 if [[ "$REPLY" =~ ^[Yy]$ ]]; then
   read -rp "  OPENROUTER_API_KEY: " OPENROUTER_API_KEY
   read -rp "  MCP_ACCESS_KEY: " MCP_ACCESS_KEY
-  read -rp "  SLACK_BOT_TOKEN (blank to skip): " SLACK_BOT_TOKEN
-  read -rp "  SLACK_CAPTURE_CHANNEL (blank to skip): " SLACK_CAPTURE_CHANNEL
 
   SECRETS="OPENROUTER_API_KEY=$OPENROUTER_API_KEY MCP_ACCESS_KEY=$MCP_ACCESS_KEY"
-
-  if [ -n "$SLACK_BOT_TOKEN" ]; then
-    SECRETS="$SECRETS SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN"
-  fi
-  if [ -n "$SLACK_CAPTURE_CHANNEL" ]; then
-    SECRETS="$SECRETS SLACK_CAPTURE_CHANNEL=$SLACK_CAPTURE_CHANNEL"
-  fi
 
   npx supabase secrets set $SECRETS --project-ref "$PROJECT_REF"
   echo ""
@@ -114,7 +103,6 @@ echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "  MCP endpoint: https://$PROJECT_REF.supabase.co/functions/v1/terrestrial-brain-mcp"
-echo "  Ingest endpoint: https://$PROJECT_REF.supabase.co/functions/v1/ingest-thought"
 echo ""
 echo "  Next steps:"
 echo "    - Configure your Obsidian plugin to point at the MCP endpoint"

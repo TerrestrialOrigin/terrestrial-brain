@@ -47,17 +47,6 @@ The system SHALL log every HTTP endpoint invocation to `function_call_logs` befo
 - **THEN** the handler still executes and returns its normal response
 - **AND** the logging failure is written to console
 
-### Requirement: Ingest-thought function invocations are logged
-The system SHALL log each Slack message processing in the `ingest-thought` Edge Function to `function_call_logs` with `function_name = 'ingest-thought'`, `function_type = 'http'`, and the message content as input.
-
-#### Scenario: Slack message processing is logged
-- **WHEN** the `ingest-thought` function processes a Slack message
-- **THEN** a row is inserted into `function_call_logs` with `function_name = 'ingest-thought'` and the message text as input
-
-#### Scenario: Failed Slack processing logs the error
-- **WHEN** the `ingest-thought` function encounters an error during processing
-- **THEN** `error_details` is updated with the error message
-
 ### Requirement: Client IP address is extracted from request headers
 The system SHALL extract the client IP address from request headers in priority order: `x-forwarded-for` (first IP), `x-real-ip`, `cf-connecting-ip`. If none are present, `ip_address` SHALL be null.
 

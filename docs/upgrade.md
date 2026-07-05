@@ -27,10 +27,18 @@ Redeploy any functions that have changed:
 
 ```bash
 npx supabase functions deploy terrestrial-brain-mcp --project-ref <your-project-ref>
-npx supabase functions deploy ingest-thought --project-ref <your-project-ref>
 ```
 
 This replaces the function code. It does not affect secrets or data.
+
+> **One-time cleanup (Slack integration removal):** If your instance was set up before the Slack integration was removed, delete the retired function and its secrets:
+>
+> ```bash
+> npx supabase functions delete ingest-thought --project-ref <your-project-ref>
+> npx supabase secrets unset SLACK_BOT_TOKEN SLACK_CAPTURE_CHANNEL --project-ref <your-project-ref>
+> ```
+>
+> Optionally deactivate or delete the Slack app in your Slack workspace as well.
 
 ## Step 3: Set any new secrets (if needed)
 
