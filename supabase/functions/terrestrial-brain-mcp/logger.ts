@@ -1,17 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
-
-// ─── Request-scoped IP address ──────────────────────────────────────────────
-// Set by index.ts before dispatching to MCP transport, read by withMcpLogging.
-
-let currentRequestIpAddress: string | null = null;
-
-export function setCurrentRequestIp(ipAddress: string | null): void {
-  currentRequestIpAddress = ipAddress;
-}
-
-export function getCurrentRequestIp(): string | null {
-  return currentRequestIpAddress;
-}
+import { getRequestIp } from "./requestContext.ts";
 
 // ─── IP extraction from HTTP headers ────────────────────────────────────────
 
@@ -143,7 +131,7 @@ export function withMcpLogging(
   // deno-lint-ignore no-explicit-any
   return async (...args: any[]): Promise<McpToolResult> => {
     const params = args[0] || {};
-    const ipAddress = getCurrentRequestIp();
+    const ipAddress = getRequestIp();
     const logId = await logger.logCall(toolName, "mcp", params, ipAddress);
 
     const result = await handler(...args);

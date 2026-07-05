@@ -19,8 +19,10 @@ import {
 import { register as registerQueries } from "./tools/queries.ts";
 import { register as registerPeople } from "./tools/people.ts";
 import { register as registerDocuments } from "./tools/documents.ts";
-import { createFunctionCallLogger, extractIpAddress, setCurrentRequestIp } from "./logger.ts";
+import { createFunctionCallLogger, extractIpAddress, FunctionCallLogger } from "./logger.ts";
+import { runWithRequestContext } from "./requestContext.ts";
 import { requireEnv } from "./env.ts";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 // Composition-root secrets: validated at cold start so a missing var fails the
 // boot loudly (named in the error) rather than surfacing later as broken auth or
@@ -32,20 +34,33 @@ const MCP_ACCESS_KEY = requireEnv("MCP_ACCESS_KEY");
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const logger = createFunctionCallLogger(supabase);
 
-// ─── MCP Server ───────────────────────────────────────────────────────────────
+// ─── MCP Server factory ─────────────────────────────────────────────────────
+// A fresh server is built per request (see the MCP branch below), following the
+// MCP SDK's stateless-transport guidance: one server + transport per request
+// rather than a single shared instance connected on every call. Tool
+// registration lives here so no request mutates state shared with a concurrent
+// request. `supabase` and `logger` are stateless singletons, so per-request
+// construction adds only in-memory wiring, not a DB reconnect.
 
-const server = new McpServer({
-  name: "open-brain",
-  version: "1.0.0",
-});
+function createMcpServer(
+  supabaseClient: SupabaseClient,
+  callLogger: FunctionCallLogger,
+): McpServer {
+  const server = new McpServer({
+    name: "open-brain",
+    version: "1.0.0",
+  });
 
-registerThoughts(server, supabase, logger);
-registerProjects(server, supabase, logger);
-registerTasks(server, supabase, logger);
-registerAIOutput(server, supabase, logger);
-registerQueries(server, supabase, logger);
-registerPeople(server, supabase, logger);
-registerDocuments(server, supabase, logger);
+  registerThoughts(server, supabaseClient, callLogger);
+  registerProjects(server, supabaseClient, callLogger);
+  registerTasks(server, supabaseClient, callLogger);
+  registerAIOutput(server, supabaseClient, callLogger);
+  registerQueries(server, supabaseClient, callLogger);
+  registerPeople(server, supabaseClient, callLogger);
+  registerDocuments(server, supabaseClient, callLogger);
+
+  return server;
+}
 
 // ─── Hono App with Auth Check ─────────────────────────────────────────────────
 
@@ -228,11 +243,15 @@ app.all("*", async (c) => {
     }
   }
 
-  // MCP transport for all other requests
-  setCurrentRequestIp(ipAddress);
-  const transport = new StreamableHTTPTransport();
-  await server.connect(transport);
-  return transport.handleRequest(c);
+  // MCP transport for all other requests. The dispatch runs inside a per-request
+  // context so tool handlers read THIS request's IP (finding C8), and a fresh
+  // server + transport are built per request per the SDK's stateless pattern.
+  return runWithRequestContext({ ipAddress }, async () => {
+    const server = createMcpServer(supabase, logger);
+    const transport = new StreamableHTTPTransport();
+    await server.connect(transport);
+    return transport.handleRequest(c);
+  });
 });
 
 Deno.serve(app.fetch);
