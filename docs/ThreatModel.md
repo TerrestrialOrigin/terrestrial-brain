@@ -4,8 +4,8 @@ Living document. Each OpenSpec change with a security dimension adds or updates 
 
 ## Trust model (current)
 
-- The Supabase **service-role key** is held only by the edge functions (`terrestrial-brain-mcp`, `ingest-thought`). All legitimate data access flows through it.
-- The edge functions authenticate callers with a single shared secret (`MCP_ACCESS_KEY`).
+- The Supabase **service-role key** is held only by the `terrestrial-brain-mcp` edge function. All legitimate data access flows through it. (The former `ingest-thought` Slack function also held it; that function was removed in change `remove-slack-integration`.)
+- The edge function authenticates callers with a single shared secret (`MCP_ACCESS_KEY`).
 - The **anon (publishable) key** is public by definition and must grant **no** access to any brain data or privileged function. This is enforced at two layers:
   1. **Privileges**: `anon`/`authenticated` hold no table DML grants and no function `EXECUTE` in the `public` schema (migration `20260704000001_fix_db_security_policies.sql`).
   2. **RLS**: every table has row level security enabled with policies scoped `for all to service_role`.

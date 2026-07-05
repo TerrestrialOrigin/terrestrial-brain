@@ -35,25 +35,16 @@ The edge functions need these environment variables. Set them as secrets on the 
 npx supabase secrets set \
   MCP_ACCESS_KEY=<your-mcp-access-key> \
   OPENROUTER_API_KEY=<your-openrouter-api-key> \
-  SLACK_BOT_TOKEN=<your-slack-bot-token> \
-  SLACK_CAPTURE_CHANNEL=<your-slack-channel-id> \
   --project-ref <your-project-ref>
 ```
 
 - `MCP_ACCESS_KEY` — authenticates clients calling the MCP server (choose a strong random string)
 - `OPENROUTER_API_KEY` — used by the MCP server for embeddings and metadata extraction
-- `SLACK_BOT_TOKEN` — (only needed for `ingest-thought`) your Slack app's bot token
-- `SLACK_CAPTURE_CHANNEL` — (only needed for `ingest-thought`) the Slack channel ID to listen on
-
-If you're not using the Slack integration, you can skip `SLACK_BOT_TOKEN` and `SLACK_CAPTURE_CHANNEL`, but you still need `MCP_ACCESS_KEY` and `OPENROUTER_API_KEY`.
 
 ## Step 4: Deploy edge functions
 
-Deploy both functions:
-
 ```bash
 npx supabase functions deploy terrestrial-brain-mcp --project-ref <your-project-ref>
-npx supabase functions deploy ingest-thought --project-ref <your-project-ref>
 ```
 
 ## Step 5: Import existing data (optional)
@@ -110,7 +101,7 @@ rm -rf /tmp/thoughts-split
 
 1. Open the Supabase dashboard and check:
    - **Table Editor** — tables exist: `thoughts`, `projects`, `tasks`, `people`, `note_snapshots`, `ai_output`
-   - **Edge Functions** — both `terrestrial-brain-mcp` and `ingest-thought` are listed and active
+   - **Edge Functions** — `terrestrial-brain-mcp` is listed and active
 2. Test the MCP endpoint:
    ```bash
    curl -X POST https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp \
