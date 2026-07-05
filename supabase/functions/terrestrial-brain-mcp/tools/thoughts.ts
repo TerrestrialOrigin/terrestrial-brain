@@ -15,9 +15,9 @@ import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
-import { requireEnv } from "../env.ts";
+import type { AiProvider } from "../ai/ai-provider.ts";
+import { AiProviderParseError } from "../ai/ai-provider.ts";
 
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const USEFULNESS_REMINDER_LINES = [
   "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
   "1. Call record_useful_thoughts with IDs that contributed (or empty array).",
@@ -60,6 +60,7 @@ export function register(
   server: McpServer,
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  aiProvider: AiProvider,
 ) {
   // Tool 1: Semantic Search
   server.registerTool(
@@ -92,7 +93,7 @@ export function register(
     withMcpLogging(
       "search_thoughts",
       async ({ query, limit, threshold, author, reliability }) => {
-        const qEmb = await getEmbedding(query);
+        const qEmb = await getEmbedding(aiProvider, query);
         const { data, error } = await supabase.rpc("match_thoughts", {
           query_embedding: qEmb,
           match_threshold: threshold,
@@ -584,6 +585,7 @@ export function register(
               new TaskExtractor(),
             ],
             supabase,
+            aiProvider,
           );
         } catch (pipelineError) {
           console.error(
@@ -608,8 +610,8 @@ export function register(
         }
 
         const [embedding, metadata] = await Promise.all([
-          getEmbedding(content),
-          extractMetadata(content),
+          getEmbedding(aiProvider, content),
+          extractMetadata(aiProvider, content),
         ]);
 
         const { error } = await supabase.from("thoughts").insert({
@@ -736,8 +738,8 @@ export function register(
         if (content !== undefined) {
           // Content update path: regenerate embedding + metadata
           const [embedding, newMetadata] = await Promise.all([
-            getEmbedding(content),
-            extractMetadata(content),
+            getEmbedding(aiProvider, content),
+            extractMetadata(aiProvider, content),
           ]);
 
           // Build updated references: preserve existing, apply explicit overrides
@@ -929,6 +931,7 @@ const INGEST_PROVENANCE = {
 
 export async function handleIngestNote(
   supabase: SupabaseClient,
+  aiProvider: AiProvider,
   { content, title, note_id }: {
     content: string;
     title?: string;
@@ -988,6 +991,7 @@ export async function handleIngestNote(
         parsedNote,
         [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
         supabase,
+        aiProvider,
       );
     } catch (pipelineError) {
       console.error(
@@ -1017,6 +1021,7 @@ export async function handleIngestNote(
     if (existingThoughts.length === 0) {
       const result = await freshIngest(
         supabase,
+        aiProvider,
         content,
         title,
         note_id,
@@ -1040,23 +1045,20 @@ export async function handleIngestNote(
       )
       .join("\n\n");
 
-    const reconcileApiKey = requireEnv("OPENROUTER_API_KEY");
-    const reconcileResponse = await fetch(
-      `${OPENROUTER_BASE}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${reconcileApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-4o-mini",
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content:
-                `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
+    let plan: {
+      keep: string[];
+      update: { id: string; content: string }[];
+      add: string[];
+      delete: string[];
+    };
+
+    // An HTTP/transport failure aborts the reconcile (throws); an unparseable
+    // plan degrades to a fresh ingest — matching the pre-refactor behavior.
+    try {
+      plan = await aiProvider.completeJson(
+        {
+          systemPrompt:
+            `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
 
 You will receive:
 - EXISTING THOUGHTS: previously captured thoughts, each tagged with [ID:uuid]
@@ -1082,40 +1084,25 @@ Return ONLY valid JSON in this exact structure:
   "add": ["new thought 1", "new thought 2"],
   "delete": ["id4"]
 }`,
-            },
-            {
-              role: "user",
-              content:
-                `EXISTING THOUGHTS:\n${existingForPrompt}\n\n---\n\nNEW NOTE CONTENT (title: ${
-                  title || "untitled"
-                }):\n${content}`,
-            },
-          ],
-        }),
-      },
-    );
-
-    if (!reconcileResponse.ok) {
-      const msg = await reconcileResponse.text().catch(() => "");
-      throw new Error(
-        `OpenRouter reconcile failed: ${reconcileResponse.status} ${msg}`,
+          userContent:
+            `EXISTING THOUGHTS:\n${existingForPrompt}\n\n---\n\nNEW NOTE CONTENT (title: ${
+              title || "untitled"
+            }):\n${content}`,
+        },
+        (raw) =>
+          raw as {
+            keep: string[];
+            update: { id: string; content: string }[];
+            add: string[];
+            delete: string[];
+          },
       );
-    }
-
-    const reconcileData = await reconcileResponse.json();
-    let plan: {
-      keep: string[];
-      update: { id: string; content: string }[];
-      add: string[];
-      delete: string[];
-    } = { keep: [], update: [], add: [], delete: [] };
-
-    try {
-      plan = JSON.parse(reconcileData.choices[0].message.content);
-    } catch {
+    } catch (reconcileError) {
+      if (!(reconcileError instanceof AiProviderParseError)) throw reconcileError;
       console.warn("Reconciliation parse failed, falling back to fresh ingest");
       const result = await freshIngest(
         supabase,
+        aiProvider,
         content,
         title,
         note_id,
@@ -1137,8 +1124,8 @@ Return ONLY valid JSON in this exact structure:
     for (const updateItem of (plan.update || [])) {
       ops.push((async () => {
         const [embedding, metadata] = await Promise.all([
-          getEmbedding(updateItem.content),
-          extractMetadata(updateItem.content),
+          getEmbedding(aiProvider, updateItem.content),
+          extractMetadata(aiProvider, updateItem.content),
         ]);
         const { error } = await supabase
           .from("thoughts")
@@ -1172,8 +1159,8 @@ Return ONLY valid JSON in this exact structure:
         : (addItem as unknown as { thought: string }).thought || addItem;
       ops.push((async () => {
         const [embedding, metadata] = await Promise.all([
-          getEmbedding(thoughtContent as string),
-          extractMetadata(thoughtContent as string),
+          getEmbedding(aiProvider, thoughtContent as string),
+          extractMetadata(aiProvider, thoughtContent as string),
         ]);
         const { error } = await supabase.from("thoughts").insert({
           content: thoughtContent,

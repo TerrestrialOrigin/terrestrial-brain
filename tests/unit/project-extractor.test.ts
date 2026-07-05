@@ -4,15 +4,61 @@ import {
   extractProjectNameFromPath,
   pathContainsProjectKeyword,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts";
+import type {
+  AiJsonCompletionRequest,
+  AiProvider,
+} from "../../supabase/functions/terrestrial-brain-mcp/ai/ai-provider.ts";
+import {
+  AiProviderHttpError,
+  AiProviderParseError,
+} from "../../supabase/functions/terrestrial-brain-mcp/ai/ai-provider.ts";
 
 // Pure/deterministic project-extractor unit tests. The LLM path is exercised
-// with a stubbed global fetch, so no network or real OpenRouter key is needed —
-// but a throwaway key must be present so the fail-fast `requireEnv` guard
-// (Step 10) passes before the stubbed fetch is reached.
-// Relocated from the in-source vitest file (Step 5 test-suite split); the old
-// `(globalThis as any).Deno` shim is unnecessary under a native Deno runner.
+// through a hand-written FakeAiProvider injected into the extractor — NO network,
+// NO real OpenRouter key, NO fetch stub (Step 15's seam demonstration). This is
+// the seam Step 22's stub plugs into; deleting the `completeJson` call in
+// `extractProjectNameFromPath` reddens these tests (GATE 2b).
+// Relocated from the in-source vitest file (Step 5 test-suite split).
 
-Deno.env.set("OPENROUTER_API_KEY", "test-openrouter-key");
+/**
+ * Deterministic fake AiProvider. `completeJson` feeds a canned raw object through
+ * the caller's own parse callback (so the extractor's validation logic still runs),
+ * or rejects with a typed error to exercise the fallback branches.
+ */
+class FakeAiProvider implements AiProvider {
+  lastRequest: AiJsonCompletionRequest | null = null;
+
+  constructor(
+    private readonly outcome:
+      | { kind: "ok"; raw: unknown }
+      | { kind: "httpError" }
+      | { kind: "parseError" }
+      | { kind: "network" },
+  ) {}
+
+  getEmbedding(): Promise<number[]> {
+    return Promise.resolve([]);
+  }
+
+  completeJson<Parsed>(
+    request: AiJsonCompletionRequest,
+    parse: (raw: unknown) => Parsed,
+  ): Promise<Parsed> {
+    this.lastRequest = request;
+    switch (this.outcome.kind) {
+      case "httpError":
+        return Promise.reject(
+          new AiProviderHttpError("fake", 500, "boom"),
+        );
+      case "parseError":
+        return Promise.reject(new AiProviderParseError("fake", "bad json"));
+      case "network":
+        return Promise.reject(new Error("Network error"));
+      case "ok":
+        return Promise.resolve(parse(this.outcome.raw));
+    }
+  }
+}
 
 // ─── extractProjectFromConventionalPath ─────────────────────────────────────
 
@@ -110,107 +156,100 @@ Deno.test("pathContainsProjectKeyword: true for conventional projects folder pat
   assertEquals(pathContainsProjectKeyword("projects/Test Proj/notes.md"), true);
 });
 
-// ─── extractProjectNameFromPath (with stubbed fetch) ────────────────────────
+// ─── extractProjectNameFromPath (via injected FakeAiProvider) ───────────────
 
-const originalFetch = globalThis.fetch;
-
-/** Install a fake fetch that returns an OpenRouter-shaped JSON completion. */
-function stubFetchResponse(responseBody: object): { calls: unknown[][] } {
-  const calls: unknown[][] = [];
-  globalThis.fetch = ((...args: unknown[]) => {
-    calls.push(args);
-    return Promise.resolve({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          choices: [{ message: { content: JSON.stringify(responseBody) } }],
-        }),
-    } as Response);
-  }) as typeof fetch;
-  return { calls };
-}
-
-function stubFetchFailure(status = 500): void {
-  globalThis.fetch = (() =>
-    Promise.resolve({
-      ok: false,
-      status,
-      text: () => Promise.resolve("Internal Server Error"),
-    } as Response)) as typeof fetch;
-}
-
-/** Run a test body with fetch stubbed and console.error silenced, then restore. */
-async function withFetchStub(run: () => Promise<void>): Promise<void> {
+/** Silence the extractor's console.error during fallback-branch tests. */
+async function quietly(run: () => Promise<void>): Promise<void> {
   const originalConsoleError = console.error;
   console.error = () => {};
   try {
     await run();
   } finally {
-    globalThis.fetch = originalFetch;
     console.error = originalConsoleError;
   }
 }
 
 Deno.test("extractProjectNameFromPath: extracts project name from folder containing 'Project'", async () => {
-  await withFetchStub(async () => {
-    stubFetchResponse({ is_project: true, project_name: "Rabbit Hutch" });
-    const result = await extractProjectNameFromPath("farming/Rabbit Hutch Project/Plan.md");
-    assertEquals(result.isProject, true);
-    assertEquals(result.projectName, "Rabbit Hutch");
+  const provider = new FakeAiProvider({
+    kind: "ok",
+    raw: { is_project: true, project_name: "Rabbit Hutch" },
   });
+  const result = await extractProjectNameFromPath(
+    "farming/Rabbit Hutch Project/Plan.md",
+    provider,
+  );
+  assertEquals(result.isProject, true);
+  assertEquals(result.projectName, "Rabbit Hutch");
 });
 
 Deno.test("extractProjectNameFromPath: extracts project name from filename containing 'Project'", async () => {
-  await withFetchStub(async () => {
-    stubFetchResponse({ is_project: true, project_name: "Rabbit Hutch" });
-    const result = await extractProjectNameFromPath("farming/Rabbit Hutch Project.md");
-    assertEquals(result.isProject, true);
-    assertEquals(result.projectName, "Rabbit Hutch");
+  const provider = new FakeAiProvider({
+    kind: "ok",
+    raw: { is_project: true, project_name: "Rabbit Hutch" },
   });
+  const result = await extractProjectNameFromPath(
+    "farming/Rabbit Hutch Project.md",
+    provider,
+  );
+  assertEquals(result.isProject, true);
+  assertEquals(result.projectName, "Rabbit Hutch");
 });
 
 Deno.test("extractProjectNameFromPath: isProject=false for descriptive use of 'Project'", async () => {
-  await withFetchStub(async () => {
-    stubFetchResponse({ is_project: false, project_name: null });
-    const result = await extractProjectNameFromPath("farming/Project Planning notes.md");
-    assertEquals(result.isProject, false);
-    assertEquals(result.projectName, null);
+  const provider = new FakeAiProvider({
+    kind: "ok",
+    raw: { is_project: false, project_name: null },
   });
+  const result = await extractProjectNameFromPath(
+    "farming/Project Planning notes.md",
+    provider,
+  );
+  assertEquals(result.isProject, false);
+  assertEquals(result.projectName, null);
 });
 
-Deno.test("extractProjectNameFromPath: handles LLM failure gracefully", async () => {
-  await withFetchStub(async () => {
-    stubFetchFailure(500);
-    const result = await extractProjectNameFromPath("farming/Rabbit Hutch Project.md");
+Deno.test("extractProjectNameFromPath: handles LLM HTTP failure gracefully", async () => {
+  await quietly(async () => {
+    const provider = new FakeAiProvider({ kind: "httpError" });
+    const result = await extractProjectNameFromPath(
+      "farming/Rabbit Hutch Project.md",
+      provider,
+    );
     assertEquals(result.isProject, false);
     assertEquals(result.projectName, null);
   });
 });
 
 Deno.test("extractProjectNameFromPath: handles LLM returning empty project name", async () => {
-  await withFetchStub(async () => {
-    stubFetchResponse({ is_project: true, project_name: "" });
-    const result = await extractProjectNameFromPath("farming/Test Project.md");
-    assertEquals(result.isProject, false);
-    assertEquals(result.projectName, null);
+  const provider = new FakeAiProvider({
+    kind: "ok",
+    raw: { is_project: true, project_name: "" },
   });
+  const result = await extractProjectNameFromPath(
+    "farming/Test Project.md",
+    provider,
+  );
+  assertEquals(result.isProject, false);
+  assertEquals(result.projectName, null);
 });
 
 Deno.test("extractProjectNameFromPath: handles LLM network error gracefully", async () => {
-  await withFetchStub(async () => {
-    globalThis.fetch = (() => Promise.reject(new Error("Network error"))) as typeof fetch;
-    const result = await extractProjectNameFromPath("farming/Rabbit Hutch Project.md");
+  await quietly(async () => {
+    const provider = new FakeAiProvider({ kind: "network" });
+    const result = await extractProjectNameFromPath(
+      "farming/Rabbit Hutch Project.md",
+      provider,
+    );
     assertEquals(result.isProject, false);
     assertEquals(result.projectName, null);
   });
 });
 
-Deno.test("extractProjectNameFromPath: sends correct path to LLM", async () => {
-  await withFetchStub(async () => {
-    const stub = stubFetchResponse({ is_project: true, project_name: "Test" });
-    await extractProjectNameFromPath("some/path/Test Project.md");
-    const fetchCall = stub.calls[0];
-    const body = JSON.parse((fetchCall[1] as { body: string }).body);
-    assertEquals(body.messages[1].content, "Path: some/path/Test Project.md");
+Deno.test("extractProjectNameFromPath: sends correct path to the provider", async () => {
+  const provider = new FakeAiProvider({
+    kind: "ok",
+    raw: { is_project: true, project_name: "Test" },
   });
+  await extractProjectNameFromPath("some/path/Test Project.md", provider);
+  assertEquals(provider.lastRequest?.userContent, "Path: some/path/Test Project.md");
 });

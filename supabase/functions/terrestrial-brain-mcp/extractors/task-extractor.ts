@@ -23,9 +23,7 @@ import {
   getZonedDate,
 } from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
-import { requireEnv } from "../env.ts";
-
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+import type { AiProvider } from "../ai/ai-provider.ts";
 
 // ---------------------------------------------------------------------------
 // Content similarity
@@ -262,6 +260,7 @@ interface TaskProjectAssignment {
 async function inferProjectsByContent(
   taskTexts: { index: number; text: string }[],
   knownProjects: { id: string; name: string }[],
+  aiProvider: AiProvider,
 ): Promise<{ ok: boolean; assignments: TaskProjectAssignment[] }> {
   if (taskTexts.length === 0 || knownProjects.length === 0) {
     return { ok: true, assignments: [] };
@@ -275,59 +274,39 @@ async function inferProjectsByContent(
     .join("\n");
   const validIds = new Set(knownProjects.map((project) => project.id));
 
-  const apiKey = requireEnv("OPENROUTER_API_KEY");
+  // A transport/parse failure returns { ok: false } so the caller keeps existing
+  // project assignments untouched; a well-formed-but-empty response is { ok: true }.
   try {
-    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-4o-mini",
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              `You match tasks to projects. Given a list of tasks and known projects, return which project each task belongs to. Only use project IDs from the list. If a task doesn't clearly belong to any project, omit it.
+    return await aiProvider.completeJson(
+      {
+        systemPrompt:
+          `You match tasks to projects. Given a list of tasks and known projects, return which project each task belongs to. Only use project IDs from the list. If a task doesn't clearly belong to any project, omit it.
 
 Return JSON: {"assignments": [{"task_index": 0, "project_id": "uuid"}, ...]}
 
 KNOWN PROJECTS:
 ${projectList}`,
-          },
-          { role: "user", content: `TASKS:\n${taskList}` },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(
-        `TaskExtractor LLM call failed: ${response.status} ${await response
-          .text().catch(() => "")}`,
-      );
-      return { ok: false, assignments: [] };
-    }
-
-    const data = await response.json();
-    const parsed = JSON.parse(data.choices[0].message.content);
-    if (!Array.isArray(parsed.assignments)) {
-      return { ok: true, assignments: [] };
-    }
-
-    const assignments = parsed.assignments
-      .filter(
-        (assignment: { task_index?: unknown; project_id?: unknown }) =>
-          typeof assignment.task_index === "number" &&
-          typeof assignment.project_id === "string" &&
-          validIds.has(assignment.project_id),
-      )
-      .map((assignment: { task_index: number; project_id: string }) => ({
-        taskIndex: assignment.task_index,
-        projectId: assignment.project_id,
-      }));
-    return { ok: true, assignments };
+        userContent: `TASKS:\n${taskList}`,
+      },
+      (raw): { ok: true; assignments: TaskProjectAssignment[] } => {
+        const parsed = raw as { assignments?: unknown };
+        if (!Array.isArray(parsed.assignments)) {
+          return { ok: true, assignments: [] };
+        }
+        const assignments = parsed.assignments
+          .filter(
+            (assignment: { task_index?: unknown; project_id?: unknown }) =>
+              typeof assignment.task_index === "number" &&
+              typeof assignment.project_id === "string" &&
+              validIds.has(assignment.project_id),
+          )
+          .map((assignment: { task_index: number; project_id: string }) => ({
+            taskIndex: assignment.task_index,
+            projectId: assignment.project_id,
+          }));
+        return { ok: true, assignments };
+      },
+    );
   } catch (error) {
     console.error(
       `TaskExtractor LLM project inference error: ${(error as Error).message}`,
@@ -448,6 +427,7 @@ interface TaskEnrichment {
 async function inferTaskEnrichments(
   tasks: { index: number; text: string; sectionHeading: string | null }[],
   knownPeople: { id: string; name: string }[],
+  aiProvider: AiProvider,
   referenceDate: Date = new Date(),
   timeZone: string = "UTC",
 ): Promise<{ ok: boolean; enrichments: TaskEnrichment[] }> {
@@ -477,22 +457,13 @@ async function inferTaskEnrichments(
     })
     .join("\n");
 
-  const apiKey = requireEnv("OPENROUTER_API_KEY");
+  // A transport/parse failure returns { ok: false } so the caller falls back to
+  // the regex-derived dates/assignments; a well-formed-but-empty response is ok.
   try {
-    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "openai/gpt-4o-mini",
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              `You extract metadata from task descriptions. Today is ${referenceDateStr}.
+    return await aiProvider.completeJson(
+      {
+        systemPrompt:
+          `You extract metadata from task descriptions. Today is ${referenceDateStr}.
 
 For each task, determine:
 1. **assigned_to_id**: Who is this task assigned to? Look for:
@@ -513,53 +484,41 @@ Return JSON: {"enrichments": [{"task_index": 0, "assigned_to_id": "uuid"|null, "
 
 KNOWN PEOPLE:
 ${peopleList}`,
-          },
-          { role: "user", content: `TASKS:\n${taskList}` },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      console.error(
-        `Task enrichment LLM failed: ${response.status} ${await response.text()
-          .catch(() => "")}`,
-      );
-      return { ok: false, enrichments: [] };
-    }
-
-    const data = await response.json();
-    const parsed = JSON.parse(data.choices[0].message.content);
-
-    if (!Array.isArray(parsed.enrichments)) {
-      return { ok: true, enrichments: [] };
-    }
-
-    const enrichments = parsed.enrichments
-      .filter(
-        (entry: Record<string, unknown>) =>
-          typeof entry.task_index === "number" &&
-          typeof entry.cleaned_text === "string",
-      )
-      .map((
-        entry: {
-          task_index: number;
-          assigned_to_id?: string | null;
-          due_date?: string | null;
-          cleaned_text: string;
-        },
-      ) => ({
-        taskIndex: entry.task_index,
-        assignedToId: typeof entry.assigned_to_id === "string" &&
-            validPeopleIds.has(entry.assigned_to_id)
-          ? entry.assigned_to_id
-          : null,
-        dueDate: typeof entry.due_date === "string" &&
-            !isNaN(new Date(entry.due_date).getTime())
-          ? new Date(entry.due_date).toISOString()
-          : null,
-        cleanedText: entry.cleaned_text,
-      }));
-    return { ok: true, enrichments };
+        userContent: `TASKS:\n${taskList}`,
+      },
+      (raw): { ok: true; enrichments: TaskEnrichment[] } => {
+        const parsed = raw as { enrichments?: unknown };
+        if (!Array.isArray(parsed.enrichments)) {
+          return { ok: true, enrichments: [] };
+        }
+        const enrichments = parsed.enrichments
+          .filter(
+            (entry: Record<string, unknown>) =>
+              typeof entry.task_index === "number" &&
+              typeof entry.cleaned_text === "string",
+          )
+          .map((
+            entry: {
+              task_index: number;
+              assigned_to_id?: string | null;
+              due_date?: string | null;
+              cleaned_text: string;
+            },
+          ) => ({
+            taskIndex: entry.task_index,
+            assignedToId: typeof entry.assigned_to_id === "string" &&
+                validPeopleIds.has(entry.assigned_to_id)
+              ? entry.assigned_to_id
+              : null,
+            dueDate: typeof entry.due_date === "string" &&
+                !isNaN(new Date(entry.due_date).getTime())
+              ? new Date(entry.due_date).toISOString()
+              : null,
+            cleanedText: entry.cleaned_text,
+          }));
+        return { ok: true, enrichments };
+      },
+    );
   } catch (error) {
     console.error(`Task enrichment LLM error: ${(error as Error).message}`);
     return { ok: false, enrichments: [] };
@@ -646,6 +605,7 @@ export class TaskExtractor implements Extractor {
       const { ok, assignments } = await inferProjectsByContent(
         unassignedForAI,
         uniqueProjects,
+        context.aiProvider,
       );
       if (ok) {
         projectInferenceRan = true;
@@ -748,6 +708,7 @@ export class TaskExtractor implements Extractor {
       const { ok, enrichments } = await inferTaskEnrichments(
         aiCandidates,
         uniquePeople,
+        context.aiProvider,
         referenceDate,
         userTimeZone,
       );
