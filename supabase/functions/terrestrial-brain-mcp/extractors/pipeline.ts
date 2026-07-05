@@ -27,6 +27,13 @@ export interface ExtractionContext {
 export interface ExtractionResult {
   referenceKey: string;
   ids: string[];
+  /**
+   * Human-readable messages for writes that failed during extraction. Absent
+   * or empty when every write succeeded. Surfaced (not swallowed) so callers
+   * and the pipeline runner can report partial failure instead of reporting
+   * success. See finding C6 / fix-plan Step 8.
+   */
+  errors?: string[];
 }
 
 export interface Extractor {
@@ -58,7 +65,11 @@ export async function runExtractionPipeline(
   ]);
 
   // Fetch known tasks for this note's reference_id (for reconciliation)
-  let knownTasks: { id: string; content: string; reference_id: string | null }[] = [];
+  let knownTasks: {
+    id: string;
+    content: string;
+    reference_id: string | null;
+  }[] = [];
   if (note.referenceId) {
     const { data: existingTasks } = await supabase
       .from("tasks")
@@ -100,6 +111,14 @@ export async function runExtractionPipeline(
   for (const extractor of extractors) {
     const result = await extractor.extract(note, context);
     references[result.referenceKey] = result.ids;
+    // Surface (don't swallow) any write failures the extractor reported.
+    if (result.errors && result.errors.length > 0) {
+      console.error(
+        `Extractor "${result.referenceKey}" reported ${result.errors.length} write failure(s): ${
+          result.errors.join("; ")
+        }`,
+      );
+    }
     context.accumulatedReferences = { ...references };
   }
 
