@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
@@ -37,7 +38,7 @@ interface ActivityEntry {
   name: string;
   type: string | null;
   action: string;
-  date: string;
+  date: string | null;
 }
 
 /**
@@ -148,8 +149,8 @@ async function fetchProjectSummary(
       return true;
     })
     .sort((thoughtA, thoughtB) =>
-      new Date(thoughtB.created_at).getTime() -
-      new Date(thoughtA.created_at).getTime()
+      new Date(thoughtB.created_at ?? 0).getTime() -
+      new Date(thoughtA.created_at ?? 0).getTime()
     )
     .slice(0, 25);
 
@@ -607,7 +608,7 @@ export function register(
         "This is the best starting point when the user asks about a specific project — it gives you the full picture " +
         "so you can answer follow-up questions without additional calls. Prefer this over get_project for richer context.",
       inputSchema: {
-        id: z.string().describe("Project UUID"),
+        id: uuidField().describe("Project UUID"),
       },
     },
     withMcpLogging("get_project_summary", async ({ id }) => {
@@ -631,6 +632,10 @@ export function register(
         "Use this as a conversation opener when the user asks 'what's been going on?', 'catch me up', or 'what happened this week?'. " +
         "Also useful for your own orientation at the start of a session to understand the user's recent context.",
       inputSchema: {
+        // `days` is clamped inside the handler (negative/zero → 1); kept as a
+        // plain number so that graceful-clamping contract is preserved rather
+        // than rejecting out-of-range input. Finding 7.3 scopes the
+        // bounded-input requirement to `limit`, not this window param.
         days: z.number().optional().default(7).describe(
           "Number of days to look back (default 7)",
         ),
@@ -658,7 +663,7 @@ export function register(
         "Do NOT call this routinely, in bulk, or 'just in case' — note bodies are long and pollute the context window. " +
         "If `get_project_summary` or a thought record already answers the question, stop there.",
       inputSchema: {
-        id: z.string().optional().describe(
+        id: uuidField().optional().describe(
           "Snapshot UUID (preferred when known, e.g. from a thought's note_snapshot_id)",
         ),
         reference_id: z.string().optional().describe(

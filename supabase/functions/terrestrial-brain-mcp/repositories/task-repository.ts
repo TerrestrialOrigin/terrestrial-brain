@@ -5,37 +5,37 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { Row } from "../supabase-client.ts";
 
 /** Row shape returned to `list_tasks`. */
-export interface TaskListRow {
-  id: string;
-  content: string;
-  status: string;
-  due_by: string | null;
-  project_id: string | null;
-  assigned_to: string | null;
-  archived_at: string | null;
-  created_at: string;
-}
+export type TaskListRow = Pick<
+  Row<"tasks">,
+  | "id"
+  | "content"
+  | "status"
+  | "due_by"
+  | "project_id"
+  | "assigned_to"
+  | "archived_at"
+  | "created_at"
+>;
 
 /** Fuller row shape returned to `get_tasks` (includes parent link). */
-export interface TaskDetailRow {
-  id: string;
-  content: string;
-  status: string;
-  due_by: string | null;
-  project_id: string | null;
-  parent_id: string | null;
-  assigned_to: string | null;
-  archived_at: string | null;
-  created_at: string;
-}
+export type TaskDetailRow = Pick<
+  Row<"tasks">,
+  | "id"
+  | "content"
+  | "status"
+  | "due_by"
+  | "project_id"
+  | "parent_id"
+  | "assigned_to"
+  | "archived_at"
+  | "created_at"
+>;
 
 /** The identity of a freshly-inserted task (id for linking, content for logs). */
-export interface CreatedTask {
-  id: string;
-  content: string;
-}
+export type CreatedTask = Pick<Row<"tasks">, "id" | "content">;
 
 /** Values for inserting a task. Content + status are required; rest optional. */
 export interface NewTaskValues {
@@ -75,11 +75,14 @@ export interface TaskRepository {
   /** Fetch tasks by id (archived included). */
   findByIds(ids: string[]): Promise<RepoResult<TaskDetailRow[]>>;
 
-  /** Apply a partial update to a task. */
+  /**
+   * Apply a partial update to a task. Returns the updated row's id, or `null`
+   * data when no row matched `id` (Step 24 affected-row verification).
+   */
   update(
     id: string,
     updates: Record<string, unknown>,
-  ): Promise<RepoResult<void>>;
+  ): Promise<RepoResult<{ id: string }>>;
 
   /** Archive a task (sets `archived_at`; leaves status untouched). */
   archive(id: string): Promise<RepoResult<void>>;

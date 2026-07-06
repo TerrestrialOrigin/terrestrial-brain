@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import {
   extractMetadata,
@@ -15,13 +16,17 @@ import {
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import { RELIABILITIES, THOUGHT_TYPES } from "../enums.ts";
 import {
   buildUsefulnessHeader,
   buildUsefulnessReminder,
 } from "./usefulness-reminder.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import { AiProviderParseError } from "../ai/ai-provider.ts";
-import type { ThoughtRepository } from "../repositories/thought-repository.ts";
+import type {
+  ThoughtByReferenceRow,
+  ThoughtRepository,
+} from "../repositories/thought-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
@@ -147,13 +152,13 @@ export function register(
         query: z.string().describe(
           "Natural language description of what to search for — works best as a phrase or sentence, not single keywords",
         ),
-        limit: z.number().optional().default(10),
+        limit: z.number().int().min(1).max(100).optional().default(10),
         threshold: z.number().optional().default(0.5),
         author: z.string().optional().describe(
           "Filter by the model that authored the thought, e.g. 'claude-sonnet-4-6' or 'gpt-4o-mini'",
         ),
-        reliability: z.string().optional().describe(
-          "Filter by reliability level, e.g. 'reliable' or 'less reliable'",
+        reliability: z.enum(RELIABILITIES).optional().describe(
+          "Filter by reliability level: 'reliable' or 'less reliable'",
         ),
       },
     },
@@ -192,20 +197,8 @@ export function register(
         );
 
         const results = data.map(
-          (
-            t: {
-              id: string;
-              content: string;
-              metadata: Record<string, unknown>;
-              similarity: number;
-              created_at: string;
-              updated_at: string | null;
-              reliability: string | null;
-              author: string | null;
-            },
-            i: number,
-          ) => {
-            const m = t.metadata || {};
+          (t, i: number) => {
+            const m = (t.metadata ?? {}) as Record<string, unknown>;
             const parts = [
               `--- Result ${i + 1} (${
                 (t.similarity * 100).toFixed(1)
@@ -280,8 +273,8 @@ export function register(
         "If none contributed (common when browsing), call it with an empty array to acknowledge the scan. " +
         "Also scan the returned thoughts for contradictions or clearly outdated information — if you notice any, flag them to the user in your response (do NOT archive silently).",
       inputSchema: {
-        limit: z.number().optional().default(10),
-        type: z.string().optional().describe(
+        limit: z.number().int().min(1).max(100).optional().default(10),
+        type: z.enum(THOUGHT_TYPES).optional().describe(
           "Filter by type: observation, task, idea, reference, person_note",
         ),
         topic: z.string().optional().describe("Filter by topic tag"),
@@ -289,14 +282,14 @@ export function register(
         days: z.number().optional().describe(
           "Only thoughts from the last N days",
         ),
-        project_id: z.string().optional().describe(
+        project_id: uuidField().optional().describe(
           "Filter by project UUID — matches thoughts whose metadata.references.projects array contains this UUID",
         ),
         author: z.string().optional().describe(
           "Filter by the model that authored the thought, e.g. 'claude-sonnet-4-6' or 'gpt-4o-mini'",
         ),
-        reliability: z.string().optional().describe(
-          "Filter by reliability level, e.g. 'reliable' or 'less reliable'",
+        reliability: z.enum(RELIABILITIES).optional().describe(
+          "Filter by reliability level: 'reliable' or 'less reliable'",
         ),
         include_archived: z.boolean().optional().default(false).describe(
           "Include archived thoughts in results (default: false)",
@@ -353,26 +346,15 @@ export function register(
         );
 
         const results = data.map(
-          (
-            t: {
-              id: string;
-              content: string;
-              metadata: Record<string, unknown>;
-              created_at: string;
-              updated_at: string | null;
-              reliability: string | null;
-              author: string | null;
-            },
-            i: number,
-          ) => {
-            const m = t.metadata || {};
+          (t, i: number) => {
+            const m = (t.metadata ?? {}) as Record<string, unknown>;
             const tags = Array.isArray(m.topics)
               ? (m.topics as string[]).join(", ")
               : "";
             const parts = [
-              `${i + 1}. [${new Date(t.created_at).toISOString()}] (${
-                m.type || "??"
-              }${tags ? " - " + tags : ""})`,
+              `${i + 1}. [${
+                t.created_at ? new Date(t.created_at).toISOString() : "unknown"
+              }] (${m.type || "??"}${tags ? " - " + tags : ""})`,
               `   ID: ${t.id}`,
             ];
             if (t.updated_at) {
@@ -424,63 +406,47 @@ export function register(
         "Optionally filter by project_id to see stats for a specific project. " +
         "Use this to orient yourself when starting a conversation, to answer 'how much is in my brain?', or to discover which topics and people appear most often.",
       inputSchema: {
-        project_id: z.string().optional().describe(
+        project_id: uuidField().optional().describe(
           "Filter statistics to a specific project UUID — only counts thoughts linked to this project",
         ),
       },
     },
     withMcpLogging("thought_stats", async ({ project_id }) => {
-      const { data: count } = await thoughtRepository.countActive(project_id);
-      const { data } = await thoughtRepository.listForStats(project_id);
-
-      const types: Record<string, number> = {};
-      const topics: Record<string, number> = {};
-      const people: Record<string, number> = {};
-
-      for (const r of data || []) {
-        const m = (r.metadata || {}) as Record<string, unknown>;
-        if (m.type) {
-          types[m.type as string] = (types[m.type as string] || 0) + 1;
-        }
-        if (Array.isArray(m.topics)) {
-          for (const t of m.topics) {
-            topics[t as string] = (topics[t as string] || 0) + 1;
-          }
-        }
-        if (Array.isArray(m.people)) {
-          for (const p of m.people) {
-            people[p as string] = (people[p as string] || 0) + 1;
-          }
-        }
+      // Aggregation is computed in the DB (thought_stats RPC), not by loading
+      // every row into the function (finding 7.3).
+      const { data: stats, error } = await thoughtRepository.stats(project_id);
+      if (error || !stats) {
+        return errorResult(
+          `Error computing stats: ${error?.message || "unknown"}`,
+        );
       }
 
-      const sort = (o: Record<string, number>): [string, number][] =>
-        Object.entries(o)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 10);
-
       const lines: string[] = [
-        `Total thoughts: ${count}`,
+        `Total thoughts: ${stats.total}`,
         `Date range: ${
-          data?.length
-            ? new Date(data[data.length - 1].created_at).toLocaleDateString() +
+          stats.oldest && stats.newest
+            ? new Date(stats.oldest).toLocaleDateString() +
               " → " +
-              new Date(data[0].created_at).toLocaleDateString()
+              new Date(stats.newest).toLocaleDateString()
             : "N/A"
         }`,
         "",
         "Types:",
-        ...sort(types).map(([k, v]) => `  ${k}: ${v}`),
+        ...stats.types.map(({ key, count }) => `  ${key}: ${count}`),
       ];
 
-      if (Object.keys(topics).length) {
+      if (stats.topics.length) {
         lines.push("", "Top topics:");
-        for (const [k, v] of sort(topics)) lines.push(`  ${k}: ${v}`);
+        for (const { key, count } of stats.topics) {
+          lines.push(`  ${key}: ${count}`);
+        }
       }
 
-      if (Object.keys(people).length) {
+      if (stats.people.length) {
         lines.push("", "People mentioned:");
-        for (const [k, v] of sort(people)) lines.push(`  ${k}: ${v}`);
+        for (const { key, count } of stats.people) {
+          lines.push(`  ${key}: ${count}`);
+        }
       }
 
       return textResult(lines.join("\n"));
@@ -495,7 +461,7 @@ export function register(
       description: "Retrieve a single thought by its UUID. " +
         "Use this when you have a specific thought ID (e.g. from search results, task references, or a previous conversation) and need its full content and metadata.",
       inputSchema: {
-        id: z.string().uuid().describe("The UUID of the thought to retrieve"),
+        id: uuidField().describe("The UUID of the thought to retrieve"),
       },
     },
     withMcpLogging("get_thought_by_id", async ({ id }) => {
@@ -522,7 +488,9 @@ export function register(
       const metadata = (data.metadata || {}) as Record<string, unknown>;
       const lines: string[] = [
         `ID: ${data.id}`,
-        `Captured: ${new Date(data.created_at).toISOString()}`,
+        `Captured: ${
+          data.created_at ? new Date(data.created_at).toISOString() : "unknown"
+        }`,
       ];
       if (data.updated_at) {
         lines.push(`Updated: ${new Date(data.updated_at).toISOString()}`);
@@ -583,15 +551,13 @@ export function register(
         author: z.string().optional().describe(
           "Model identifier of the AI writing this thought, e.g. 'claude-sonnet-4-6'. Stored for provenance — informational only.",
         ),
-        project_ids: z.string().array().optional().describe(
+        project_ids: uuidField().array().optional().describe(
           "UUIDs of projects to explicitly associate with this thought, merged with any projects the extractor finds.",
         ),
-        document_ids: z.string().array().optional().describe(
+        document_ids: uuidField().array().optional().describe(
           "UUIDs of source documents this thought was derived from (e.g. from write_document). Stored in metadata.references.documents for traceability.",
         ),
-        builds_on: z
-          .string()
-          .uuid()
+        builds_on: uuidField()
           .array()
           .optional()
           .describe(
@@ -705,20 +671,20 @@ export function register(
         "Pass project_ids: [] to clear all project links. " +
         "Original created_at, reference_id, note_snapshot_id, and metadata.source are always preserved.",
       inputSchema: {
-        id: z.string().describe("UUID of the thought to update"),
+        id: uuidField().describe("UUID of the thought to update"),
         content: z.string().optional().describe(
           "New thought content — triggers embedding regeneration and metadata re-extraction",
         ),
-        reliability: z.string().optional().describe(
+        reliability: z.enum(RELIABILITIES).optional().describe(
           "New reliability level: 'reliable' or 'less reliable'",
         ),
         author: z.string().optional().describe(
           "New author attribution, e.g. 'claude-sonnet-4-6'",
         ),
-        project_ids: z.string().array().optional().describe(
+        project_ids: uuidField().array().optional().describe(
           "Replace project associations — these UUIDs become the new metadata.references.projects array",
         ),
-        document_ids: z.string().array().optional().describe(
+        document_ids: uuidField().array().optional().describe(
           "Replace document associations — these UUIDs become the new metadata.references.documents array",
         ),
       },
@@ -788,9 +754,7 @@ export function register(
         "This feedback loop helps surface the most valuable thoughts in future queries. " +
         "Each call increments the score by 1 for every thought ID provided.",
       inputSchema: {
-        thought_ids: z
-          .string()
-          .uuid()
+        thought_ids: uuidField()
           .array()
           .describe(
             "Array of thought UUIDs that were useful in this interaction. Pass [] if no returned thought contributed — that is the correct value, not a reason to skip the call.",
@@ -820,7 +784,7 @@ export function register(
         "Archived thoughts are hidden from search, listing, and stats by default — they are not deleted and can still be retrieved with include_archived. " +
         "Use this when a thought is outdated, incorrect, or no longer relevant. Confirm with the user before archiving.",
       inputSchema: {
-        id: z.string().uuid().describe("UUID of the thought to archive"),
+        id: uuidField().describe("UUID of the thought to archive"),
       },
     },
     withMcpLogging("archive_thought", async ({ id }) => {
@@ -856,7 +820,9 @@ const INGEST_PROVENANCE = {
   author: "gpt-4o-mini",
 };
 
-type ExistingThought = { id: string; content: string; created_at: string };
+// The repository DTO for a note's existing thoughts is the single source of
+// truth for this shape (Step 24) — no separate hand-written duplicate.
+type ExistingThought = ThoughtByReferenceRow;
 
 export interface ReconciliationPlan {
   keep: string[];
@@ -951,7 +917,7 @@ export async function requestReconciliationPlan(
   const existingForPrompt = existingThoughts
     .map((t) =>
       `[ID:${t.id}] (captured ${
-        new Date(t.created_at).toLocaleDateString()
+        t.created_at ? new Date(t.created_at).toLocaleDateString() : "unknown"
       })\n${t.content}`
     )
     .join("\n\n");

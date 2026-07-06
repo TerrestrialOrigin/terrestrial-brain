@@ -7,41 +7,22 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { Row } from "../supabase-client.ts";
 
 /** The identity of a freshly-inserted / matched project. */
-export interface ProjectIdentity {
-  id: string;
-  name: string;
-}
+export type ProjectIdentity = Pick<Row<"projects">, "id" | "name">;
 
 /** Row shape returned to `list_projects`. */
-export interface ProjectListRow {
-  id: string;
-  name: string;
-  type: string | null;
-  parent_id: string | null;
-  archived_at: string | null;
-  created_at: string;
-}
+export type ProjectListRow = Pick<
+  Row<"projects">,
+  "id" | "name" | "type" | "parent_id" | "archived_at" | "created_at"
+>;
 
 /** Full project row read by `get_project` (`select *`). */
-export interface ProjectFullRow {
-  id: string;
-  name: string;
-  type: string | null;
-  description: string | null;
-  parent_id: string | null;
-  archived_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
+export type ProjectFullRow = Row<"projects">;
 
 /** Basic child row for `get_project`. */
-export interface ProjectChildRow {
-  id: string;
-  name: string;
-  type: string | null;
-}
+export type ProjectChildRow = Pick<Row<"projects">, "id" | "name" | "type">;
 
 /** Values for inserting a project. Only `name` is required. */
 export interface NewProjectValues {
@@ -76,18 +57,22 @@ export interface ProjectRepository {
   /** `parent_id` of every active child of the given parents (for child counts). */
   listChildParentIds(
     parentIds: string[],
-  ): Promise<RepoResult<{ parent_id: string }[]>>;
+  ): Promise<RepoResult<{ parent_id: string | null }[]>>;
 
   /** Ids of active direct children of the given parents (archive BFS level). */
   listActiveChildIds(
     parentIds: string[],
   ): Promise<RepoResult<{ id: string }[]>>;
 
-  /** Apply a partial update to a project. */
+  /**
+   * Apply a partial update to a project. Returns the updated row's id, or
+   * `null` data when no row matched `id` (so callers can report not-found
+   * instead of a false success — Step 24 affected-row verification).
+   */
   update(
     id: string,
     updates: Record<string, unknown>,
-  ): Promise<RepoResult<void>>;
+  ): Promise<RepoResult<{ id: string }>>;
 
   /** Archive every still-active project in `ids`. */
   archiveManyActive(ids: string[]): Promise<RepoResult<void>>;

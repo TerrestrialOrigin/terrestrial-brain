@@ -4,7 +4,7 @@
  * `tools/people.ts` / `extractors/people-extractor.ts` lives here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NewPersonValues,
@@ -16,7 +16,7 @@ import type {
 } from "./person-repository.ts";
 
 export class SupabasePersonRepository implements PersonRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async insert(values: NewPersonValues): Promise<RepoResult<PersonIdentity>> {
     const { data, error } = await this.supabase
@@ -61,12 +61,14 @@ export class SupabasePersonRepository implements PersonRepository {
   async update(
     id: string,
     updates: Record<string, unknown>,
-  ): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
+  ): Promise<RepoResult<{ id: string }>> {
+    const { data, error } = await this.supabase
       .from("people")
       .update(updates)
-      .eq("id", id);
-    return { data: null, error: toRepoError(error) };
+      .eq("id", id)
+      .select("id")
+      .maybeSingle();
+    return { data, error: toRepoError(error) };
   }
 
   async archive(id: string): Promise<RepoResult<void>> {

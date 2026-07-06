@@ -1,9 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import { PROJECT_TYPES } from "../enums.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
@@ -25,10 +27,10 @@ export function register(
         "Use type to categorize: 'client' for client work, 'personal' for personal projects, 'research' for research/learning, 'internal' for internal tooling.",
       inputSchema: {
         name: z.string().describe("Project name"),
-        type: z.string().optional().describe(
+        type: z.enum(PROJECT_TYPES).optional().describe(
           "Project type: client, personal, research, internal",
         ),
-        parent_id: z.string().optional().describe(
+        parent_id: uuidField().optional().describe(
           "UUID of parent project for nesting",
         ),
         description: z.string().optional().describe(
@@ -70,10 +72,12 @@ export function register(
         include_archived: z.boolean().optional().default(false).describe(
           "Include archived projects",
         ),
-        parent_id: z.string().optional().describe(
+        parent_id: uuidField().optional().describe(
           "List only children of this project",
         ),
-        type: z.string().optional().describe("Filter by project type"),
+        type: z.enum(PROJECT_TYPES).optional().describe(
+          "Filter by project type",
+        ),
       },
     },
     withMcpLogging(
@@ -108,7 +112,11 @@ export function register(
         );
         const childCounts: Record<string, number> = {};
         for (const c of children || []) {
-          childCounts[c.parent_id] = (childCounts[c.parent_id] || 0) + 1;
+          // The query filters on `parent_id IN (…)`, so it is never null here;
+          // the guard satisfies the schema-nullable type.
+          if (c.parent_id) {
+            childCounts[c.parent_id] = (childCounts[c.parent_id] || 0) + 1;
+          }
         }
 
         const lines = data.map((p, i) => {
@@ -124,7 +132,9 @@ export function register(
             parts.push(`   Children: ${childCounts[p.id]}`);
           }
           parts.push(
-            `   Created: ${new Date(p.created_at).toLocaleDateString()}`,
+            `   Created: ${
+              p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"
+            }`,
           );
           if (p.archived_at) {
             parts.push(
@@ -151,14 +161,20 @@ export function register(
         "Use this for quick lookups when you need project metadata. " +
         "For a richer view that also includes recent thoughts and source notes, use get_project_summary instead.",
       inputSchema: {
-        id: z.string().describe("Project UUID"),
+        id: uuidField().describe("Project UUID"),
       },
     },
     withMcpLogging("get_project", async ({ id }) => {
       const { data: project, error } = await projectRepository.findById(id);
 
-      if (error || !project) {
-        return errorResult(`Project not found: ${error?.message || "unknown"}`);
+      // Unified not-found convention: a missing row on a read is data, not a
+      // tool failure. `findById` uses `.single()`, so a miss surfaces as the
+      // PGRST116 "no rows" code (mirrors get_thought_by_id / get_document).
+      if (error && error.code !== "PGRST116") {
+        return errorResult(`Error: ${error.message}`);
+      }
+      if (!project) {
+        return textResult(`No project found with ID "${id}".`);
       }
 
       // Get parent name
@@ -194,10 +210,18 @@ export function register(
       }
       lines.push(`Open tasks: ${taskCount || 0}`);
       lines.push(
-        `Created: ${new Date(project.created_at).toLocaleDateString()}`,
+        `Created: ${
+          project.created_at
+            ? new Date(project.created_at).toLocaleDateString()
+            : "—"
+        }`,
       );
       lines.push(
-        `Updated: ${new Date(project.updated_at).toLocaleDateString()}`,
+        `Updated: ${
+          project.updated_at
+            ? new Date(project.updated_at).toLocaleDateString()
+            : "—"
+        }`,
       );
       if (project.archived_at) {
         lines.push(
@@ -219,10 +243,10 @@ export function register(
         "This makes the project self-documenting so that any AI querying it later has the full picture without needing to search through individual thoughts. " +
         "Append to the existing description rather than replacing it, unless the user is correcting outdated information.",
       inputSchema: {
-        id: z.string().describe("Project UUID"),
+        id: uuidField().describe("Project UUID"),
         name: z.string().optional().describe("New name"),
-        type: z.string().optional().describe("New type"),
-        parent_id: z.string().nullable().optional().describe(
+        type: z.enum(PROJECT_TYPES).optional().describe("New type"),
+        parent_id: uuidField().nullable().optional().describe(
           "New parent UUID, or null to remove parent",
         ),
         description: z.string().optional().describe(
@@ -240,13 +264,20 @@ export function register(
         if (description !== undefined) updates.description = description;
 
         if (Object.keys(updates).length === 0) {
-          return textResult("No fields to update.");
+          return errorResult(
+            "At least one of name, type, parent_id, or description must be provided.",
+          );
         }
 
-        const { error } = await projectRepository.update(id, updates);
+        const { data, error } = await projectRepository.update(id, updates);
 
         if (error) {
           return errorResult(`Update failed: ${error.message}`);
+        }
+        if (!data) {
+          // Affected-row verification: the update matched no row, so the UUID
+          // does not exist — report not-found instead of a false success.
+          return errorResult(`Project not found: no project with id ${id}`);
         }
 
         return textResult(
@@ -266,7 +297,7 @@ export function register(
         "Archived projects are hidden from default list_projects results but not deleted — they can still be queried with include_archived. " +
         "Use this when a project is complete, cancelled, or no longer relevant. This is a significant action — confirm with the user before archiving.",
       inputSchema: {
-        id: z.string().describe("Project UUID to archive"),
+        id: uuidField().describe("Project UUID to archive"),
       },
     },
     withMcpLogging("archive_project", async ({ id }) => {

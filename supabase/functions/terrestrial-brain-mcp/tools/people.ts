@@ -1,8 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { PERSON_TYPES } from "../enums.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
@@ -23,7 +25,9 @@ export function register(
         "The name must be unique — if a person with that name already exists, use update_person instead.",
       inputSchema: {
         name: z.string().describe("Person's name (must be unique)"),
-        type: z.string().optional().describe("Person type: 'human' or 'ai'"),
+        type: z.enum(PERSON_TYPES).optional().describe(
+          "Person type: 'human' or 'ai'",
+        ),
         email: z.string().optional().describe("Email address"),
         description: z.string().optional().describe(
           "Notes about this person — role, relationship, context",
@@ -60,7 +64,9 @@ export function register(
         "Use this to find a person by name before assigning tasks or to answer 'who do I work with?'. " +
         "Filter by type to see only humans or AI agents.",
       inputSchema: {
-        type: z.string().optional().describe("Filter by type: 'human' or 'ai'"),
+        type: z.enum(PERSON_TYPES).optional().describe(
+          "Filter by type: 'human' or 'ai'",
+        ),
         include_archived: z.boolean().optional().default(false).describe(
           "Include archived people",
         ),
@@ -110,14 +116,20 @@ export function register(
         "Get a person's details including their open assigned task count. " +
         "Use this for quick lookups when you need person metadata.",
       inputSchema: {
-        id: z.string().describe("Person UUID"),
+        id: uuidField().describe("Person UUID"),
       },
     },
     withMcpLogging("get_person", async ({ id }) => {
       const { data: person, error } = await personRepository.findById(id);
 
-      if (error || !person) {
-        return errorResult(`Person not found: ${error?.message || "unknown"}`);
+      // Unified not-found convention: a missing row on a read is data, not a
+      // tool failure. `findById` uses `.single()`, so a miss surfaces as the
+      // PGRST116 "no rows" code (mirrors get_thought_by_id / get_document).
+      if (error && error.code !== "PGRST116") {
+        return errorResult(`Error: ${error.message}`);
+      }
+      if (!person) {
+        return textResult(`No person found with ID "${id}".`);
       }
 
       const { data: taskCount } = await taskRepository.countOpenByAssignee(id);
@@ -150,9 +162,11 @@ export function register(
         "When the user mentions facts about a person — role changes, new contact info, context — " +
         "proactively call this to keep the person record current.",
       inputSchema: {
-        id: z.string().describe("Person UUID"),
+        id: uuidField().describe("Person UUID"),
         name: z.string().optional().describe("New name"),
-        type: z.string().optional().describe("New type: 'human' or 'ai'"),
+        type: z.enum(PERSON_TYPES).optional().describe(
+          "New type: 'human' or 'ai'",
+        ),
         email: z.string().nullable().optional().describe(
           "New email, or null to clear",
         ),
@@ -171,13 +185,19 @@ export function register(
         if (description !== undefined) updates.description = description;
 
         if (Object.keys(updates).length === 0) {
-          return textResult("No fields to update.");
+          return errorResult(
+            "At least one of name, type, email, or description must be provided.",
+          );
         }
 
-        const { error } = await personRepository.update(id, updates);
+        const { data, error } = await personRepository.update(id, updates);
 
         if (error) {
           return errorResult(`Update failed: ${error.message}`);
+        }
+        if (!data) {
+          // Affected-row verification: no row matched — report not-found.
+          return errorResult(`Person not found: no person with id ${id}`);
         }
 
         return textResult(
@@ -197,7 +217,7 @@ export function register(
         "but not deleted. Tasks assigned to them remain assigned. " +
         "Use this when someone is no longer relevant to active work.",
       inputSchema: {
-        id: z.string().describe("Person UUID to archive"),
+        id: uuidField().describe("Person UUID to archive"),
       },
     },
     withMcpLogging("archive_person", async ({ id }) => {

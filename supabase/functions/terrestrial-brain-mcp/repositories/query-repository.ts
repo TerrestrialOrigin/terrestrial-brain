@@ -9,90 +9,73 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { Row } from "../supabase-client.ts";
 
 // ── get_project_summary row shapes ──────────────────────────────────────────
+// Row DTOs are projections of the generated schema types (Step 24).
 
-export interface SummaryProjectRow {
-  id: string;
-  name: string;
-  type: string | null;
-  description: string | null;
-  parent_id: string | null;
-  archived_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
+export type SummaryProjectRow = Pick<
+  Row<"projects">,
+  | "id"
+  | "name"
+  | "type"
+  | "description"
+  | "parent_id"
+  | "archived_at"
+  | "created_at"
+  | "updated_at"
+>;
 
-export interface SummaryChildRow {
-  id: string;
-  name: string;
-  type: string | null;
-}
+export type SummaryChildRow = Pick<Row<"projects">, "id" | "name" | "type">;
 
-export interface SummaryTaskRow {
-  id: string;
-  content: string;
-  status: string;
-  due_by: string | null;
-  assigned_to: string | null;
-  created_at: string;
-}
+export type SummaryTaskRow = Pick<
+  Row<"tasks">,
+  "id" | "content" | "status" | "due_by" | "assigned_to" | "created_at"
+>;
 
-export interface SummaryThoughtRow {
-  id: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  note_snapshot_id: string | null;
-  created_at: string;
-}
+export type SummaryThoughtRow = Pick<
+  Row<"thoughts">,
+  "id" | "content" | "metadata" | "note_snapshot_id" | "created_at"
+>;
 
-export interface SummarySnapshotRow {
-  id: string;
-  title: string | null;
-  reference_id: string;
-}
+export type SummarySnapshotRow = Pick<
+  Row<"note_snapshots">,
+  "id" | "title" | "reference_id"
+>;
 
 // ── get_recent_activity row shapes ──────────────────────────────────────────
 
-export interface RecentThoughtRow {
-  id: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-}
+export type RecentThoughtRow = Pick<
+  Row<"thoughts">,
+  "id" | "content" | "metadata" | "created_at"
+>;
 
-export interface RecentTaskCreatedRow {
-  content: string;
-  status: string;
-  project_id: string | null;
-  created_at: string;
-}
+export type RecentTaskCreatedRow = Pick<
+  Row<"tasks">,
+  "content" | "status" | "project_id" | "created_at"
+>;
 
-export interface RecentTaskCompletedRow {
-  content: string;
-  project_id: string | null;
-  updated_at: string;
-}
+export type RecentTaskCompletedRow = Pick<
+  Row<"tasks">,
+  "content" | "project_id" | "updated_at"
+>;
 
 /** A `name` + `type` row carrying its `created_at` (the "created" queries). */
-export interface CreatedNamedRow {
-  name: string;
-  type: string | null;
-  created_at: string;
-}
+export type CreatedNamedRow = Pick<
+  Row<"projects">,
+  "name" | "type" | "created_at"
+>;
 
 /** A `name` + `type` row carrying its `updated_at` (the "updated" queries). */
-export interface UpdatedNamedRow {
-  name: string;
-  type: string | null;
-  updated_at: string;
-}
+export type UpdatedNamedRow = Pick<
+  Row<"projects">,
+  "name" | "type" | "updated_at"
+>;
 
-export interface DeliveredAiOutputRow {
-  title: string;
-  file_path: string;
-  picked_up_at: string;
-}
+export type DeliveredAiOutputRow = Pick<
+  Row<"ai_output">,
+  "title" | "file_path" | "picked_up_at"
+>;
 
 // ── get_note_snapshot row shape ─────────────────────────────────────────────
 

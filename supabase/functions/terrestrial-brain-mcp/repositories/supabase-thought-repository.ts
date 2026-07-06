@@ -4,7 +4,8 @@
  * RPC call formerly inline in `tools/thoughts.ts` / `helpers.ts` lives here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient, InsertRow } from "../supabase-client.ts";
+import { z } from "zod";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NewThought,
@@ -17,22 +18,39 @@ import type {
   ThoughtMatchParams,
   ThoughtMatchRow,
   ThoughtRepository,
-  ThoughtStatsRow,
+  ThoughtStatsResult,
 } from "./thought-repository.ts";
 
+// The `thought_stats` RPC returns JSONB — untrusted data crossing back into the
+// function — so parse it once into a known-good shape instead of casting
+// (owner's "parse, don't cast" rule).
+const statCountSchema = z.object({ key: z.string(), count: z.number() });
+const thoughtStatsSchema = z.object({
+  total: z.number(),
+  oldest: z.string().nullable(),
+  newest: z.string().nullable(),
+  types: statCountSchema.array(),
+  topics: statCountSchema.array(),
+  people: statCountSchema.array(),
+});
+
 export class SupabaseThoughtRepository implements ThoughtRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async matchByEmbedding(
     params: ThoughtMatchParams,
   ): Promise<RepoResult<ThoughtMatchRow[]>> {
     const { data, error } = await this.supabase.rpc("match_thoughts", {
-      query_embedding: params.embedding,
+      // supabase's typegen maps the pgvector column to `string`, but the RPC
+      // accepts the JSON number[] at runtime (covered by the vector-search
+      // integration tests). This is a documented typegen limitation for
+      // pgvector, not an untyped external value.
+      query_embedding: params.embedding as unknown as string,
       match_threshold: params.threshold,
       match_count: params.count,
       filter: {},
-      filter_author: params.author ?? null,
-      filter_reliability: params.reliability ?? null,
+      filter_author: params.author ?? undefined,
+      filter_reliability: params.reliability ?? undefined,
     });
     return { data, error: toRepoError(error) };
   }
@@ -77,35 +95,21 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
     return { data, error: toRepoError(error) };
   }
 
-  async countActive(projectId?: string): Promise<RepoResult<number>> {
-    let query = this.supabase
-      .from("thoughts")
-      .select("*", { count: "exact", head: true })
-      .is("archived_at", null);
-    if (projectId) {
-      query = query.contains("metadata", {
-        references: { projects: [projectId] },
-      });
+  async stats(projectId?: string): Promise<RepoResult<ThoughtStatsResult>> {
+    const { data, error } = await this.supabase.rpc("thought_stats", {
+      p_project_id: projectId ?? undefined,
+    });
+    if (error) {
+      return { data: null, error: toRepoError(error) };
     }
-    const { count, error } = await query;
-    return { data: count ?? null, error: toRepoError(error) };
-  }
-
-  async listForStats(
-    projectId?: string,
-  ): Promise<RepoResult<ThoughtStatsRow[]>> {
-    let query = this.supabase
-      .from("thoughts")
-      .select("metadata, created_at")
-      .is("archived_at", null)
-      .order("created_at", { ascending: false });
-    if (projectId) {
-      query = query.contains("metadata", {
-        references: { projects: [projectId] },
-      });
+    const parsed = thoughtStatsSchema.safeParse(data);
+    if (!parsed.success) {
+      return {
+        data: null,
+        error: { message: `Malformed thought_stats result: ${parsed.error}` },
+      };
     }
-    const { data, error } = await query;
-    return { data, error: toRepoError(error) };
+    return { data: parsed.data, error: null };
   }
 
   async findById(id: string): Promise<RepoResult<ThoughtDetailRow>> {
@@ -149,7 +153,12 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
   }
 
   async insert(thought: NewThought): Promise<RepoResult<void>> {
-    const { error } = await this.supabase.from("thoughts").insert(thought);
+    // supabase's typegen types the pgvector `embedding` column as `string` and
+    // the jsonb `metadata` as `Json`; the runtime accepts the number[] embedding
+    // and the plain metadata object we build. This narrow, documented assertion
+    // bridges those two typegen limitations for a trusted internal payload.
+    const insertRow = thought as unknown as InsertRow<"thoughts">;
+    const { error } = await this.supabase.from("thoughts").insert(insertRow);
     return { data: null, error: toRepoError(error) };
   }
 

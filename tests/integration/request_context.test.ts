@@ -36,7 +36,11 @@ Deno.test("MCP request records its client IP in function_call_logs (C8)", async 
       jsonrpc: "2.0",
       id: marker,
       method: "tools/call",
-      params: { name: "list_projects", arguments: { type: marker } },
+      // The unique marker rides in `query` (a free-text arg) so the logged
+      // `input` is uniquely identifiable. (It previously used `list_projects`'s
+      // `type`, but that is now a validated enum — Step 24 — which would reject
+      // an arbitrary marker before the call is ever logged.)
+      params: { name: "search_thoughts", arguments: { query: marker } },
     }),
   });
   await response.text();
@@ -46,7 +50,7 @@ Deno.test("MCP request records its client IP in function_call_logs (C8)", async 
   // positive signal — the row's presence — rather than a fixed sleep.
   let rows: { input: string; ip_address: string | null }[] = [];
   const logQuery =
-    `function_call_logs?function_name=eq.list_projects&input=ilike.*${marker}*&select=input,ip_address`;
+    `function_call_logs?function_name=eq.search_thoughts&input=ilike.*${marker}*&select=input,ip_address`;
   for (let attempt = 0; attempt < 20 && rows.length === 0; attempt++) {
     const logResponse = await fetch(restUrl(logQuery), {
       headers: serviceHeaders(),

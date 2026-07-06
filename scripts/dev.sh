@@ -37,6 +37,13 @@ fi
 echo "==> Starting Supabase stack (serves the edge functions)..."
 (cd "$REPO_ROOT" && supabase start)
 
+# Regenerate the typed database schema so the edge function's
+# `database.types.ts` stays in sync with the applied migrations (Step 24).
+echo "==> Regenerating database types from the local schema..."
+(cd "$REPO_ROOT" && supabase gen types typescript --local --schema public \
+  > "$REPO_ROOT/supabase/functions/terrestrial-brain-mcp/database.types.ts") \
+  || echo "WARNING: database type generation failed; continuing with existing types." >&2
+
 echo "==> Starting Obsidian plugin watcher..."
 (cd "$PLUGIN_DIR" && npm run dev) &
 PLUGIN_WATCH_PID=$!

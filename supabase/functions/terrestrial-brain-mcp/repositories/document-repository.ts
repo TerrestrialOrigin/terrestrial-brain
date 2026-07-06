@@ -4,43 +4,34 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { Row } from "../supabase-client.ts";
 
 /** The identity returned by an insert. */
-export interface DocumentInsertRow {
-  id: string;
-  title: string;
-  project_id: string;
-}
+export type DocumentInsertRow = Pick<
+  Row<"documents">,
+  "id" | "title" | "project_id"
+>;
 
 /** Full document row read by `get_document` (`select *`). */
-export interface DocumentFullRow {
-  id: string;
-  title: string;
-  content: string;
-  project_id: string;
-  file_path: string | null;
-  references: Record<string, string[]> | null;
-  created_at: string;
-  updated_at: string;
-}
+export type DocumentFullRow = Row<"documents">;
 
 /** Row shape returned to `list_documents` (no content body). */
-export interface DocumentListRow {
-  id: string;
-  title: string;
-  project_id: string;
-  file_path: string | null;
-  references: Record<string, string[]> | null;
-  created_at: string;
-  updated_at: string;
-}
+export type DocumentListRow = Pick<
+  Row<"documents">,
+  | "id"
+  | "title"
+  | "project_id"
+  | "file_path"
+  | "references"
+  | "created_at"
+  | "updated_at"
+>;
 
 /** Minimal row read by `update_document` to verify existence + extraction context. */
-export interface DocumentForUpdateRow {
-  id: string;
-  title: string;
-  project_id: string;
-}
+export type DocumentForUpdateRow = Pick<
+  Row<"documents">,
+  "id" | "title" | "project_id"
+>;
 
 /** Values for inserting a document. */
 export interface NewDocumentValues {

@@ -61,11 +61,14 @@ export interface PersonRepository {
   /** A single person's name by id (used before archiving). */
   findName(id: string): Promise<RepoResult<{ name: string }>>;
 
-  /** Apply a partial update to a person. */
+  /**
+   * Apply a partial update to a person. Returns the updated row's id, or `null`
+   * data when no row matched `id` (Step 24 affected-row verification).
+   */
   update(
     id: string,
     updates: Record<string, unknown>,
-  ): Promise<RepoResult<void>>;
+  ): Promise<RepoResult<{ id: string }>>;
 
   /** Soft-archive a person (sets `archived_at`). */
   archive(id: string): Promise<RepoResult<void>>;

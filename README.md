@@ -341,11 +341,26 @@ deno task dev
 
 This is the single entry point for local work. It starts the local Supabase
 stack (PostgreSQL, API server, and the edge-function runtime that serves the MCP
-function) and runs the Obsidian plugin's esbuild watcher. Press **Ctrl-C** to
+function), regenerates the typed database schema
+(`supabase/functions/terrestrial-brain-mcp/database.types.ts`) from the applied
+migrations, and runs the Obsidian plugin's esbuild watcher. Press **Ctrl-C** to
 stop: the script tears down only what it started (the plugin watcher it launched
 and the Supabase stack) — it never kills unrelated processes, so it is safe to
 run alongside other projects. It expects `supabase/functions/.env` to exist with
 at least `MCP_ACCESS_KEY` (and `TB_AI_PROVIDER` / `OPENROUTER_API_KEY`).
+
+### Regenerate the database types after a migration
+
+The edge function is typed against generated schema types
+(`SupabaseClient<Database>`). After adding a migration, refresh the committed
+types so the compiler stays in sync with the schema:
+
+```bash
+deno task gen:types   # requires the local Supabase stack running
+```
+
+`deno task dev` runs this automatically on start; the file is committed so
+type-checking and CI never need a running database.
 
 The two steps it automates can also be run manually:
 

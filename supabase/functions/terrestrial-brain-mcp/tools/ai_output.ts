@@ -1,10 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { validateFilePath } from "../validators.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import { TASK_STATUSES } from "../enums.ts";
 import type { AiOutputRepository } from "../repositories/ai-output-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
@@ -377,8 +379,7 @@ export function register(
           .array(
             z.object({
               content: z.string().describe("Task description"),
-              project_id: z
-                .string()
+              project_id: uuidField()
                 .optional()
                 .describe("UUID of the project this task belongs to"),
               parent_index: z
@@ -388,7 +389,7 @@ export function register(
                   "Index (0-based) of the parent task in this array for subtask hierarchy",
                 ),
               status: z
-                .string()
+                .enum(TASK_STATUSES)
                 .optional()
                 .default("open")
                 .describe("Status: open, in_progress, done, deferred"),
@@ -396,8 +397,7 @@ export function register(
                 .string()
                 .optional()
                 .describe("Due date as ISO 8601 string"),
-              assigned_to: z
-                .string()
+              assigned_to: uuidField()
                 .optional()
                 .describe("UUID of the person this task is assigned to"),
             }),

@@ -5,7 +5,7 @@
  * grep acceptance gate targets `tools/` and `extractors/` only.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import { resolveNames } from "./name-resolution.ts";
 import type {
@@ -28,7 +28,7 @@ const PROJECT_THOUGHT_COLUMNS =
   "id, content, metadata, note_snapshot_id, created_at";
 
 export class SupabaseQueryRepository implements QueryRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   // ── get_project_summary ───────────────────────────────────────────────────
 

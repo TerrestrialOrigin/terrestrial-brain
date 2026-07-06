@@ -4,7 +4,7 @@
  * `tools/tasks.ts` / `extractors/task-extractor.ts` lives here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient, InsertRow } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   CreatedTask,
@@ -17,12 +17,15 @@ import type {
 } from "./task-repository.ts";
 
 export class SupabaseTaskRepository implements TaskRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async insert(values: NewTaskValues): Promise<RepoResult<CreatedTask>> {
+    // `metadata` is jsonb, which typegen types as `Json`; the plain object we
+    // build is a trusted internal payload. Documented narrow assertion.
+    const insertRow = values as unknown as InsertRow<"tasks">;
     const { data, error } = await this.supabase
       .from("tasks")
-      .insert(values)
+      .insert(insertRow)
       .select("id, content")
       .single();
     return { data, error: toRepoError(error) };
@@ -63,12 +66,14 @@ export class SupabaseTaskRepository implements TaskRepository {
   async update(
     id: string,
     updates: Record<string, unknown>,
-  ): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
+  ): Promise<RepoResult<{ id: string }>> {
+    const { data, error } = await this.supabase
       .from("tasks")
       .update(updates)
-      .eq("id", id);
-    return { data: null, error: toRepoError(error) };
+      .eq("id", id)
+      .select("id")
+      .maybeSingle();
+    return { data, error: toRepoError(error) };
   }
 
   async archive(id: string): Promise<RepoResult<void>> {
