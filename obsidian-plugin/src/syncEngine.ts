@@ -97,12 +97,60 @@ export class SyncEngine {
     }
   }
 
-  /** A deleted note: drop any pending timer and its stored hash. */
+  /**
+   * A deleted note: erase its backend data (GDPR right-to-erasure, Step 25),
+   * drop any pending timer, and forget its stored hash. The backend forget is
+   * best-effort — a failure surfaces a Notice but never throws out of the
+   * handler, and the local hash cleanup still runs so a later sync/forget can
+   * reconcile. Only eligible (non-excluded) markdown notes are erased.
+   */
   async handleFileDelete(file: TFile): Promise<void> {
     this.cancelTimer(file.path);
+    await this.forgetBackendData(file);
     if (this.deps.hashes.get(file.path) !== undefined) {
       this.deps.hashes.delete(file.path);
       await this.deps.hashes.persist();
+    }
+  }
+
+  /**
+   * Ask the backend to erase a note's snapshot + thoughts. Idempotent server-
+   * side, so calling it for a never-synced note is a harmless no-op. Guarded so
+   * a network failure or classifier error can never break the delete handler.
+   */
+  private async forgetBackendData(file: TFile): Promise<void> {
+    if (!this.deps.config.getEndpointUrl()) return;
+    try {
+      if (this.deps.classifier.isExcluded(file)) return;
+      await this.deps.client.forgetNote(file.path);
+    } catch (error) {
+      this.deps.notifier.notify(
+        `⚠️ Terrestrial Brain: could not erase "${file.path}": ${
+          truncateForNotice(error instanceof Error ? error.message : String(error))
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Explicit user command: erase a note's backend data while KEEPING the vault
+   * file. Surfaces the outcome as a Notice (success or failure) and drops the
+   * local hash so a later edit re-syncs. Never throws.
+   */
+  async forgetNote(file: TFile): Promise<void> {
+    try {
+      const message = await this.deps.client.forgetNote(file.path);
+      if (this.deps.hashes.get(file.path) !== undefined) {
+        this.deps.hashes.delete(file.path);
+        await this.deps.hashes.persist();
+      }
+      this.deps.notifier.notify(`🧠 ${message}`);
+    } catch (error) {
+      this.deps.notifier.notify(
+        `⚠️ Could not forget "${file.path}": ${
+          truncateForNotice(error instanceof Error ? error.message : String(error))
+        }`,
+      );
     }
   }
 

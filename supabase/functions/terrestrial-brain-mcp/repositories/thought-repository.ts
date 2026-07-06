@@ -156,4 +156,12 @@ export interface ThoughtRepository {
 
   /** Increment usefulness for the given ids; data is the affected count. */
   incrementUsefulness(ids: string[]): Promise<RepoResult<number>>;
+
+  /**
+   * HARD-delete every thought derived from a note snapshot; data is the count
+   * removed. Unlike `archive`, this permanently erases rows — used only by the
+   * user-initiated `forget_note` erasure pathway (GDPR right-to-erasure, Step
+   * 25), never from an LLM reconciliation path.
+   */
+  deleteByNoteSnapshot(snapshotId: string): Promise<RepoResult<number>>;
 }

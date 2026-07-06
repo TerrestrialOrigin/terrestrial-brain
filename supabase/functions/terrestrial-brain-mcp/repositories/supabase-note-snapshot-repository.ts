@@ -35,4 +35,25 @@ export class SupabaseNoteSnapshotRepository implements NoteSnapshotRepository {
       .single();
     return { data, error: toRepoError(error) };
   }
+
+  async findIdByReference(
+    referenceId: string,
+  ): Promise<RepoResult<{ id: string } | null>> {
+    // maybeSingle → data is null (not a PGRST116 error) when no row exists, so
+    // forgetting an unsynced note is an idempotent no-op.
+    const { data, error } = await this.supabase
+      .from("note_snapshots")
+      .select("id")
+      .eq("reference_id", referenceId)
+      .maybeSingle();
+    return { data, error: toRepoError(error) };
+  }
+
+  async deleteByReference(referenceId: string): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("note_snapshots")
+      .delete()
+      .eq("reference_id", referenceId);
+    return { data: null, error: toRepoError(error) };
+  }
 }

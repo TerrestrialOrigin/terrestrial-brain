@@ -72,6 +72,8 @@ export interface TerrestrialBrainApiClient {
   call(endpointName: string, body?: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Ingest a note; returns the server's human-facing message. */
   ingestNote(content: string, title: string, noteId: string): Promise<string>;
+  /** Erase a note's backend data (snapshot + thoughts); returns the server message. */
+  forgetNote(noteId: string): Promise<string>;
   /** Poll pending AI output metadata, validated at the boundary. */
   fetchPendingMetadata(): Promise<AIOutputMetadata[]>;
   /** Fetch full AI output content for the given ids, validated at the boundary. */
@@ -131,6 +133,11 @@ export class HttpTerrestrialBrainClient implements TerrestrialBrainApiClient {
 
   async ingestNote(content: string, title: string, noteId: string): Promise<string> {
     const result = await this.request("ingest-note", { content, title, note_id: noteId }, "Ingest");
+    return typeof result.message === "string" ? result.message : "Done";
+  }
+
+  async forgetNote(noteId: string): Promise<string> {
+    const result = await this.request("forget-note", { note_id: noteId }, "Forget");
     return typeof result.message === "string" ? result.message : "Done";
   }
 

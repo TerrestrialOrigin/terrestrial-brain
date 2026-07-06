@@ -45,9 +45,20 @@ AI Agents (Claude, etc.) -+---> Search thoughts semantically
 - **Archiving** -- Soft-delete support across projects, tasks, and people. Archiving a project cascades to its children and their open tasks. Archived records are hidden by default but remain queryable.
 - **Composite queries** -- Single-call summaries like `get_project_summary` (project details, child projects, open tasks, recent thoughts, source notes) and `get_recent_activity` (cross-table activity feed with configurable lookback).
 - **AI output workflow** -- AI agents can submit content (summaries, analyses, plans) to an `ai_output` table. The plugin polls for pending output, presents it for human review (accept/reject/postpone), and writes accepted content back into your vault. Batch task creation with auto-generated markdown checklists is also supported.
-- **Function call logging** -- Every MCP tool call and HTTP endpoint invocation is logged with input, response size, record count, errors, and caller IP address for a complete audit trail.
+- **Function call logging** -- Every MCP tool call and HTTP endpoint invocation is logged with input, response size, record count, errors, and caller IP address for a complete audit trail. Logged input is capped in size, and rows are purged automatically after a retention window (see [Data privacy, retention & erasure](#data-privacy-retention--erasure)).
+- **Note erasure (GDPR)** -- Deleting a note in your vault erases its backend data (the note snapshot and every thought derived from it); a "Forget this note in Terrestrial Brain" command does the same on demand without deleting the vault file.
 - **MCP server** -- 31 tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
 - **Security model** -- A single shared secret (`MCP_ACCESS_KEY`) enforced at the edge function is the system's security boundary; send it via the `x-brain-key` request header (the `?key=` query parameter still works but is deprecated). The edge function talks to the database with the service-role key; Row-Level Security's role is to lock the public anon key out of all data entirely. See [ThreatModel.md](ThreatModel.md) for the full analysis.
+
+## Data privacy, retention & erasure
+
+**What leaves your vault.** When a note syncs, its **content** and **title** are sent to the backend over HTTPS. Nothing else about the note leaves the vault. Notes tagged with the exclude tag (default `terrestrialBrainExclude`) are never synced.
+
+**Where it is stored.** Synced content is stored as a row in `note_snapshots`, and the AI extraction pipeline derives rows in `thoughts` (and may create/link `projects`, `tasks`, and `people`). Every backend request is recorded in `function_call_logs` (function name, serialized input, caller IP, timestamp, errors) as an audit trail.
+
+**How to erase it.** Deleting a note in your vault erases that note's backend footprint — its `note_snapshots` row and every `thought` derived from it are **permanently deleted** (a deliberate hard-delete for the right to erasure, unlike the soft-archive used elsewhere). The **"Forget this note in Terrestrial Brain"** command does the same for the active note without deleting the vault file. Erasure is scoped to the note's snapshot and thoughts; shared `projects`/`tasks`/`people` that a note contributed to are not removed automatically (delete those explicitly via their own tools if needed).
+
+**Log retention.** `function_call_logs` rows are purged automatically after a retention window (default **90 days**) by the `purge_function_call_logs(retention_days)` SQL function, scheduled daily via `pg_cron` where available. Set `TB_LOG_RETENTION_DAYS` to document a different policy, and re-schedule the job with the new window on production. Serialized log input is capped at 10,000 characters so a single log row cannot accumulate unbounded note content.
 
 ## Project Structure
 

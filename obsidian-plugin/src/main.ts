@@ -161,6 +161,18 @@ export default class TerrestrialBrainPlugin extends Plugin {
       name: "Pull AI output from Terrestrial Brain",
       callback: async () => { await this.poller.pollAIOutput({ manual: true }); },
     });
+    this.addCommand({
+      id: "forget-note-in-terrestrial-brain",
+      name: "Forget this note in Terrestrial Brain",
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md") {
+          new Notice("Open a note to forget it in Terrestrial Brain");
+          return;
+        }
+        await this.engine.forgetNote(file);
+      },
+    });
   }
 
   private registerRibbon(): void {

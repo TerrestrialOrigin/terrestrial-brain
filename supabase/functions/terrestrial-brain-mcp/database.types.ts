@@ -391,6 +391,10 @@ export type Database = {
           updated_at: string;
         }[];
       };
+      purge_function_call_logs: {
+        Args: { retention_days?: number };
+        Returns: number;
+      };
       thought_stats: { Args: { p_project_id?: string }; Returns: Json };
     };
     Enums: {

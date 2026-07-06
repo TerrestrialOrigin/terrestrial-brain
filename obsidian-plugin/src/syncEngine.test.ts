@@ -14,6 +14,7 @@ interface EngineHarness {
   notifier: CollectingNotifier;
   hashes: MapHashStore;
   ingest: ReturnType<typeof vi.fn>;
+  forget: ReturnType<typeof vi.fn>;
 }
 
 function makeEngine(overrides: {
@@ -22,6 +23,7 @@ function makeEngine(overrides: {
   excluded?: boolean;
   read?: (path: string) => Promise<string>;
   ingest?: (content: string, title: string, noteId: string) => Promise<string>;
+  forget?: (noteId: string) => Promise<string>;
   hashes?: Record<string, string>;
 } = {}): EngineHarness {
   const notifier = new CollectingNotifier();
@@ -29,9 +31,13 @@ function makeEngine(overrides: {
   const ingest = vi.fn(
     overrides.ingest ?? (async () => "Captured 1 thought"),
   );
+  const forget = vi.fn(
+    overrides.forget ?? (async () => "Forgot note"),
+  );
   const client: TerrestrialBrainApiClient = {
     call: async () => ({ success: true }),
     ingestNote: (c, t, n) => ingest(c, t, n),
+    forgetNote: (n) => forget(n),
     fetchPendingMetadata: async () => [],
     fetchContent: async () => [],
   };
@@ -46,7 +52,7 @@ function makeEngine(overrides: {
       getSyncDelayMs: () => overrides.syncDelayMs ?? 5 * 60000,
     },
   };
-  return { engine: new SyncEngine(deps), notifier, hashes, ingest };
+  return { engine: new SyncEngine(deps), notifier, hashes, ingest, forget };
 }
 
 describe("SyncEngine.processNote", () => {
@@ -146,6 +152,68 @@ describe("SyncEngine — B3 delete/rename lifecycle", () => {
     expect(hashes.get("old.md")).toBeUndefined();
     expect(engine.pendingTimerCount).toBe(0);
     expect(hashes.persistCount).toBe(1);
+  });
+});
+
+describe("SyncEngine — Step 25 backend erasure on delete", () => {
+  it("delete erases backend data for an eligible note", async () => {
+    const { engine, forget } = makeEngine({ hashes: { "note.md": "h1" } });
+
+    await engine.handleFileDelete(fakeFile("note.md"));
+
+    expect(forget).toHaveBeenCalledWith("note.md");
+  });
+
+  it("delete does NOT erase an excluded note", async () => {
+    const { engine, forget } = makeEngine({ excluded: true, hashes: { "x.md": "h1" } });
+
+    await engine.handleFileDelete(fakeFile("x.md"));
+
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it("delete does not call forget when no endpoint is configured", async () => {
+    const { engine, forget } = makeEngine({ endpointUrl: "" });
+
+    await engine.handleFileDelete(fakeFile("x.md"));
+
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it("a forget failure surfaces a Notice and still drops the hash (no throw)", async () => {
+    const { engine, hashes, notifier } = makeEngine({
+      hashes: { "note.md": "h1" },
+      forget: async () => { throw new Error("network down"); },
+    });
+
+    await engine.handleFileDelete(fakeFile("note.md"));
+
+    // Local cleanup still completes despite the backend failure.
+    expect(hashes.get("note.md")).toBeUndefined();
+    expect(notifier.messages.some((message) => message.includes("network down"))).toBe(true);
+  });
+
+  it("forgetNote command erases backend data and drops the hash", async () => {
+    const { engine, hashes, forget, notifier } = makeEngine({
+      hashes: { "note.md": "h1" },
+      forget: async () => "Forgot \"note.md\": erased its note snapshot and 2 derived thought(s).",
+    });
+
+    await engine.forgetNote(fakeFile("note.md"));
+
+    expect(forget).toHaveBeenCalledWith("note.md");
+    expect(hashes.get("note.md")).toBeUndefined();
+    expect(notifier.messages.some((message) => message.includes("erased its note snapshot"))).toBe(true);
+  });
+
+  it("forgetNote command surfaces a Notice on failure without throwing", async () => {
+    const { engine, notifier } = makeEngine({
+      forget: async () => { throw new Error("boom"); },
+    });
+
+    await engine.forgetNote(fakeFile("note.md"));
+
+    expect(notifier.messages.some((message) => message.includes("boom"))).toBe(true);
   });
 });
 

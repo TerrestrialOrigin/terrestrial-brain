@@ -109,6 +109,15 @@ export class TBSettingTab extends PluginSettingTab {
       text: "Syncs all notes in this vault to Terrestrial Brain. Waits until you stop editing before syncing. Notes tagged with the exclude tag are always skipped.",
       cls: "setting-item-description",
     });
+    containerEl.createEl("p", {
+      text: "Data flow & erasure: syncing sends a note's content and title to your " +
+        "backend, where they are stored as a note snapshot and derived thoughts. " +
+        "Deleting a note here erases that note's snapshot and thoughts from the " +
+        "backend; the \"Forget this note in Terrestrial Brain\" command does the " +
+        "same without deleting the file. Backend request logs are purged " +
+        "automatically after a retention window.",
+      cls: "setting-item-description",
+    });
 
     this.renderEndpointSetting(containerEl);
     this.renderAccessKeySetting(containerEl);

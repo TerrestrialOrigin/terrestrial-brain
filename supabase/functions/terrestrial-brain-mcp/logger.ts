@@ -2,6 +2,25 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { getRequestIp } from "./requestContext.ts";
 import { errorResult, type McpToolResult } from "./mcp-response.ts";
 
+// ─── Logged-input size cap (data minimization, finding X7) ──────────────────
+// Serialized tool/endpoint input can carry full personal note content. We cap
+// what a single log row retains so function_call_logs cannot accumulate
+// unbounded personal data. Truncation NEVER fails the insert or the response —
+// logging must stay invisible to callers.
+export const MAX_LOGGED_INPUT_CHARS = 10_000;
+
+/** Serialize input and truncate to the cap, appending a dropped-chars marker. */
+export function serializeLoggedInput(input: Record<string, unknown>): string {
+  const serialized = JSON.stringify(input);
+  if (serialized.length <= MAX_LOGGED_INPUT_CHARS) {
+    return serialized;
+  }
+  const droppedCount = serialized.length - MAX_LOGGED_INPUT_CHARS;
+  return `${
+    serialized.slice(0, MAX_LOGGED_INPUT_CHARS)
+  }…[truncated ${droppedCount} chars]`;
+}
+
 // ─── IP extraction from HTTP headers ────────────────────────────────────────
 
 export function extractIpAddress(headers: Headers): string | null {
@@ -59,7 +78,7 @@ export function createFunctionCallLogger(
           .insert({
             function_name: functionName,
             function_type: functionType,
-            input: JSON.stringify(input),
+            input: serializeLoggedInput(input),
             ip_address: ipAddress ?? null,
           })
           .select("id")
