@@ -24,6 +24,8 @@ import {
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
 import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
 import { SupabaseTaskRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-task-repository.ts";
+import { SupabaseProjectRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-project-repository.ts";
+import { SupabasePersonRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-person-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Supabase client for direct DB access in tests
@@ -37,6 +39,8 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // Real repository over the same test client so the extractor pipeline's task
 // writes hit the DB exactly as before the Step 16 seam (behavior-preserving).
 const taskRepository = new SupabaseTaskRepository(supabase);
+const projectRepository = new SupabaseProjectRepository(supabase);
+const personRepository = new SupabasePersonRepository(supabase);
 
 // These tests drive the REAL extraction pipeline against the live LLM (via the
 // served function's OPENROUTER_API_KEY), so they inject the real OpenRouter
@@ -75,6 +79,8 @@ Deno.test("pipeline: single extractor returns correct references", async () => {
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertExists(result.projects);
@@ -98,6 +104,8 @@ Deno.test("pipeline: multiple extractors compose results", async () => {
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertEquals(result.projects, ["p1"]);
@@ -136,6 +144,8 @@ Deno.test("pipeline: extractors run in sequential order", async () => {
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertEquals(executionOrder, ["A", "B", "C"]);
@@ -169,6 +179,8 @@ Deno.test("pipeline: context enrichment visible to downstream extractors", async
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertEquals(downstreamSawProject, true);
@@ -187,6 +199,8 @@ Deno.test("pipeline: extractor returning empty ids includes key in result", asyn
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertExists(result.projects);
@@ -211,6 +225,8 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   // Seed data has at least Test Proj, Terrestrial Brain, Test Proj Backend
@@ -237,6 +253,8 @@ Deno.test("ProjectExtractor: detects known project from file path", async () => 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -266,6 +284,8 @@ Deno.test("ProjectExtractor: detects project from heading match", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [
       { id: TEST_PROJ_ID, name: "Test Proj" },
       { id: TERRESTRIAL_BRAIN_ID, name: "Terrestrial Brain" },
@@ -292,6 +312,8 @@ Deno.test("ProjectExtractor: heading match is case-insensitive", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -315,6 +337,8 @@ Deno.test("ProjectExtractor: heading not matching any project returns no match f
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -350,6 +374,8 @@ Deno.test("ProjectExtractor: auto-creates project from new folder", async () => 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -402,6 +428,8 @@ Deno.test("ProjectExtractor: empty folder name is skipped", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -431,6 +459,8 @@ Deno.test("ProjectExtractor: note outside /projects/ returns no path match", asy
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -455,6 +485,8 @@ Deno.test("ProjectExtractor: note with no referenceId gets no path match", async
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -488,6 +520,8 @@ Deno.test("ProjectExtractor: deduplicates when same project matched by path and 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -522,6 +556,8 @@ Deno.test("pipeline: ProjectExtractor wired into pipeline produces correct refer
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertExists(result.projects);
@@ -545,6 +581,8 @@ Deno.test("pipeline: ProjectExtractor with no matches returns empty projects arr
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertExists(result.projects);
@@ -565,6 +603,8 @@ Deno.test("TaskExtractor: unchecked checkbox creates open task with reference_id
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -609,6 +649,8 @@ Deno.test("TaskExtractor: checked checkbox creates done task with archived_at", 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -651,6 +693,8 @@ Deno.test("TaskExtractor: indented checkboxes create subtask hierarchy", async (
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -710,6 +754,8 @@ Deno.test("TaskExtractor: tasks under project heading get correct project_id", a
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -767,6 +813,8 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -790,6 +838,8 @@ Deno.test("TaskExtractor: re-ingest with unchanged checkbox doesn't duplicate", 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((
       task: { id: string; content: string; reference_id: string | null },
@@ -837,6 +887,8 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -871,6 +923,8 @@ Deno.test("TaskExtractor: re-ingest with checked box updates status to done", as
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((
       task: { id: string; content: string; reference_id: string | null },
@@ -917,6 +971,8 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -951,6 +1007,8 @@ Deno.test("TaskExtractor: re-ingest with unchecked box reopens task", async () =
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((
       task: { id: string; content: string; reference_id: string | null },
@@ -997,6 +1055,8 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1023,6 +1083,8 @@ Deno.test("TaskExtractor: re-ingest with new checkbox creates new task, keeps ex
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((
       task: { id: string; content: string; reference_id: string | null },
@@ -1070,6 +1132,8 @@ Deno.test("TaskExtractor: note with no checkboxes returns empty result", async (
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1104,6 +1168,8 @@ Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed reference
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertExists(result.projects);
@@ -1173,6 +1239,8 @@ Deno.test("pipeline: knownTasks populated from DB for matching reference_id", as
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertEquals(capturedKnownTasks.length, 1);
@@ -1203,6 +1271,8 @@ Deno.test("pipeline: knownTasks empty for note with no referenceId", async () =>
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertEquals(capturedKnownTasks.length, 0);
@@ -1220,6 +1290,8 @@ Deno.test("PeopleExtractor: referenceKey is 'people'", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1246,6 +1318,8 @@ Deno.test("PeopleExtractor: empty knownPeople returns empty ids without LLM call
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1267,6 +1341,8 @@ Deno.test("PeopleExtractor: empty note content returns empty ids", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [{ id: ALICE_ID, name: "Alice" }],
@@ -1290,6 +1366,8 @@ Deno.test("PeopleExtractor: with known people and content returns valid result",
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1324,6 +1402,8 @@ Deno.test("PeopleExtractor: does not return unknown people", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [{ id: ALICE_ID, name: "Alice" }],
@@ -1360,6 +1440,8 @@ Deno.test("pipeline: knownPeople populated from DB", async () => {
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   // Seed data has Alice and Claude
@@ -1384,6 +1466,8 @@ Deno.test("TaskExtractor: new task has populated metadata", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1426,6 +1510,8 @@ Deno.test("TaskExtractor: metadata refreshed on re-ingest", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1459,6 +1545,8 @@ Deno.test("TaskExtractor: metadata refreshed on re-ingest", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: (existingTasks || []).map((
       task: { id: string; content: string; reference_id: string | null },
@@ -1502,6 +1590,8 @@ Deno.test("TaskExtractor: extracts due date from checkbox text", async () => {
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1542,6 +1632,8 @@ Deno.test("TaskExtractor: no date leaves due_by null and content unchanged", asy
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -1580,6 +1672,8 @@ Deno.test("TaskExtractor: person in checkbox text sets assigned_to", async () =>
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1620,6 +1714,8 @@ Deno.test("TaskExtractor: person in section heading sets assigned_to", async () 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1659,6 +1755,8 @@ Deno.test("TaskExtractor: no person match leaves assigned_to null", async () => 
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [],
     knownTasks: [],
     knownPeople: [
@@ -1698,6 +1796,8 @@ Deno.test("TaskExtractor: extraction_method is heading_match when project resolv
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -1735,6 +1835,8 @@ Deno.test("TaskExtractor: extraction_method is file_path when project from pipel
     supabase,
     aiProvider: testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: [{ id: TEST_PROJ_ID, name: "Test Proj" }],
     knownTasks: [],
     knownPeople: [],
@@ -1774,6 +1876,8 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
     supabase,
     testAiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
   );
 
   assertExists(result.tasks);

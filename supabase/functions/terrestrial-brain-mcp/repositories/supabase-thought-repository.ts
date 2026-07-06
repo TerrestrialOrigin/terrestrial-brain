@@ -172,6 +172,16 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
     return { data: null, error: toRepoError(error) };
   }
 
+  async archiveByDocumentReference(
+    documentId: string,
+  ): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("thoughts")
+      .update({ archived_at: new Date().toISOString() })
+      .contains("metadata", { references: { documents: [documentId] } });
+    return { data: null, error: toRepoError(error) };
+  }
+
   async incrementUsefulness(ids: string[]): Promise<RepoResult<number>> {
     const { data, error } = await this.supabase.rpc("increment_usefulness", {
       thought_ids: ids,

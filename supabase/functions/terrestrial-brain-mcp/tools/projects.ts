@@ -3,11 +3,16 @@ import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { resolveNames } from "../repositories/name-resolution.ts";
+import type { ProjectRepository } from "../repositories/project-repository.ts";
+import type { TaskRepository } from "../repositories/task-repository.ts";
 
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  projectRepository: ProjectRepository,
+  taskRepository: TaskRepository,
 ) {
   server.registerTool(
     "create_project",
@@ -34,19 +39,17 @@ export function register(
     withMcpLogging(
       "create_project",
       async ({ name, type, parent_id, description }) => {
-        const { data, error } = await supabase
-          .from("projects")
-          .insert({
-            name,
-            type: type || null,
-            parent_id: parent_id || null,
-            description: description || null,
-          })
-          .select("id, name")
-          .single();
+        const { data, error } = await projectRepository.insert({
+          name,
+          type: type || null,
+          parent_id: parent_id || null,
+          description: description || null,
+        });
 
-        if (error) {
-          return errorResult(`Failed to create project: ${error.message}`);
+        if (error || !data) {
+          return errorResult(
+            `Failed to create project: ${error?.message || "unknown"}`,
+          );
         }
 
         return textResult(`Created project "${data.name}" (id: ${data.id})`);
@@ -76,16 +79,11 @@ export function register(
     withMcpLogging(
       "list_projects",
       async ({ include_archived, parent_id, type }) => {
-        let q = supabase
-          .from("projects")
-          .select("id, name, type, parent_id, archived_at, created_at")
-          .order("created_at", { ascending: false });
-
-        if (!include_archived) q = q.is("archived_at", null);
-        if (parent_id) q = q.eq("parent_id", parent_id);
-        if (type) q = q.eq("type", type);
-
-        const { data, error } = await q;
+        const { data, error } = await projectRepository.list({
+          includeArchived: include_archived,
+          parentId: parent_id,
+          type,
+        });
 
         if (error) {
           return errorResult(`Error: ${error.message}`);
@@ -95,28 +93,19 @@ export function register(
           return textResult("No projects found.");
         }
 
-        // Get parent names for display
-        const parentIds = [
-          ...new Set(data.filter((p) => p.parent_id).map((p) => p.parent_id)),
-        ];
-        let parentMap: Record<string, string> = {};
-        if (parentIds.length > 0) {
-          const { data: parents } = await supabase
-            .from("projects")
-            .select("id, name")
-            .in("id", parentIds);
-          parentMap = Object.fromEntries(
-            (parents || []).map((p) => [p.id, p.name]),
-          );
-        }
+        // Get parent names for display (shared batched resolver).
+        const parentIds = data
+          .filter((p) => p.parent_id)
+          .map((p) => p.parent_id as string);
+        const parentMap = parentIds.length > 0
+          ? await resolveNames(supabase, "projects", parentIds)
+          : new Map<string, string>();
 
         // Get child counts
         const projectIds = data.map((p) => p.id);
-        const { data: children } = await supabase
-          .from("projects")
-          .select("parent_id")
-          .in("parent_id", projectIds)
-          .is("archived_at", null);
+        const { data: children } = await projectRepository.listChildParentIds(
+          projectIds,
+        );
         const childCounts: Record<string, number> = {};
         for (const c of children || []) {
           childCounts[c.parent_id] = (childCounts[c.parent_id] || 0) + 1;
@@ -128,8 +117,8 @@ export function register(
             `   ID: ${p.id}`,
             `   Type: ${p.type || "—"}`,
           ];
-          if (p.parent_id && parentMap[p.parent_id]) {
-            parts.push(`   Parent: ${parentMap[p.parent_id]}`);
+          if (p.parent_id && parentMap.get(p.parent_id)) {
+            parts.push(`   Parent: ${parentMap.get(p.parent_id)}`);
           }
           if (childCounts[p.id]) {
             parts.push(`   Children: ${childCounts[p.id]}`);
@@ -166,11 +155,7 @@ export function register(
       },
     },
     withMcpLogging("get_project", async ({ id }) => {
-      const { data: project, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data: project, error } = await projectRepository.findById(id);
 
       if (error || !project) {
         return errorResult(`Project not found: ${error?.message || "unknown"}`);
@@ -179,27 +164,17 @@ export function register(
       // Get parent name
       let parentName = null;
       if (project.parent_id) {
-        const { data: parent } = await supabase
-          .from("projects")
-          .select("name")
-          .eq("id", project.parent_id)
-          .single();
+        const { data: parent } = await projectRepository.findName(
+          project.parent_id,
+        );
         parentName = parent?.name;
       }
 
       // Get children
-      const { data: children } = await supabase
-        .from("projects")
-        .select("id, name, type")
-        .eq("parent_id", id)
-        .is("archived_at", null);
+      const { data: children } = await projectRepository.listChildrenBasic(id);
 
       // Get open task count
-      const { count: taskCount } = await supabase
-        .from("tasks")
-        .select("*", { count: "exact", head: true })
-        .eq("project_id", id)
-        .in("status", ["open", "in_progress"]);
+      const { data: taskCount } = await taskRepository.countOpenByProject(id);
 
       const lines = [
         `Name: ${project.name}`,
@@ -268,10 +243,7 @@ export function register(
           return textResult("No fields to update.");
         }
 
-        const { error } = await supabase
-          .from("projects")
-          .update(updates)
-          .eq("id", id);
+        const { error } = await projectRepository.update(id, updates);
 
         if (error) {
           return errorResult(`Update failed: ${error.message}`);
@@ -299,11 +271,8 @@ export function register(
     },
     withMcpLogging("archive_project", async ({ id }) => {
       // Get the project name
-      const { data: project, error: fetchErr } = await supabase
-        .from("projects")
-        .select("name")
-        .eq("id", id)
-        .single();
+      const { data: project, error: fetchErr } = await projectRepository
+        .findName(id);
 
       if (fetchErr || !project) {
         return errorResult(
@@ -315,11 +284,9 @@ export function register(
       const allProjectIds: string[] = [id];
       let frontier = [id];
       while (frontier.length > 0) {
-        const { data: kids } = await supabase
-          .from("projects")
-          .select("id")
-          .in("parent_id", frontier)
-          .is("archived_at", null);
+        const { data: kids } = await projectRepository.listActiveChildIds(
+          frontier,
+        );
 
         frontier = (kids || []).map((k) => k.id);
         allProjectIds.push(...frontier);
@@ -328,31 +295,23 @@ export function register(
       const childCount = allProjectIds.length - 1;
 
       // Archive all projects
-      const { error: archiveErr } = await supabase
-        .from("projects")
-        .update({ archived_at: new Date().toISOString() })
-        .in("id", allProjectIds)
-        .is("archived_at", null);
+      const { error: archiveErr } = await projectRepository.archiveManyActive(
+        allProjectIds,
+      );
 
       if (archiveErr) {
         throw new Error(`Archive projects failed: ${archiveErr.message}`);
       }
 
       // Archive open tasks for all these projects
-      const { data: tasks } = await supabase
-        .from("tasks")
-        .select("id")
-        .in("project_id", allProjectIds)
-        .is("archived_at", null)
-        .in("status", ["open", "in_progress"]);
+      const { data: tasks } = await taskRepository.findOpenIdsByProjects(
+        allProjectIds,
+      );
 
       let taskCount = 0;
       if (tasks && tasks.length > 0) {
         const taskIds = tasks.map((t) => t.id);
-        const { error: taskErr } = await supabase
-          .from("tasks")
-          .update({ archived_at: new Date().toISOString() })
-          .in("id", taskIds);
+        const { error: taskErr } = await taskRepository.archiveMany(taskIds);
 
         if (taskErr) {
           throw new Error(`Archive tasks failed: ${taskErr.message}`);

@@ -8,8 +8,13 @@ import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { resolveNames } from "../repositories/name-resolution.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+import type { ProjectRepository } from "../repositories/project-repository.ts";
+import type { PersonRepository } from "../repositories/person-repository.ts";
+import type { DocumentRepository } from "../repositories/document-repository.ts";
+import type { ThoughtRepository } from "../repositories/thought-repository.ts";
 
 export function register(
   server: McpServer,
@@ -17,6 +22,10 @@ export function register(
   logger: FunctionCallLogger,
   aiProvider: AiProvider,
   taskRepository: TaskRepository,
+  projectRepository: ProjectRepository,
+  personRepository: PersonRepository,
+  documentRepository: DocumentRepository,
+  thoughtRepository: ThoughtRepository,
 ) {
   // ─── write_document ───────────────────────────────────────────────────────────
 
@@ -74,6 +83,8 @@ export function register(
               supabase,
               aiProvider,
               taskRepository,
+              projectRepository,
+              personRepository,
             );
             resolvedReferences = extractedRefs;
           } catch (pipelineError) {
@@ -86,20 +97,18 @@ export function register(
           }
         }
 
-        const { data, error } = await supabase
-          .from("documents")
-          .insert({
-            project_id,
-            title,
-            content,
-            file_path: file_path || null,
-            references: resolvedReferences,
-          })
-          .select("id, title, project_id")
-          .single();
+        const { data, error } = await documentRepository.insert({
+          project_id,
+          title,
+          content,
+          file_path: file_path || null,
+          references: resolvedReferences,
+        });
 
-        if (error) {
-          return errorResult(`Failed to store document: ${error.message}`);
+        if (error || !data) {
+          return errorResult(
+            `Failed to store document: ${error?.message || "unknown"}`,
+          );
         }
 
         const refParts: string[] = [];
@@ -148,34 +157,20 @@ export function register(
       },
     },
     withMcpLogging("get_document", async ({ id }) => {
-      const { data, error } = await supabase
-        .from("documents")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data, error } = await documentRepository.findById(id);
 
-      if (error) {
-        return error.code === "PGRST116"
+      if (error || !data) {
+        return error?.code === "PGRST116"
           ? textResult(`No document found with ID "${id}".`)
-          : errorResult(`Error: ${error.message}`);
+          : errorResult(`Error: ${error?.message || "unknown"}`);
       }
 
-      // Resolve project name. Log + raw-id fallback on error (finding C9) so a
-      // failed lookup is not indistinguishable from "unknown project".
-      let projectName = "unknown";
-      const { data: project, error: projectError } = await supabase
-        .from("projects")
-        .select("name")
-        .eq("id", data.project_id)
-        .single();
-      if (projectError) {
-        console.error(
-          `get_document project-name lookup failed: ${projectError.message}`,
-        );
-        projectName = data.project_id;
-      } else if (project) {
-        projectName = project.name;
-      }
+      // Resolve project name via the shared batched resolver (raw-id fallback on
+      // error — finding C9 — so a failed lookup is not "unknown project").
+      const projectNames = await resolveNames(supabase, "projects", [
+        data.project_id,
+      ]);
+      const projectName = projectNames.get(data.project_id) || "unknown";
 
       const refs = (data.references || {}) as Record<string, string[]>;
       const lines: string[] = [
@@ -224,19 +219,12 @@ export function register(
     withMcpLogging(
       "list_documents",
       async ({ project_id, title_contains, search, limit }) => {
-        let query = supabase
-          .from("documents")
-          .select(
-            "id, title, project_id, file_path, references, created_at, updated_at",
-          )
-          .order("created_at", { ascending: false })
-          .limit(limit);
-
-        if (project_id) query = query.eq("project_id", project_id);
-        if (title_contains) query = query.ilike("title", `%${title_contains}%`);
-        if (search) query = query.ilike("content", `%${search}%`);
-
-        const { data, error } = await query;
+        const { data, error } = await documentRepository.list({
+          limit,
+          projectId: project_id,
+          titleContains: title_contains,
+          search,
+        });
 
         if (error) {
           return errorResult(`Error: ${error.message}`);
@@ -246,32 +234,19 @@ export function register(
           return textResult("No documents found.");
         }
 
-        // Resolve project names. Log + raw-id fallback on error (finding C9).
+        // Resolve project names via the shared batched resolver (raw-id fallback
+        // on error — finding C9).
         const projectIds = [
           ...new Set(data.map((document) => document.project_id)),
         ];
-        const { data: projects, error: projectsError } = await supabase
-          .from("projects")
-          .select("id, name")
-          .in("id", projectIds);
-        let projectMap: Record<string, string>;
-        if (projectsError) {
-          console.error(
-            `list_documents project-name lookup failed: ${projectsError.message}`,
-          );
-          projectMap = Object.fromEntries(projectIds.map((pid) => [pid, pid]));
-        } else {
-          projectMap = Object.fromEntries(
-            (projects || []).map((project) => [project.id, project.name]),
-          );
-        }
+        const projectMap = await resolveNames(supabase, "projects", projectIds);
 
         const lines = data.map((document, index) => {
           const refs = (document.references || {}) as Record<string, string[]>;
           const parts = [
             `${index + 1}. ${document.title}`,
             `   ID: ${document.id}`,
-            `   Project: ${projectMap[document.project_id] || "unknown"}`,
+            `   Project: ${projectMap.get(document.project_id) || "unknown"}`,
           ];
           if (document.file_path) parts.push(`   Path: ${document.file_path}`);
 
@@ -338,11 +313,8 @@ export function register(
         }
 
         // Verify document exists and get current data for extraction context
-        const { data: existing, error: fetchError } = await supabase
-          .from("documents")
-          .select("id, title, project_id")
-          .eq("id", id)
-          .single();
+        const { data: existing, error: fetchError } = await documentRepository
+          .findForUpdate(id);
 
         if (fetchError || !existing) {
           return errorResult("Document not found.");
@@ -373,6 +345,8 @@ export function register(
               supabase,
               aiProvider,
               taskRepository,
+              projectRepository,
+              personRepository,
             );
             updates.references = extractedRefs;
           } catch (pipelineError) {
@@ -388,10 +362,10 @@ export function register(
         }
 
         // Perform the update FIRST — before touching any thoughts.
-        const { error: updateError } = await supabase
-          .from("documents")
-          .update(updates)
-          .eq("id", id);
+        const { error: updateError } = await documentRepository.update(
+          id,
+          updates,
+        );
 
         if (updateError) {
           // Update failed: linked thoughts are untouched and still consistent
@@ -404,10 +378,8 @@ export function register(
         // knowledge, and archived thoughts stay retrievable.
         let cleanupWarning = "";
         if (content !== undefined) {
-          const { error: archiveError } = await supabase
-            .from("thoughts")
-            .update({ archived_at: new Date().toISOString() })
-            .contains("metadata", { references: { documents: [id] } });
+          const { error: archiveError } = await thoughtRepository
+            .archiveByDocumentReference(id);
 
           if (archiveError) {
             // Surface the failure instead of swallowing it: the document was

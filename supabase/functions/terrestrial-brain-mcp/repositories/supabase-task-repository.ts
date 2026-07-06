@@ -12,6 +12,7 @@ import type {
   TaskDetailRow,
   TaskListFilters,
   TaskListRow,
+  TaskReferenceRow,
   TaskRepository,
 } from "./task-repository.ts";
 
@@ -85,5 +86,62 @@ export class SupabaseTaskRepository implements TaskRepository {
       .eq("id", id)
       .is("archived_at", null);
     return { data: null, error: toRepoError(error) };
+  }
+
+  async countOpenByProject(projectId: string): Promise<RepoResult<number>> {
+    const { count, error } = await this.supabase
+      .from("tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("project_id", projectId)
+      .in("status", ["open", "in_progress"]);
+    return { data: count ?? 0, error: toRepoError(error) };
+  }
+
+  async countOpenByAssignee(personId: string): Promise<RepoResult<number>> {
+    const { count, error } = await this.supabase
+      .from("tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("assigned_to", personId)
+      .in("status", ["open", "in_progress"])
+      .is("archived_at", null);
+    return { data: count ?? 0, error: toRepoError(error) };
+  }
+
+  async findOpenIdsByProjects(
+    projectIds: string[],
+  ): Promise<RepoResult<{ id: string }[]>> {
+    const { data, error } = await this.supabase
+      .from("tasks")
+      .select("id")
+      .in("project_id", projectIds)
+      .is("archived_at", null)
+      .in("status", ["open", "in_progress"]);
+    return { data, error: toRepoError(error) };
+  }
+
+  async archiveMany(ids: string[]): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("tasks")
+      .update({ archived_at: new Date().toISOString() })
+      .in("id", ids);
+    return { data: null, error: toRepoError(error) };
+  }
+
+  async deleteByIds(ids: string[]): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("tasks")
+      .delete()
+      .in("id", ids);
+    return { data: null, error: toRepoError(error) };
+  }
+
+  async findByReference(
+    referenceId: string,
+  ): Promise<RepoResult<TaskReferenceRow[]>> {
+    const { data, error } = await this.supabase
+      .from("tasks")
+      .select("id, content, reference_id")
+      .eq("reference_id", referenceId);
+    return { data, error: toRepoError(error) };
   }
 }

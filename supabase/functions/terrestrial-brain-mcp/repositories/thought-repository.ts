@@ -147,6 +147,12 @@ export interface ThoughtRepository {
   /** Soft-archive a thought (sets `archived_at`; never deletes). */
   archive(id: string): Promise<RepoResult<void>>;
 
+  /**
+   * Soft-archive every thought whose metadata references the given document id —
+   * the `update_document` stale-thought cleanup. Never hard-deletes.
+   */
+  archiveByDocumentReference(documentId: string): Promise<RepoResult<void>>;
+
   /** Increment usefulness for the given ids; data is the affected count. */
   incrementUsefulness(ids: string[]): Promise<RepoResult<number>>;
 }

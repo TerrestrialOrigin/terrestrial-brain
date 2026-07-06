@@ -3,11 +3,15 @@ import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import type { PersonRepository } from "../repositories/person-repository.ts";
+import type { TaskRepository } from "../repositories/task-repository.ts";
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  personRepository: PersonRepository,
+  taskRepository: TaskRepository,
 ) {
   server.registerTool(
     "create_person",
@@ -29,19 +33,17 @@ export function register(
     withMcpLogging(
       "create_person",
       async ({ name, type, email, description }) => {
-        const { data, error } = await supabase
-          .from("people")
-          .insert({
-            name,
-            type: type || null,
-            email: email || null,
-            description: description || null,
-          })
-          .select("id, name")
-          .single();
+        const { data, error } = await personRepository.insert({
+          name,
+          type: type || null,
+          email: email || null,
+          description: description || null,
+        });
 
-        if (error) {
-          return errorResult(`Failed to create person: ${error.message}`);
+        if (error || !data) {
+          return errorResult(
+            `Failed to create person: ${error?.message || "unknown"}`,
+          );
         }
 
         return textResult(`Created person "${data.name}" (id: ${data.id})`);
@@ -65,15 +67,10 @@ export function register(
       },
     },
     withMcpLogging("list_people", async ({ type, include_archived }) => {
-      let query = supabase
-        .from("people")
-        .select("id, name, type, email, description, archived_at, created_at")
-        .order("name");
-
-      if (!include_archived) query = query.is("archived_at", null);
-      if (type) query = query.eq("type", type);
-
-      const { data, error } = await query;
+      const { data, error } = await personRepository.list({
+        includeArchived: include_archived,
+        type,
+      });
 
       if (error) {
         return errorResult(`Error: ${error.message}`);
@@ -117,22 +114,13 @@ export function register(
       },
     },
     withMcpLogging("get_person", async ({ id }) => {
-      const { data: person, error } = await supabase
-        .from("people")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data: person, error } = await personRepository.findById(id);
 
       if (error || !person) {
         return errorResult(`Person not found: ${error?.message || "unknown"}`);
       }
 
-      const { count: taskCount } = await supabase
-        .from("tasks")
-        .select("*", { count: "exact", head: true })
-        .eq("assigned_to", id)
-        .in("status", ["open", "in_progress"])
-        .is("archived_at", null);
+      const { data: taskCount } = await taskRepository.countOpenByAssignee(id);
 
       const lines = [
         `Name: ${person.name}`,
@@ -186,10 +174,7 @@ export function register(
           return textResult("No fields to update.");
         }
 
-        const { error } = await supabase
-          .from("people")
-          .update(updates)
-          .eq("id", id);
+        const { error } = await personRepository.update(id, updates);
 
         if (error) {
           return errorResult(`Update failed: ${error.message}`);
@@ -216,11 +201,8 @@ export function register(
       },
     },
     withMcpLogging("archive_person", async ({ id }) => {
-      const { data: person, error: fetchError } = await supabase
-        .from("people")
-        .select("name")
-        .eq("id", id)
-        .single();
+      const { data: person, error: fetchError } = await personRepository
+        .findName(id);
 
       if (fetchError || !person) {
         return errorResult(
@@ -228,10 +210,7 @@ export function register(
         );
       }
 
-      const { error } = await supabase
-        .from("people")
-        .update({ archived_at: new Date().toISOString() })
-        .eq("id", id);
+      const { error } = await personRepository.archive(id);
 
       if (error) {
         return errorResult(`Archive failed: ${error.message}`);

@@ -1,0 +1,127 @@
+/**
+ * SupabaseProjectRepository — the sole implementation of `ProjectRepository`
+ * (fix-plan Step 17). Every `projects` table query formerly inline in
+ * `tools/projects.ts` / `extractors/project-extractor.ts` lives here.
+ */
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { type RepoResult, toRepoError } from "./repo-result.ts";
+import type {
+  NewProjectValues,
+  ProjectChildRow,
+  ProjectFullRow,
+  ProjectIdentity,
+  ProjectListFilters,
+  ProjectListRow,
+  ProjectRepository,
+} from "./project-repository.ts";
+
+export class SupabaseProjectRepository implements ProjectRepository {
+  constructor(private readonly supabase: SupabaseClient) {}
+
+  async insert(
+    values: NewProjectValues,
+  ): Promise<RepoResult<ProjectIdentity>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .insert(values)
+      .select("id, name")
+      .single();
+    return { data, error: toRepoError(error) };
+  }
+
+  async list(
+    filters: ProjectListFilters,
+  ): Promise<RepoResult<ProjectListRow[]>> {
+    let query = this.supabase
+      .from("projects")
+      .select("id, name, type, parent_id, archived_at, created_at")
+      .order("created_at", { ascending: false });
+
+    if (!filters.includeArchived) query = query.is("archived_at", null);
+    if (filters.parentId) query = query.eq("parent_id", filters.parentId);
+    if (filters.type) query = query.eq("type", filters.type);
+
+    const { data, error } = await query;
+    return { data, error: toRepoError(error) };
+  }
+
+  async findById(id: string): Promise<RepoResult<ProjectFullRow>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("*")
+      .eq("id", id)
+      .single();
+    return { data, error: toRepoError(error) };
+  }
+
+  async findName(id: string): Promise<RepoResult<{ name: string }>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("name")
+      .eq("id", id)
+      .single();
+    return { data, error: toRepoError(error) };
+  }
+
+  async listChildrenBasic(
+    parentId: string,
+  ): Promise<RepoResult<ProjectChildRow[]>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, name, type")
+      .eq("parent_id", parentId)
+      .is("archived_at", null);
+    return { data, error: toRepoError(error) };
+  }
+
+  async listChildParentIds(
+    parentIds: string[],
+  ): Promise<RepoResult<{ parent_id: string }[]>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("parent_id")
+      .in("parent_id", parentIds)
+      .is("archived_at", null);
+    return { data, error: toRepoError(error) };
+  }
+
+  async listActiveChildIds(
+    parentIds: string[],
+  ): Promise<RepoResult<{ id: string }[]>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id")
+      .in("parent_id", parentIds)
+      .is("archived_at", null);
+    return { data, error: toRepoError(error) };
+  }
+
+  async update(
+    id: string,
+    updates: Record<string, unknown>,
+  ): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("projects")
+      .update(updates)
+      .eq("id", id);
+    return { data: null, error: toRepoError(error) };
+  }
+
+  async archiveManyActive(ids: string[]): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("projects")
+      .update({ archived_at: new Date().toISOString() })
+      .in("id", ids)
+      .is("archived_at", null);
+    return { data: null, error: toRepoError(error) };
+  }
+
+  async listActive(): Promise<RepoResult<ProjectIdentity[]>> {
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, name")
+      .is("archived_at", null);
+    return { data, error: toRepoError(error) };
+  }
+}

@@ -24,6 +24,12 @@ function fakeRepo(listResult: RepoResult<TaskListRow[]>): TaskRepository {
     update: () => Promise.resolve({ data: null, error: null }),
     archive: () => Promise.resolve({ data: null, error: null }),
     archiveIfActive: () => Promise.resolve({ data: null, error: null }),
+    countOpenByProject: () => Promise.resolve({ data: 0, error: null }),
+    countOpenByAssignee: () => Promise.resolve({ data: 0, error: null }),
+    findOpenIdsByProjects: () => Promise.resolve({ data: [], error: null }),
+    archiveMany: () => Promise.resolve({ data: null, error: null }),
+    deleteByIds: () => Promise.resolve({ data: null, error: null }),
+    findByReference: () => Promise.resolve({ data: [], error: null }),
   };
 }
 
