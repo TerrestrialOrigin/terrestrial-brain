@@ -70,9 +70,10 @@ const documentRepository = new SupabaseDocumentRepository(supabase);
 const aiOutputRepository = new SupabaseAiOutputRepository(supabase);
 const noteSnapshotRepository = new SupabaseNoteSnapshotRepository(supabase);
 const queryRepository = new SupabaseQueryRepository(supabase);
-// The single AiProvider seam over OpenRouter (fix-plan Step 15). Constructed once
-// here and injected into consumers; the provider is stateless, so one instance is
-// safe to share across requests. Step 22 will branch this factory on TB_AI_PROVIDER.
+// The single AiProvider seam (fix-plan Step 15). Constructed once here and
+// injected into consumers; the provider is stateless, so one instance is safe to
+// share across requests. The factory selects the live OpenRouter provider or the
+// deterministic FakeAiProvider based on TB_AI_PROVIDER (Step 22).
 const aiProvider = createAiProvider();
 
 // ─── MCP Server factory ─────────────────────────────────────────────────────

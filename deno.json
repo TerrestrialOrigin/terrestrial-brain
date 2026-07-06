@@ -1,8 +1,9 @@
 {
   "tasks": {
-    "test": "deno test --allow-net --allow-env tests/",
-    "test:unit": "deno test --allow-net --allow-env tests/unit/",
-    "test:integration": "deno test --allow-net --allow-env tests/integration/"
+    "test": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/unit/ tests/integration/",
+    "test:unit": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/unit/",
+    "test:integration": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/integration/",
+    "test:live-llm": "deno test --allow-net --allow-env tests/live/"
   },
   "imports": {
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.47.10",
