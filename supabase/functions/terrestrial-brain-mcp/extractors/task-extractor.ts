@@ -15,7 +15,11 @@ import type {
   ExtractionContext,
   ExtractionResult,
   Extractor,
+  KnownProject,
+  KnownTask,
 } from "./pipeline.ts";
+import { REFERENCE_KEYS } from "./pipeline.ts";
+import type { KnownPerson } from "./name-matching.ts";
 import {
   cleanStrippedText,
   extractDueDate,
@@ -23,6 +27,10 @@ import {
   getZonedDate,
 } from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
+import {
+  ASSIGNMENT_MARKER_PATTERN,
+  DUE_MARKER_PATTERN,
+} from "./markers.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { NewTaskValues } from "../repositories/task-repository.ts";
 
@@ -233,14 +241,26 @@ interface TaskMatch {
  */
 export function stripMarkersForComparison(text: string): string {
   return text
-    .replace(/\(\s*(?:assigned|owner|assignee)\s*:[^)]*\)/gi, "")
-    .replace(/\(\s*(?:due|by|deadline|before)\s*:?[^)]*\)/gi, "")
     .replace(
-      /(?:,?\s*)(?:due|by|deadline|before)\s*:?\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}/gi,
+      new RegExp(`\\(\\s*${ASSIGNMENT_MARKER_PATTERN}\\s*:[^)]*\\)`, "gi"),
       "",
     )
     .replace(
-      /(?:,?\s*)(?:due|by|deadline|before)\s*:?\s*\w+\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?/gi,
+      new RegExp(`\\(\\s*${DUE_MARKER_PATTERN}\\s*:?[^)]*\\)`, "gi"),
+      "",
+    )
+    .replace(
+      new RegExp(
+        `(?:,?\\s*)${DUE_MARKER_PATTERN}\\s*:?\\s*\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}`,
+        "gi",
+      ),
+      "",
+    )
+    .replace(
+      new RegExp(
+        `(?:,?\\s*)${DUE_MARKER_PATTERN}\\s*:?\\s*\\w+\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?`,
+        "gi",
+      ),
       "",
     )
     .replace(/\(\s*\)/g, "")
@@ -253,8 +273,6 @@ interface ReconcileResult {
   unmatchedCheckboxIndices: number[];
   unmatchedTaskIds: string[];
 }
-
-type KnownTask = { id: string; content: string; reference_id: string | null };
 
 /** Pass 1: high-similarity matches (LCS/maxLength >= SIMILARITY_THRESHOLD). */
 function matchBySimilarity(
@@ -406,7 +424,7 @@ export function reconcileCheckboxesForTest(
 
 function matchProjectByHeading(
   checkbox: ParsedCheckbox,
-  knownProjects: { id: string; name: string }[],
+  knownProjects: KnownProject[],
 ): string | null {
   if (!checkbox.sectionHeading || knownProjects.length === 0) return null;
   const headingLower = checkbox.sectionHeading.toLowerCase().trim();
@@ -423,7 +441,7 @@ interface TaskProjectAssignment {
 
 async function inferProjectsByContent(
   taskTexts: { index: number; text: string }[],
-  knownProjects: { id: string; name: string }[],
+  knownProjects: KnownProject[],
   aiProvider: AiProvider,
 ): Promise<{ ok: boolean; assignments: TaskProjectAssignment[] }> {
   if (taskTexts.length === 0 || knownProjects.length === 0) {
@@ -522,8 +540,10 @@ export function buildTaskMetadata(
 // Person matching: explicit pattern fast path
 // ---------------------------------------------------------------------------
 
-const ASSIGNMENT_PATTERN =
-  /\(\s*(?:assigned|owner|assignee)\s*:\s*([^)]+?)\s*\)/i;
+const ASSIGNMENT_PATTERN = new RegExp(
+  `\\(\\s*${ASSIGNMENT_MARKER_PATTERN}\\s*:\\s*([^)]+?)\\s*\\)`,
+  "i",
+);
 
 /**
  * Fast path: extracts explicit "(assigned: Alice)" / "(owner: Bob)" patterns.
@@ -532,7 +552,7 @@ const ASSIGNMENT_PATTERN =
  */
 export function extractAssignment(
   text: string,
-  knownPeople: { id: string; name: string }[],
+  knownPeople: KnownPerson[],
 ): { personId: string | null; cleanedText: string } {
   if (knownPeople.length === 0) return { personId: null, cleanedText: text };
 
@@ -557,19 +577,6 @@ export function extractAssignment(
   return { personId: null, cleanedText: text };
 }
 
-/**
- * Returns the first known person whose name (or name part) appears in
- * the text. Full-name matches take priority; partial name-part matches
- * are returned only when exactly one person matches (unambiguous).
- * Delegates to shared utility.
- */
-export function matchPersonInText(
-  text: string,
-  knownPeople: { id: string; name: string }[],
-): string | null {
-  return findPersonInText(text, knownPeople);
-}
-
 // ---------------------------------------------------------------------------
 // AI enrichment: combined date + person extraction for unresolved tasks
 // ---------------------------------------------------------------------------
@@ -590,7 +597,7 @@ interface TaskEnrichment {
  */
 async function inferTaskEnrichments(
   tasks: { index: number; text: string; sectionHeading: string | null }[],
-  knownPeople: { id: string; name: string }[],
+  knownPeople: KnownPerson[],
   aiProvider: AiProvider,
   referenceDate: Date = new Date(),
   timeZone: string = "UTC",
@@ -758,7 +765,7 @@ function dedupeById<T extends { id: string }>(items: T[]): T[] {
 // ---------------------------------------------------------------------------
 
 export class TaskExtractor implements Extractor {
-  readonly referenceKey = "tasks";
+  readonly referenceKey = REFERENCE_KEYS.tasks;
 
   async extract(
     note: ParsedNote,
@@ -837,7 +844,7 @@ export class TaskExtractor implements Extractor {
    * never null an existing association.
    */
   private async resolveProjects(run: ExtractionRun): Promise<void> {
-    const pipelineProjectIds = run.context.accumulatedReferences.projects || [];
+    const pipelineProjectIds = run.context.accumulatedReferences[REFERENCE_KEYS.projects] || [];
     const unassignedForAI: AiCandidate[] = [];
 
     for (let index = 0; index < run.checkboxes.length; index++) {
@@ -971,11 +978,11 @@ export class TaskExtractor implements Extractor {
     const assignResult = extractAssignment(text, uniquePeople);
     if (assignResult.personId) return assignResult;
 
-    const substringMatch = matchPersonInText(text, uniquePeople);
+    const substringMatch = findPersonInText(text, uniquePeople);
     if (substringMatch) return { personId: substringMatch, cleanedText: text };
 
     if (checkbox.sectionHeading) {
-      const headingMatch = matchPersonInText(
+      const headingMatch = findPersonInText(
         checkbox.sectionHeading,
         uniquePeople,
       );

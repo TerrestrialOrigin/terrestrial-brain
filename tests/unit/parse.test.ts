@@ -508,9 +508,19 @@ Deno.test("edge: content with only whitespace", () => {
   assertEquals(result.headings.length, 0);
 });
 
-Deno.test("edge: checkbox-like line with different list marker", () => {
-  // * [ ] and + [ ] should NOT match (only - [ ] is valid)
-  const content = "* [ ] star marker\n+ [ ] plus marker";
+Deno.test("edge: checkbox with * and + list markers is parsed (Step 20)", () => {
+  // Markdown allows -, *, and + as list bullets; Obsidian renders all three.
+  const content = "* [ ] star marker\n+ [x] plus marker";
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes.length, 2);
+  assertEquals(result.checkboxes[0].text, "star marker");
+  assertEquals(result.checkboxes[0].checked, false);
+  assertEquals(result.checkboxes[1].text, "plus marker");
+  assertEquals(result.checkboxes[1].checked, true);
+});
+
+Deno.test("edge: bullet line without checkbox brackets is ignored (Step 20)", () => {
+  const content = "* just a bullet, not a checkbox\n+ another bullet";
   const result = parseNote(content, null, null, "obsidian");
   assertEquals(result.checkboxes.length, 0);
 });
@@ -525,4 +535,57 @@ Deno.test("edge: unclosed code block treats rest as code", () => {
   const result = parseNote(content, null, null, "obsidian");
   assertEquals(result.checkboxes.length, 1);
   assertEquals(result.checkboxes[0].text, "before");
+});
+
+// ---------------------------------------------------------------------------
+// Step 20 — parent detection: nearest smaller depth, section-bounded
+// ---------------------------------------------------------------------------
+
+Deno.test("parent: depth jump 0->2 nests to nearest shallower checkbox (Step 20)", () => {
+  // A 0->2 indent jump (e.g. pasted from a 4-space editor) must nest to the
+  // depth-0 item, not orphan the child. Old exact-`depth-1` logic returned null.
+  const content = ["- [ ] Parent task", "      - [ ] Deeply indented child"]
+    .join("\n");
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes.length, 2);
+  assertEquals(result.checkboxes[1].depth, 3);
+  assertEquals(result.checkboxes[1].parentIndex, 0);
+});
+
+Deno.test("parent: depth jump 0->2 with 4-space indent nests to parent (Step 20)", () => {
+  // 4 spaces = depth 2 under this parser; still must attach to the depth-0 item.
+  const content = ["- [ ] Parent", "    - [ ] Child jumped to depth 2"].join(
+    "\n",
+  );
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes[1].depth, 2);
+  assertEquals(result.checkboxes[1].parentIndex, 0);
+});
+
+Deno.test("parent: search does not cross a section heading boundary (Step 20)", () => {
+  const content = [
+    "## Section A",
+    "- [ ] A task",
+    "## Section B",
+    "  - [ ] B subtask",
+  ].join("\n");
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes.length, 2);
+  assertEquals(result.checkboxes[0].sectionHeading, "Section A");
+  assertEquals(result.checkboxes[1].sectionHeading, "Section B");
+  // The only shallower predecessor is in a different section -> no parent.
+  assertEquals(result.checkboxes[1].parentIndex, null);
+});
+
+Deno.test("parent: in-section shallower checkbox is still found across a deeper sibling (Step 20)", () => {
+  // depth 0, then depth 1, then depth 1 again (sibling) under the same heading.
+  const content = [
+    "## Work",
+    "- [ ] Parent",
+    "  - [ ] Child A",
+    "  - [ ] Child B",
+  ].join("\n");
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes[1].parentIndex, 0);
+  assertEquals(result.checkboxes[2].parentIndex, 0);
 });

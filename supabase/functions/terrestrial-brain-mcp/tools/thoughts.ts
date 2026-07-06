@@ -8,10 +8,10 @@ import {
   getProjectRefs,
 } from "../helpers.ts";
 import { parseNote } from "../parser.ts";
-import { runExtractionPipeline } from "../extractors/pipeline.ts";
-import { ProjectExtractor } from "../extractors/project-extractor.ts";
-import { TaskExtractor } from "../extractors/task-extractor.ts";
-import { PeopleExtractor } from "../extractors/people-extractor.ts";
+import {
+  createDefaultExtractors,
+  runExtractionPipeline,
+} from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
@@ -608,11 +608,7 @@ export function register(
           const parsedNote = parseNote(content, null, null, "mcp");
           references = await runExtractionPipeline(
             parsedNote,
-            [
-              new ProjectExtractor(),
-              new PeopleExtractor(),
-              new TaskExtractor(),
-            ],
+            createDefaultExtractors(),
             supabase,
             aiProvider,
             taskRepository,
@@ -1198,7 +1194,7 @@ export async function handleIngestNote(
     try {
       references = await runExtractionPipeline(
         parsedNote,
-        [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
+        createDefaultExtractors(),
         supabase,
         aiProvider,
         taskRepository,

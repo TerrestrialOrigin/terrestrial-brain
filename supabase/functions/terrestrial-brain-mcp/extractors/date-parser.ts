@@ -8,6 +8,8 @@
  * UTC clock. Resolved dates are stored as midnight-UTC of the calendar date.
  */
 
+import { DUE_MARKER_PATTERN } from "./markers.ts";
+
 // ---------------------------------------------------------------------------
 // Month / day lookup tables
 // ---------------------------------------------------------------------------
@@ -244,7 +246,7 @@ const allMonthNames = [...Object.keys(MONTH_FULL), ...Object.keys(MONTH_SHORT)];
 const allDayNames = Object.keys(DAY_INDEX);
 const monthPattern = allMonthNames.join("|");
 const dayNamePattern = allDayNames.join("|");
-const markerPattern = "(?:due|by|deadline|before)";
+const markerPattern = DUE_MARKER_PATTERN;
 // Ordinal day: "5th", "1st", "2nd", "23rd"
 const dayNumber = "\\d{1,2}(?:st|nd|rd|th)?";
 
