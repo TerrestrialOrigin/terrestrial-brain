@@ -4,7 +4,21 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { renderSectionBody } from "./section-format.ts";
-import type { QueryRepository } from "../repositories/query-repository.ts";
+import { buildUsefulnessReminder } from "./usefulness-reminder.ts";
+import type { RepoError, RepoResult } from "../repositories/repo-result.ts";
+import type {
+  CreatedNamedRow,
+  DeliveredAiOutputRow,
+  QueryRepository,
+  RecentTaskCompletedRow,
+  RecentTaskCreatedRow,
+  RecentThoughtRow,
+  SummaryChildRow,
+  SummaryProjectRow,
+  SummaryTaskRow,
+  SummaryThoughtRow,
+  UpdatedNamedRow,
+} from "../repositories/query-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,6 +30,558 @@ import type { QueryRepository } from "../repositories/query-repository.ts";
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
   return new Date(dateStr).toLocaleDateString();
+}
+
+/** One "name + type + action + date" activity row (created or updated). */
+interface ActivityEntry {
+  name: string;
+  type: string | null;
+  action: string;
+  date: string;
+}
+
+/**
+ * Merge "created" and "updated" rows into one action-tagged list, deduplicated
+ * by name (an entity appearing in both keeps only its "created" entry — created
+ * is added first and wins). Shared by the projects and people sections of
+ * get_recent_activity, which previously carried two verbatim copies of this.
+ */
+function dedupeByName(
+  created: CreatedNamedRow[] | null,
+  updated: UpdatedNamedRow[] | null,
+): ActivityEntry[] {
+  const seen = new Set<string>();
+  const entries: ActivityEntry[] = [];
+  for (const row of created || []) {
+    seen.add(row.name);
+    entries.push({
+      name: row.name,
+      type: row.type,
+      action: "created",
+      date: row.created_at,
+    });
+  }
+  for (const row of updated || []) {
+    if (!seen.has(row.name)) {
+      seen.add(row.name);
+      entries.push({
+        name: row.name,
+        type: row.type,
+        action: "updated",
+        date: row.updated_at,
+      });
+    }
+  }
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
+// get_project_summary — fetch/format split
+// ---------------------------------------------------------------------------
+
+/** Everything formatProjectSummary needs — gathered by fetchProjectSummary. */
+interface ProjectSummaryData {
+  project: SummaryProjectRow;
+  parentName: string | null;
+  children: RepoResult<SummaryChildRow[]>;
+  tasks: RepoResult<SummaryTaskRow[]>;
+  personMap: Map<string, string>;
+  matchingThoughts: SummaryThoughtRow[];
+  thoughtsError: RepoError | null;
+  snapshotMap: Record<string, { title: string | null; reference_id: string }>;
+}
+
+/**
+ * Gather all data for a project summary. Returns `{ error }` when the project
+ * itself is not found (the only hard-stop); every other sub-query's error is
+ * carried through so the formatter can surface it as an "unavailable" section.
+ */
+async function fetchProjectSummary(
+  queryRepository: QueryRepository,
+  id: string,
+): Promise<{ data: ProjectSummaryData } | { error: string }> {
+  const { data: project, error: projectError } = await queryRepository
+    .getProjectById(id);
+  if (projectError || !project) {
+    return {
+      error: `Project not found: ${projectError?.message || "unknown"}`,
+    };
+  }
+
+  let parentName: string | null = null;
+  if (project.parent_id) {
+    const { data: parent, error: parentError } = await queryRepository
+      .getProjectName(project.parent_id);
+    if (parentError) {
+      console.error(
+        `get_project_summary parent lookup failed: ${parentError.message}`,
+      );
+    }
+    parentName = parent?.name || null;
+  }
+
+  const children = await queryRepository.listChildProjects(id);
+  const tasks = await queryRepository.listOpenTasksForProject(id);
+
+  // Query both metadata formats in parallel: new (projects array) and old
+  // (project_id string). If either fails the thoughts view is incomplete —
+  // surface it rather than silently showing a partial (or empty) list.
+  const [
+    { data: newFormatThoughts, error: newFormatThoughtsError },
+    { data: oldFormatThoughts, error: oldFormatThoughtsError },
+  ] = await Promise.all([
+    queryRepository.listThoughtsForProjectNewFormat(id),
+    queryRepository.listThoughtsForProjectOldFormat(id),
+  ]);
+  const thoughtsError = newFormatThoughtsError ?? oldFormatThoughtsError;
+
+  // Merge and deduplicate by ID, then take top 25 by date
+  const allProjectThoughts = [
+    ...(newFormatThoughts || []),
+    ...(oldFormatThoughts || []),
+  ];
+  const seenThoughtIds = new Set<string>();
+  const matchingThoughts = allProjectThoughts
+    .filter((thought) => {
+      if (seenThoughtIds.has(thought.id)) return false;
+      seenThoughtIds.add(thought.id);
+      return true;
+    })
+    .sort((thoughtA, thoughtB) =>
+      new Date(thoughtB.created_at).getTime() -
+      new Date(thoughtA.created_at).getTime()
+    )
+    .slice(0, 25);
+
+  const snapshotMap = await fetchSnapshotMap(queryRepository, matchingThoughts);
+  const personMap = await fetchTaskPersonMap(queryRepository, tasks.data);
+
+  return {
+    data: {
+      project,
+      parentName,
+      children,
+      tasks,
+      personMap,
+      matchingThoughts,
+      thoughtsError,
+      snapshotMap,
+    },
+  };
+}
+
+/** Resolve source-note snapshots for the thoughts that carry a snapshot id. */
+async function fetchSnapshotMap(
+  queryRepository: QueryRepository,
+  thoughts: SummaryThoughtRow[],
+): Promise<Record<string, { title: string | null; reference_id: string }>> {
+  const snapshotIds = [
+    ...new Set(
+      thoughts
+        .filter((thought) => thought.note_snapshot_id)
+        .map((thought) => thought.note_snapshot_id),
+    ),
+  ];
+  if (snapshotIds.length === 0) return {};
+
+  const { data: snapshots, error: snapshotsError } = await queryRepository
+    .getNoteSnapshotsByIds(snapshotIds as string[]);
+  if (snapshotsError) {
+    console.error(
+      `get_project_summary source-note lookup failed: ${snapshotsError.message}`,
+    );
+  }
+  return Object.fromEntries(
+    (snapshots || []).map((snapshot) => [
+      snapshot.id,
+      { title: snapshot.title, reference_id: snapshot.reference_id },
+    ]),
+  );
+}
+
+/** Resolve assigned-person names for the given tasks (shared batched resolver). */
+async function fetchTaskPersonMap(
+  queryRepository: QueryRepository,
+  tasks: SummaryTaskRow[] | null,
+): Promise<Map<string, string>> {
+  const taskPersonIds = [
+    ...new Set(
+      (tasks || [])
+        .filter((task) => task.assigned_to)
+        .map((task) => task.assigned_to),
+    ),
+  ];
+  return taskPersonIds.length > 0
+    ? await queryRepository.personNamesByIds(taskPersonIds as string[])
+    : new Map<string, string>();
+}
+
+/** Render a project summary from already-fetched data. Pure — no I/O. */
+function formatProjectSummary(data: ProjectSummaryData): string {
+  const {
+    project,
+    parentName,
+    children,
+    tasks,
+    personMap,
+    matchingThoughts,
+    thoughtsError,
+    snapshotMap,
+  } = data;
+  const sections: string[] = [];
+
+  // Project details
+  const detailLines = [
+    `# ${project.name}`,
+    "",
+    `**Type:** ${project.type || "—"}`,
+    `**Description:** ${project.description || "—"}`,
+  ];
+  if (parentName) {
+    detailLines.push(`**Parent:** ${parentName} (${project.parent_id})`);
+  }
+  if (project.archived_at) {
+    detailLines.push(`**Archived:** ${formatDate(project.archived_at)}`);
+  }
+  detailLines.push(
+    `**Created:** ${formatDate(project.created_at)}`,
+    `**Updated:** ${formatDate(project.updated_at)}`,
+  );
+  sections.push(detailLines.join("\n"));
+
+  // Children — only render a section when there are children OR the lookup
+  // failed (a failure must not be indistinguishable from "no children").
+  if (children.error || (children.data && children.data.length > 0)) {
+    const childBody = renderSectionBody(
+      children,
+      "", // never reached: section is skipped entirely on success-empty above
+      (rows) =>
+        rows
+          .map(
+            (child) => `- ${child.name} (${child.type || "—"}) — ${child.id}`,
+          )
+          .join("\n"),
+      "get_project_summary children",
+    );
+    const childCount = children.error ? "?" : (children.data?.length ?? 0);
+    sections.push(
+      ["", `## Child Projects (${childCount})`, "", childBody].join("\n"),
+    );
+  }
+
+  // Open tasks
+  const taskList = tasks.data || [];
+  const openTasksBody = renderSectionBody(
+    tasks,
+    "No open tasks.",
+    (rows) =>
+      rows
+        .map((task) => {
+          const statusIcon = task.status === "in_progress" ? "[~]" : "[ ]";
+          const duePart = task.due_by
+            ? ` — due ${formatDate(task.due_by)}${
+              new Date(task.due_by) < new Date() ? " (OVERDUE)" : ""
+            }`
+            : "";
+          const assigneePart =
+            task.assigned_to && personMap.get(task.assigned_to)
+              ? ` (${personMap.get(task.assigned_to)})`
+              : "";
+          return `- ${statusIcon} ${task.content}${assigneePart}${duePart}`;
+        })
+        .join("\n"),
+    "get_project_summary open tasks",
+  );
+  sections.push(
+    [
+      "",
+      `## Open Tasks (${tasks.error ? "?" : taskList.length})`,
+      "",
+      openTasksBody,
+    ].join("\n"),
+  );
+
+  // Recent thoughts
+  const thoughtsBody = renderSectionBody(
+    { data: thoughtsError ? null : matchingThoughts, error: thoughtsError },
+    "No recent thoughts referencing this project.",
+    (rows) =>
+      rows
+        .map((thought) => {
+          const meta = (thought.metadata || {}) as Record<string, unknown>;
+          const typeLabel = (meta.type as string) || "unknown";
+          return `- [${
+            formatDate(thought.created_at)
+          }] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`;
+        })
+        .join("\n"),
+    "get_project_summary recent thoughts",
+  );
+  sections.push(
+    [
+      "",
+      `## Recent Thoughts (${thoughtsError ? "?" : matchingThoughts.length})`,
+      "",
+      thoughtsBody,
+    ].join("\n"),
+  );
+
+  // Source notes
+  const uniqueSnapshots = Object.values(snapshotMap);
+  if (uniqueSnapshots.length > 0) {
+    const noteLines = [
+      "",
+      `## Source Notes (${uniqueSnapshots.length})`,
+      "",
+      ...uniqueSnapshots.map(
+        (snapshot) =>
+          `- ${
+            snapshot.title || snapshot.reference_id
+          } (${snapshot.reference_id})`,
+      ),
+    ];
+    sections.push(noteLines.join("\n"));
+  }
+
+  // Usefulness reminder
+  if (matchingThoughts.length > 0) {
+    const thoughtIds = matchingThoughts.map((thought) => thought.id);
+    sections.push(buildUsefulnessReminder(thoughtIds, "terse"));
+  }
+
+  return sections.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// get_recent_activity — fetch/format split
+// ---------------------------------------------------------------------------
+
+/** Everything formatRecentActivity needs — gathered by fetchRecentActivity. */
+interface RecentActivityData {
+  effectiveDays: number;
+  thoughts: RepoResult<RecentThoughtRow[]>;
+  tasksCreated: RepoResult<RecentTaskCreatedRow[]>;
+  tasksCompleted: RepoResult<RecentTaskCompletedRow[]>;
+  projectEntries: ActivityEntry[];
+  projectsError: RepoError | null;
+  peopleEntries: ActivityEntry[];
+  peopleError: RepoError | null;
+  aiOutputs: RepoResult<DeliveredAiOutputRow[]>;
+  projectNameMap: Map<string, string>;
+}
+
+/** Gather all cross-table recent-activity data for the last `days` days. */
+async function fetchRecentActivity(
+  queryRepository: QueryRepository,
+  days: number,
+): Promise<RecentActivityData> {
+  const effectiveDays = Math.max(1, days);
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - effectiveDays);
+  const sinceIso = sinceDate.toISOString();
+
+  const thoughts = await queryRepository.listRecentThoughts(sinceIso);
+  const tasksCreated = await queryRepository.listTasksCreatedSince(sinceIso);
+  const tasksCompleted = await queryRepository.listTasksCompletedSince(
+    sinceIso,
+  );
+
+  const { data: projectsCreated, error: projectsCreatedError } =
+    await queryRepository.listProjectsCreatedSince(sinceIso);
+  const { data: projectsUpdated, error: projectsUpdatedError } =
+    await queryRepository.listProjectsUpdatedSince(sinceIso);
+  const projectsError = projectsCreatedError ?? projectsUpdatedError;
+  const projectEntries = dedupeByName(projectsCreated, projectsUpdated);
+
+  const aiOutputs = await queryRepository.listDeliveredAiOutputsSince(sinceIso);
+
+  const { data: peopleCreated, error: peopleCreatedError } =
+    await queryRepository
+      .listPeopleCreatedSince(sinceIso);
+  const { data: peopleUpdated, error: peopleUpdatedError } =
+    await queryRepository
+      .listPeopleUpdatedSince(sinceIso);
+  const peopleError = peopleCreatedError ?? peopleUpdatedError;
+  const peopleEntries = dedupeByName(peopleCreated, peopleUpdated);
+
+  // Collect task project IDs for name resolution
+  const projectIdSet = new Set<string>();
+  for (const task of tasksCreated.data || []) {
+    if (task.project_id) projectIdSet.add(task.project_id);
+  }
+  for (const task of tasksCompleted.data || []) {
+    if (task.project_id) projectIdSet.add(task.project_id);
+  }
+  const projectNameMap = projectIdSet.size > 0
+    ? await queryRepository.projectNamesByIds([...projectIdSet])
+    : new Map<string, string>();
+
+  return {
+    effectiveDays,
+    thoughts,
+    tasksCreated,
+    tasksCompleted,
+    projectEntries,
+    projectsError,
+    peopleEntries,
+    peopleError,
+    aiOutputs,
+    projectNameMap,
+  };
+}
+
+/** Render recent activity from already-fetched data. Pure — no I/O. */
+function formatRecentActivity(data: RecentActivityData): string {
+  const {
+    effectiveDays,
+    thoughts,
+    tasksCreated,
+    tasksCompleted,
+    projectEntries,
+    projectsError,
+    peopleEntries,
+    peopleError,
+    aiOutputs,
+    projectNameMap,
+  } = data;
+
+  const sections: string[] = [];
+  sections.push(
+    `# Activity — Last ${effectiveDays} Day${effectiveDays !== 1 ? "s" : ""}`,
+  );
+
+  // Push one "## Header (count)" section, surfacing a failed query as an
+  // explicit unavailable marker rather than empty-state prose (finding C9).
+  const pushSection = <Row>(
+    title: string,
+    result: { data: Row[] | null; error: { message: string } | null },
+    emptyText: string,
+    renderRows: (rows: Row[]) => string,
+    context: string,
+  ) => {
+    const count = result.error ? "?" : (result.data?.length ?? 0);
+    sections.push(
+      "",
+      `## ${title} (${count})`,
+      "",
+      renderSectionBody(result, emptyText, renderRows, context),
+    );
+  };
+
+  // Thoughts
+  const thoughtList = thoughts.data || [];
+  pushSection(
+    "Thoughts",
+    { data: thoughts.error ? null : thoughtList, error: thoughts.error },
+    "No new thoughts.",
+    (rows) =>
+      rows
+        .map((thought) => {
+          const meta = (thought.metadata || {}) as Record<string, unknown>;
+          const typeLabel = (meta.type as string) || "unknown";
+          return `- [${
+            formatDate(thought.created_at)
+          }] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`;
+        })
+        .join("\n"),
+    "get_recent_activity thoughts",
+  );
+
+  // Tasks created
+  pushSection(
+    "Tasks Created",
+    tasksCreated,
+    "No tasks created.",
+    (rows) =>
+      rows
+        .map((task) => {
+          const projectLabel = task.project_id &&
+              projectNameMap.get(task.project_id)
+            ? ` [${projectNameMap.get(task.project_id)}]`
+            : "";
+          return `- ${task.content} (${task.status})${projectLabel} — ${
+            formatDate(task.created_at)
+          }`;
+        })
+        .join("\n"),
+    "get_recent_activity tasks created",
+  );
+
+  // Tasks completed
+  pushSection(
+    "Tasks Completed",
+    tasksCompleted,
+    "No tasks completed.",
+    (rows) =>
+      rows
+        .map((task) => {
+          const projectLabel = task.project_id &&
+              projectNameMap.get(task.project_id)
+            ? ` [${projectNameMap.get(task.project_id)}]`
+            : "";
+          return `- ${task.content}${projectLabel} — ${
+            formatDate(task.updated_at)
+          }`;
+        })
+        .join("\n"),
+    "get_recent_activity tasks completed",
+  );
+
+  // Projects
+  pushSection(
+    "Projects",
+    { data: projectsError ? null : projectEntries, error: projectsError },
+    "No project activity.",
+    (rows) =>
+      rows
+        .map((entry) =>
+          `- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${
+            formatDate(entry.date)
+          }`
+        )
+        .join("\n"),
+    "get_recent_activity projects",
+  );
+
+  // People
+  pushSection(
+    "People",
+    { data: peopleError ? null : peopleEntries, error: peopleError },
+    "No people activity.",
+    (rows) =>
+      rows
+        .map((entry) =>
+          `- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${
+            formatDate(entry.date)
+          }`
+        )
+        .join("\n"),
+    "get_recent_activity people",
+  );
+
+  // AI outputs
+  pushSection(
+    "AI Outputs Delivered",
+    aiOutputs,
+    "No AI outputs delivered.",
+    (rows) =>
+      rows
+        .map((output) =>
+          `- "${output.title}" → ${output.file_path} — ${
+            formatDate(output.picked_up_at)
+          }`
+        )
+        .join("\n"),
+    "get_recent_activity ai outputs",
+  );
+
+  // Usefulness reminder
+  if (thoughtList.length > 0) {
+    const thoughtIds = thoughtList.map((thought) => thought.id);
+    sections.push(buildUsefulnessReminder(thoughtIds, "terse"));
+  }
+
+  return sections.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -45,243 +611,11 @@ export function register(
       },
     },
     withMcpLogging("get_project_summary", async ({ id }) => {
-      // 1. Fetch project
-      const { data: project, error: projectError } = await queryRepository
-        .getProjectById(id);
-
-      if (projectError || !project) {
-        return errorResult(
-          `Project not found: ${projectError?.message || "unknown"}`,
-        );
+      const result = await fetchProjectSummary(queryRepository, id);
+      if ("error" in result) {
+        return errorResult(result.error);
       }
-
-      // 2. Fetch parent name
-      let parentName: string | null = null;
-      if (project.parent_id) {
-        const { data: parent, error: parentError } = await queryRepository
-          .getProjectName(project.parent_id);
-        if (parentError) {
-          console.error(
-            `get_project_summary parent lookup failed: ${parentError.message}`,
-          );
-        }
-        parentName = parent?.name || null;
-      }
-
-      // 3. Fetch children
-      const { data: children, error: childrenError } = await queryRepository
-        .listChildProjects(id);
-
-      // 4. Fetch open tasks
-      const { data: tasks, error: tasksError } = await queryRepository
-        .listOpenTasksForProject(id);
-
-      // 5. Fetch recent thoughts that reference this project (DB-side filtering)
-      // Query both metadata formats in parallel: new (projects array) and old (project_id string)
-      const [
-        { data: newFormatThoughts, error: newFormatThoughtsError },
-        { data: oldFormatThoughts, error: oldFormatThoughtsError },
-      ] = await Promise.all([
-        queryRepository.listThoughtsForProjectNewFormat(id),
-        queryRepository.listThoughtsForProjectOldFormat(id),
-      ]);
-      // If either format query fails the thoughts view is incomplete — surface it
-      // rather than silently showing a partial (or empty) list.
-      const thoughtsError = newFormatThoughtsError ?? oldFormatThoughtsError;
-
-      // Merge and deduplicate by ID, then take top 10 by date
-      const allProjectThoughts = [
-        ...(newFormatThoughts || []),
-        ...(oldFormatThoughts || []),
-      ];
-      const seenThoughtIds = new Set<string>();
-      const matchingThoughts = allProjectThoughts
-        .filter((thought) => {
-          if (seenThoughtIds.has(thought.id)) return false;
-          seenThoughtIds.add(thought.id);
-          return true;
-        })
-        .sort((thoughtA, thoughtB) =>
-          new Date(thoughtB.created_at).getTime() -
-          new Date(thoughtA.created_at).getTime()
-        )
-        .slice(0, 25);
-
-      // 6. Fetch source note snapshots for matching thoughts
-      const snapshotIds = [
-        ...new Set(
-          matchingThoughts
-            .filter((thought) => thought.note_snapshot_id)
-            .map((thought) => thought.note_snapshot_id),
-        ),
-      ];
-
-      let snapshotMap: Record<
-        string,
-        { title: string | null; reference_id: string }
-      > = {};
-      if (snapshotIds.length > 0) {
-        const { data: snapshots, error: snapshotsError } = await queryRepository
-          .getNoteSnapshotsByIds(snapshotIds as string[]);
-
-        if (snapshotsError) {
-          console.error(
-            `get_project_summary source-note lookup failed: ${snapshotsError.message}`,
-          );
-        }
-        snapshotMap = Object.fromEntries(
-          (snapshots || []).map((snapshot) => [
-            snapshot.id,
-            { title: snapshot.title, reference_id: snapshot.reference_id },
-          ]),
-        );
-      }
-
-      // 6b. Resolve assigned person names for tasks (shared batched resolver)
-      const taskPersonIds = [
-        ...new Set(
-          (tasks || [])
-            .filter((task) => task.assigned_to)
-            .map((task) => task.assigned_to),
-        ),
-      ];
-      const personMap = taskPersonIds.length > 0
-        ? await queryRepository.personNamesByIds(taskPersonIds as string[])
-        : new Map<string, string>();
-
-      // ─── Format output ───────────────────────────────────────────────────
-
-      const sections: string[] = [];
-
-      // Project details
-      const detailLines = [
-        `# ${project.name}`,
-        "",
-        `**Type:** ${project.type || "—"}`,
-        `**Description:** ${project.description || "—"}`,
-      ];
-      if (parentName) {
-        detailLines.push(`**Parent:** ${parentName} (${project.parent_id})`);
-      }
-      if (project.archived_at) {
-        detailLines.push(`**Archived:** ${formatDate(project.archived_at)}`);
-      }
-      detailLines.push(
-        `**Created:** ${formatDate(project.created_at)}`,
-        `**Updated:** ${formatDate(project.updated_at)}`,
-      );
-      sections.push(detailLines.join("\n"));
-
-      // Children — only render a section when there are children OR the lookup
-      // failed (a failure must not be indistinguishable from "no children").
-      if (childrenError || (children && children.length > 0)) {
-        const childBody = renderSectionBody(
-          { data: children, error: childrenError },
-          "", // never reached: section is skipped entirely on success-empty above
-          (rows) =>
-            rows
-              .map(
-                (child: { name: string; type: string | null; id: string }) =>
-                  `- ${child.name} (${child.type || "—"}) — ${child.id}`,
-              )
-              .join("\n"),
-          "get_project_summary children",
-        );
-        const childCount = childrenError ? "?" : (children?.length ?? 0);
-        sections.push(
-          ["", `## Child Projects (${childCount})`, "", childBody].join("\n"),
-        );
-      }
-
-      // Open tasks
-      const taskList = tasks || [];
-      const openTasksBody = renderSectionBody(
-        { data: tasks, error: tasksError },
-        "No open tasks.",
-        (rows) =>
-          rows
-            .map((task) => {
-              const statusIcon = task.status === "in_progress" ? "[~]" : "[ ]";
-              const duePart = task.due_by
-                ? ` — due ${formatDate(task.due_by)}${
-                  new Date(task.due_by) < new Date() ? " (OVERDUE)" : ""
-                }`
-                : "";
-              const assigneePart =
-                task.assigned_to && personMap.get(task.assigned_to)
-                  ? ` (${personMap.get(task.assigned_to)})`
-                  : "";
-              return `- ${statusIcon} ${task.content}${assigneePart}${duePart}`;
-            })
-            .join("\n"),
-        "get_project_summary open tasks",
-      );
-      sections.push(
-        [
-          "",
-          `## Open Tasks (${tasksError ? "?" : taskList.length})`,
-          "",
-          openTasksBody,
-        ].join("\n"),
-      );
-
-      // Recent thoughts
-      const thoughtsBody = renderSectionBody(
-        { data: thoughtsError ? null : matchingThoughts, error: thoughtsError },
-        "No recent thoughts referencing this project.",
-        (rows) =>
-          rows
-            .map((thought) => {
-              const meta = (thought.metadata || {}) as Record<string, unknown>;
-              const typeLabel = (meta.type as string) || "unknown";
-              return `- [${
-                formatDate(thought.created_at)
-              }] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`;
-            })
-            .join("\n"),
-        "get_project_summary recent thoughts",
-      );
-      sections.push(
-        [
-          "",
-          `## Recent Thoughts (${
-            thoughtsError ? "?" : matchingThoughts.length
-          })`,
-          "",
-          thoughtsBody,
-        ].join("\n"),
-      );
-
-      // Source notes
-      const uniqueSnapshots = Object.values(snapshotMap);
-      if (uniqueSnapshots.length > 0) {
-        const noteLines = [
-          "",
-          `## Source Notes (${uniqueSnapshots.length})`,
-          "",
-          ...uniqueSnapshots.map(
-            (snapshot) =>
-              `- ${
-                snapshot.title || snapshot.reference_id
-              } (${snapshot.reference_id})`,
-          ),
-        ];
-        sections.push(noteLines.join("\n"));
-      }
-
-      // Usefulness reminder
-      if (matchingThoughts.length > 0) {
-        const thoughtIds = matchingThoughts.map((thought: { id: string }) =>
-          thought.id
-        );
-        sections.push(
-          `\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${
-            JSON.stringify(thoughtIds)
-          }`,
-        );
-      }
-
-      return textResult(sections.join("\n"));
+      return textResult(formatProjectSummary(result.data));
     }, logger),
   );
 
@@ -303,263 +637,8 @@ export function register(
       },
     },
     withMcpLogging("get_recent_activity", async ({ days }) => {
-      const effectiveDays = Math.max(1, days);
-      const sinceDate = new Date();
-      sinceDate.setDate(sinceDate.getDate() - effectiveDays);
-      const sinceIso = sinceDate.toISOString();
-
-      // 1. Recent thoughts
-      const { data: thoughts, error: thoughtsError } = await queryRepository
-        .listRecentThoughts(sinceIso);
-
-      // 2. Tasks created
-      const { data: tasksCreated, error: tasksCreatedError } =
-        await queryRepository.listTasksCreatedSince(sinceIso);
-
-      // 3. Tasks completed (done + updated recently)
-      const { data: tasksCompleted, error: tasksCompletedError } =
-        await queryRepository.listTasksCompletedSince(sinceIso);
-
-      // 4. Projects created or updated
-      const { data: projectsCreated, error: projectsCreatedError } =
-        await queryRepository.listProjectsCreatedSince(sinceIso);
-
-      const { data: projectsUpdated, error: projectsUpdatedError } =
-        await queryRepository.listProjectsUpdatedSince(sinceIso);
-      const projectsError = projectsCreatedError ?? projectsUpdatedError;
-
-      // Deduplicate projects (could appear in both created and updated)
-      const allProjectNames = new Set<string>();
-      const projectEntries: {
-        name: string;
-        type: string | null;
-        action: string;
-        date: string;
-      }[] = [];
-
-      for (const project of projectsCreated || []) {
-        allProjectNames.add(project.name);
-        projectEntries.push({
-          name: project.name,
-          type: project.type,
-          action: "created",
-          date: project.created_at,
-        });
-      }
-      for (const project of projectsUpdated || []) {
-        if (!allProjectNames.has(project.name)) {
-          allProjectNames.add(project.name);
-          projectEntries.push({
-            name: project.name,
-            type: project.type,
-            action: "updated",
-            date: project.updated_at,
-          });
-        }
-      }
-
-      // 5. AI outputs delivered
-      const { data: aiOutputs, error: aiOutputsError } = await queryRepository
-        .listDeliveredAiOutputsSince(sinceIso);
-
-      // 6. People created or updated
-      const { data: peopleCreated, error: peopleCreatedError } =
-        await queryRepository.listPeopleCreatedSince(sinceIso);
-
-      const { data: peopleUpdated, error: peopleUpdatedError } =
-        await queryRepository.listPeopleUpdatedSince(sinceIso);
-      const peopleError = peopleCreatedError ?? peopleUpdatedError;
-
-      // Deduplicate people (could appear in both created and updated)
-      const allPeopleNames = new Set<string>();
-      const peopleEntries: {
-        name: string;
-        type: string | null;
-        action: string;
-        date: string;
-      }[] = [];
-
-      for (const person of peopleCreated || []) {
-        allPeopleNames.add(person.name);
-        peopleEntries.push({
-          name: person.name,
-          type: person.type,
-          action: "created",
-          date: person.created_at,
-        });
-      }
-      for (const person of peopleUpdated || []) {
-        if (!allPeopleNames.has(person.name)) {
-          allPeopleNames.add(person.name);
-          peopleEntries.push({
-            name: person.name,
-            type: person.type,
-            action: "updated",
-            date: person.updated_at,
-          });
-        }
-      }
-
-      // Collect project IDs for name resolution
-      const projectIdSet = new Set<string>();
-      for (const task of tasksCreated || []) {
-        if (task.project_id) projectIdSet.add(task.project_id);
-      }
-      for (const task of tasksCompleted || []) {
-        if (task.project_id) projectIdSet.add(task.project_id);
-      }
-
-      const projectNameMap = projectIdSet.size > 0
-        ? await queryRepository.projectNamesByIds([...projectIdSet])
-        : new Map<string, string>();
-
-      // ─── Format output ───────────────────────────────────────────────────
-
-      const sections: string[] = [];
-      sections.push(
-        `# Activity — Last ${effectiveDays} Day${
-          effectiveDays !== 1 ? "s" : ""
-        }`,
-      );
-
-      // Push one "## Header (count)" section, surfacing a failed query as an
-      // explicit unavailable marker rather than empty-state prose (finding C9).
-      const pushSection = <Row>(
-        title: string,
-        result: { data: Row[] | null; error: { message: string } | null },
-        emptyText: string,
-        renderRows: (rows: Row[]) => string,
-        context: string,
-      ) => {
-        const count = result.error ? "?" : (result.data?.length ?? 0);
-        sections.push(
-          "",
-          `## ${title} (${count})`,
-          "",
-          renderSectionBody(result, emptyText, renderRows, context),
-        );
-      };
-
-      // Thoughts
-      const thoughtList = thoughts || [];
-      pushSection(
-        "Thoughts",
-        { data: thoughtsError ? null : thoughtList, error: thoughtsError },
-        "No new thoughts.",
-        (rows) =>
-          rows
-            .map((thought) => {
-              const meta = (thought.metadata || {}) as Record<string, unknown>;
-              const typeLabel = (meta.type as string) || "unknown";
-              return `- [${
-                formatDate(thought.created_at)
-              }] (${typeLabel}) ID: ${thought.id}\n  ${thought.content}`;
-            })
-            .join("\n"),
-        "get_recent_activity thoughts",
-      );
-
-      // Tasks created
-      pushSection(
-        "Tasks Created",
-        { data: tasksCreated, error: tasksCreatedError },
-        "No tasks created.",
-        (rows) =>
-          rows
-            .map((task) => {
-              const projectLabel =
-                task.project_id && projectNameMap.get(task.project_id)
-                  ? ` [${projectNameMap.get(task.project_id)}]`
-                  : "";
-              return `- ${task.content} (${task.status})${projectLabel} — ${
-                formatDate(task.created_at)
-              }`;
-            })
-            .join("\n"),
-        "get_recent_activity tasks created",
-      );
-
-      // Tasks completed
-      pushSection(
-        "Tasks Completed",
-        { data: tasksCompleted, error: tasksCompletedError },
-        "No tasks completed.",
-        (rows) =>
-          rows
-            .map((task) => {
-              const projectLabel =
-                task.project_id && projectNameMap.get(task.project_id)
-                  ? ` [${projectNameMap.get(task.project_id)}]`
-                  : "";
-              return `- ${task.content}${projectLabel} — ${
-                formatDate(task.updated_at)
-              }`;
-            })
-            .join("\n"),
-        "get_recent_activity tasks completed",
-      );
-
-      // Projects
-      pushSection(
-        "Projects",
-        { data: projectsError ? null : projectEntries, error: projectsError },
-        "No project activity.",
-        (rows) =>
-          rows
-            .map((entry) =>
-              `- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${
-                formatDate(entry.date)
-              }`
-            )
-            .join("\n"),
-        "get_recent_activity projects",
-      );
-
-      // People
-      pushSection(
-        "People",
-        { data: peopleError ? null : peopleEntries, error: peopleError },
-        "No people activity.",
-        (rows) =>
-          rows
-            .map((entry) =>
-              `- ${entry.name} (${entry.type || "—"}) — ${entry.action} ${
-                formatDate(entry.date)
-              }`
-            )
-            .join("\n"),
-        "get_recent_activity people",
-      );
-
-      // AI outputs
-      pushSection(
-        "AI Outputs Delivered",
-        { data: aiOutputs, error: aiOutputsError },
-        "No AI outputs delivered.",
-        (rows) =>
-          rows
-            .map((output) =>
-              `- "${output.title}" → ${output.file_path} — ${
-                formatDate(output.picked_up_at)
-              }`
-            )
-            .join("\n"),
-        "get_recent_activity ai outputs",
-      );
-
-      // Usefulness reminder
-      if (thoughtList.length > 0) {
-        const thoughtIds = thoughtList.map((thought: { id: string }) =>
-          thought.id
-        );
-        sections.push(
-          `\n---\nReminder: If any of these thoughts were useful, call record_useful_thoughts with their IDs: ${
-            JSON.stringify(thoughtIds)
-          }`,
-        );
-      }
-
-      return textResult(sections.join("\n"));
+      const data = await fetchRecentActivity(queryRepository, days);
+      return textResult(formatRecentActivity(data));
     }, logger),
   );
 
@@ -619,3 +698,13 @@ export function register(
     }, logger),
   );
 }
+
+// Exported for unit testing the pure formatters + dedup helper.
+export {
+  dedupeByName,
+  fetchProjectSummary,
+  fetchRecentActivity,
+  formatProjectSummary,
+  formatRecentActivity,
+};
+export type { ProjectSummaryData, RecentActivityData };

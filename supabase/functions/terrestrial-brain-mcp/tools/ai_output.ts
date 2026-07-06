@@ -137,6 +137,106 @@ export function generateTaskMarkdown(
 }
 
 // ---------------------------------------------------------------------------
+// create_tasks_with_output helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve project and person UUIDs referenced by the tasks to display names via
+ * the shared batched resolver (raw-id fallback on error, never a silently-empty
+ * map — finding C9). Used for the generated markdown headings/assignee suffixes.
+ */
+async function resolveTaskNames(
+  supabase: SupabaseClient,
+  tasks: TaskInput[],
+): Promise<{
+  projectNameMap: Record<string, string>;
+  personNameMap: Record<string, string>;
+}> {
+  const projectIds = [
+    ...new Set(
+      tasks.filter((task) => task.project_id).map((task) => task.project_id!),
+    ),
+  ];
+  const projectNameMap: Record<string, string> = projectIds.length > 0
+    ? Object.fromEntries(await resolveNames(supabase, "projects", projectIds))
+    : {};
+
+  const personIds = [
+    ...new Set(
+      tasks.filter((task) => task.assigned_to).map((task) => task.assigned_to!),
+    ),
+  ];
+  const personNameMap: Record<string, string> = personIds.length > 0
+    ? Object.fromEntries(await resolveNames(supabase, "people", personIds))
+    : {};
+
+  return { projectNameMap, personNameMap };
+}
+
+/**
+ * Insert task rows sequentially (so a subtask's parent_index resolves to the
+ * already-inserted parent's DB id). On any insert failure, roll back the rows
+ * already inserted in THIS call so a mid-loop failure never leaves orphans
+ * (all-or-nothing, finding C4). Returns the inserted ids or a ready-to-return
+ * error string. Assumes `validateParentIndices` has already passed.
+ */
+export async function insertTasksAtomically(
+  taskRepository: TaskRepository,
+  tasks: TaskInput[],
+  filePath: string,
+): Promise<{ taskIds: string[] } | { error: string }> {
+  const taskIds: string[] = [];
+  const dbIdByIndex = new Map<number, string>();
+
+  for (let index = 0; index < tasks.length; index++) {
+    const task = tasks[index];
+    const status = task.status || "open";
+
+    let parentId: string | null = null;
+    if (task.parent_index !== undefined && task.parent_index !== null) {
+      parentId = dbIdByIndex.get(task.parent_index) || null;
+    }
+
+    const insertValues = {
+      content: task.content,
+      status,
+      reference_id: filePath,
+      project_id: task.project_id || null,
+      parent_id: parentId,
+      due_by: task.due_by || null,
+      assigned_to: task.assigned_to || null,
+      ...(status === "done" ? { archived_at: new Date().toISOString() } : {}),
+    };
+
+    const { data, error } = await taskRepository.insert(insertValues);
+
+    if (error || !data) {
+      let rollbackNote = "";
+      if (taskIds.length > 0) {
+        const { error: rollbackError } = await taskRepository.deleteByIds(
+          taskIds,
+        );
+        rollbackNote = rollbackError
+          ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${
+            taskIds.join(", ")
+          }.`
+          : ` Rolled back ${taskIds.length} already-inserted task(s).`;
+      }
+      return {
+        error: `Failed to create task "${task.content}": ${
+          error?.message || "unknown"
+        }.${rollbackNote}`,
+      };
+    }
+
+    dbIdByIndex.set(index, data.id);
+    taskIds.push(data.id);
+  }
+
+  return { taskIds };
+}
+
+// ---------------------------------------------------------------------------
 // Standalone handler functions — used by HTTP route handlers in index.ts
 // ---------------------------------------------------------------------------
 
@@ -321,7 +421,6 @@ export function register(
           return errorResult("At least one task is required.");
         }
 
-        // Fetch project names for markdown headings
         const typedTasks = tasks as TaskInput[];
 
         // Validate parent_index references up front — reject forward/self/
@@ -331,86 +430,22 @@ export function register(
         if (parentError) {
           return errorResult(parentError);
         }
-        // Fetch project + person names via the shared batched resolver (raw-id
-        // fallback on error, never a silently-empty map — finding C9).
-        const projectIds = [
-          ...new Set(
-            typedTasks.filter((task) => task.project_id).map((task) =>
-              task.project_id!
-            ),
-          ),
-        ];
-        const projectNameMap: Record<string, string> = projectIds.length > 0
-          ? Object.fromEntries(
-            await resolveNames(supabase, "projects", projectIds),
-          )
-          : {};
 
-        const personIds = [
-          ...new Set(
-            typedTasks.filter((task) => task.assigned_to).map((task) =>
-              task.assigned_to!
-            ),
-          ),
-        ];
-        const personNameMap: Record<string, string> = personIds.length > 0
-          ? Object.fromEntries(
-            await resolveNames(supabase, "people", personIds),
-          )
-          : {};
+        // Resolve display names, then insert the task rows atomically.
+        const { projectNameMap, personNameMap } = await resolveTaskNames(
+          supabase,
+          typedTasks,
+        );
 
-        // Insert task rows sequentially (parent_index → parent_id resolution)
-        const taskIds: string[] = [];
-        const dbIdByIndex = new Map<number, string>();
-
-        for (let index = 0; index < tasks.length; index++) {
-          const task = tasks[index];
-          const status = task.status || "open";
-
-          let parentId: string | null = null;
-          if (task.parent_index !== undefined && task.parent_index !== null) {
-            parentId = dbIdByIndex.get(task.parent_index) || null;
-          }
-
-          const insertValues = {
-            content: task.content,
-            status,
-            reference_id: file_path,
-            project_id: task.project_id || null,
-            parent_id: parentId,
-            due_by: task.due_by || null,
-            assigned_to: task.assigned_to || null,
-            ...(status === "done"
-              ? { archived_at: new Date().toISOString() }
-              : {}),
-          };
-
-          const { data, error } = await taskRepository.insert(insertValues);
-
-          if (error || !data) {
-            // Roll back the tasks already inserted in this call so a mid-loop
-            // failure never leaves orphaned rows (all-or-nothing, finding C4).
-            let rollbackNote = "";
-            if (taskIds.length > 0) {
-              const { error: rollbackError } = await taskRepository.deleteByIds(
-                taskIds,
-              );
-              rollbackNote = rollbackError
-                ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${
-                  taskIds.join(", ")
-                }.`
-                : ` Rolled back ${taskIds.length} already-inserted task(s).`;
-            }
-            return errorResult(
-              `Failed to create task "${task.content}": ${
-                error?.message || "unknown"
-              }.${rollbackNote}`,
-            );
-          }
-
-          dbIdByIndex.set(index, data.id);
-          taskIds.push(data.id);
+        const insertResult = await insertTasksAtomically(
+          taskRepository,
+          typedTasks,
+          file_path,
+        );
+        if ("error" in insertResult) {
+          return errorResult(insertResult.error);
         }
+        const { taskIds } = insertResult;
 
         // Generate markdown from structured task data
         const markdown = generateTaskMarkdown(
