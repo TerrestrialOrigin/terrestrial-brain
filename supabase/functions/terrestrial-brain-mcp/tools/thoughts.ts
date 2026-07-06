@@ -15,6 +15,10 @@ import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import {
+  buildUsefulnessHeader,
+  buildUsefulnessReminder,
+} from "./usefulness-reminder.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import { AiProviderParseError } from "../ai/ai-provider.ts";
 import type { ThoughtRepository } from "../repositories/thought-repository.ts";
@@ -23,42 +27,96 @@ import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
 import type { NoteSnapshotRepository } from "../repositories/note-snapshot-repository.ts";
 
-const USEFULNESS_REMINDER_LINES = [
-  "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
-  "1. Call record_useful_thoughts with IDs that contributed (or empty array).",
-  "2. Scan these results for contradictions/outdated data — surface to user, do NOT archive silently.",
-  "",
-  "NEVER skip the record_useful_thoughts step (if no thoughts were found useful, pass in an empty array)! ALWAYS do the record_useful_thoughts step (if no thoughts were found useful, pass in an empty array)!!!",
-];
-
-const USEFULNESS_REMINDER_LINES_SOFT = [
-  "⚠️ BEFORE NEXT USER RESPONSE:",
-  "If any of these thoughts contributed to your response, call record_useful_thoughts with their IDs.",
-  "If none contributed (e.g. you were just browsing), call record_useful_thoughts with an empty array to acknowledge the scan.",
-  "",
-  "Also scan for contradictions/outdated data — surface to user, do NOT archive silently.",
-];
-
-function buildUsefulnessReminder(thoughtIds: string[]): string {
-  return [
-    ...USEFULNESS_REMINDER_LINES,
-    `Candidate IDs from this search: ${JSON.stringify(thoughtIds)}`,
-  ].join("\n");
+interface ThoughtUpdateFields {
+  content?: string;
+  reliability?: string;
+  author?: string;
+  project_ids?: string[];
+  document_ids?: string[];
 }
 
-function buildUsefulnessHeader(thoughtIds: string[]): string {
-  return `${buildUsefulnessReminder(thoughtIds)}\n\n--- Results ---\n\n`;
-}
+/**
+ * Build the update payload + human-readable field list for update_thought,
+ * shared by the content and non-content cases. They differ ONLY in that the
+ * content case regenerates embedding+metadata and always writes metadata, and in
+ * the order fields appear in the confirmation: the content path lists reference
+ * fields before top-level fields; the non-content path lists top-level fields
+ * first. Both orderings are preserved verbatim from the pre-refactor branches.
+ */
+export async function buildThoughtUpdate(
+  aiProvider: AiProvider,
+  existingMetadata: Record<string, unknown>,
+  fields: ThoughtUpdateFields,
+): Promise<
+  { updatePayload: Record<string, unknown>; updatedFields: string[] }
+> {
+  const { content, reliability, author, project_ids, document_ids } = fields;
+  const existingReferences = (existingMetadata.references || {}) as Record<
+    string,
+    string[]
+  >;
 
-function buildUsefulnessReminderSoft(thoughtIds: string[]): string {
-  return [
-    ...USEFULNESS_REMINDER_LINES_SOFT,
-    `Candidate IDs from this list: ${JSON.stringify(thoughtIds)}`,
-  ].join("\n");
-}
+  const updatePayload: Record<string, unknown> = {};
+  const updatedReferences = { ...existingReferences };
+  let referencesChanged = false;
+  const referenceFields: string[] = [];
+  if (project_ids !== undefined) {
+    updatedReferences.projects = project_ids;
+    referencesChanged = true;
+    referenceFields.push("project_ids");
+  }
+  if (document_ids !== undefined) {
+    updatedReferences.documents = document_ids;
+    referencesChanged = true;
+    referenceFields.push("document_ids");
+  }
 
-function buildUsefulnessHeaderSoft(thoughtIds: string[]): string {
-  return `${buildUsefulnessReminderSoft(thoughtIds)}\n\n--- Results ---\n\n`;
+  const topLevelFields: string[] = [];
+  if (reliability !== undefined) {
+    updatePayload.reliability = reliability;
+    topLevelFields.push("reliability");
+  }
+  if (author !== undefined) {
+    updatePayload.author = author;
+    topLevelFields.push("author");
+  }
+
+  if (content !== undefined) {
+    // Content path: regenerate embedding + metadata; metadata is always
+    // rewritten (re-extracted fields, preserved source, updated references).
+    const [embedding, newMetadata] = await Promise.all([
+      getEmbedding(aiProvider, content),
+      extractMetadata(aiProvider, content),
+    ]);
+    updatePayload.content = content;
+    updatePayload.embedding = embedding;
+    updatePayload.metadata = {
+      ...existingMetadata,
+      ...(newMetadata as Record<string, unknown>),
+      source: existingMetadata.source,
+      references: updatedReferences,
+    };
+    return {
+      updatePayload,
+      updatedFields: [
+        "content (embedding + metadata regenerated)",
+        ...referenceFields,
+        ...topLevelFields,
+      ],
+    };
+  }
+
+  // Non-content path: no AI calls; metadata written only when references changed.
+  if (referencesChanged) {
+    updatePayload.metadata = {
+      ...existingMetadata,
+      references: updatedReferences,
+    };
+  }
+  return {
+    updatePayload,
+    updatedFields: [...topLevelFields, ...referenceFields],
+  };
 }
 
 export function register(
@@ -191,8 +249,12 @@ export function register(
         );
 
         const thoughtIds = data.map((t: { id: string }) => t.id);
-        const header = buildUsefulnessHeader(thoughtIds);
-        const footer = buildUsefulnessReminder(thoughtIds);
+        // search_thoughts intentionally emits the reminder as BOTH header and
+        // footer: a long results block pushes the header far up the context
+        // window, so repeating the required-action reminder at the end keeps it
+        // adjacent to where the model resumes generating.
+        const header = buildUsefulnessHeader(thoughtIds, "hard");
+        const footer = buildUsefulnessReminder(thoughtIds, "hard");
 
         return textResult(
           `${header}Found ${data.length} thought(s):\n\n${
@@ -339,8 +401,8 @@ export function register(
         );
 
         const thoughtIds = data.map((t: { id: string }) => t.id);
-        const header = buildUsefulnessHeaderSoft(thoughtIds);
-        const footer = buildUsefulnessReminderSoft(thoughtIds);
+        const header = buildUsefulnessHeader(thoughtIds, "soft");
+        const footer = buildUsefulnessReminder(thoughtIds, "soft");
 
         return textResult(
           `${header}${data.length} recent thought(s):\n\n${
@@ -695,107 +757,23 @@ export function register(
           string,
           unknown
         >;
-        const existingReferences =
-          (existingMetadata.references || {}) as Record<string, string[]>;
-        const updatedFields: string[] = [];
 
-        if (content !== undefined) {
-          // Content update path: regenerate embedding + metadata
-          const [embedding, newMetadata] = await Promise.all([
-            getEmbedding(aiProvider, content),
-            extractMetadata(aiProvider, content),
-          ]);
+        const { updatePayload, updatedFields } = await buildThoughtUpdate(
+          aiProvider,
+          existingMetadata,
+          { content, reliability, author, project_ids, document_ids },
+        );
 
-          // Build updated references: preserve existing, apply explicit overrides
-          const updatedReferences = { ...existingReferences };
-          if (project_ids !== undefined) {
-            updatedReferences.projects = project_ids;
-            updatedFields.push("project_ids");
-          }
-          if (document_ids !== undefined) {
-            updatedReferences.documents = document_ids;
-            updatedFields.push("document_ids");
-          }
+        const { error: updateError } = await thoughtRepository.update(
+          id,
+          updatePayload,
+        );
 
-          // Merge: re-extracted metadata overwrites content-dependent fields,
-          // preserve source and apply updated references
-          const mergedMetadata = {
-            ...existingMetadata,
-            ...(newMetadata as Record<string, unknown>),
-            source: existingMetadata.source,
-            references: updatedReferences,
-          };
-
-          const updatePayload: Record<string, unknown> = {
-            content,
-            embedding,
-            metadata: mergedMetadata,
-          };
-
-          // Apply top-level field updates alongside content
-          if (reliability !== undefined) {
-            updatePayload.reliability = reliability;
-            updatedFields.push("reliability");
-          }
-          if (author !== undefined) {
-            updatePayload.author = author;
-            updatedFields.push("author");
-          }
-
-          const { error: updateError } = await thoughtRepository.update(
-            id,
-            updatePayload,
-          );
-
-          if (updateError) {
-            return errorResult(`Update failed: ${updateError.message}`);
-          }
-
-          updatedFields.unshift("content (embedding + metadata regenerated)");
-          return textResult(`Thought updated: ${updatedFields.join(", ")}`);
-        } else {
-          // Non-content update path: direct DB update, no AI calls
-          const updatePayload: Record<string, unknown> = {};
-          let metadataChanged = false;
-          const updatedReferences = { ...existingReferences };
-
-          if (reliability !== undefined) {
-            updatePayload.reliability = reliability;
-            updatedFields.push("reliability");
-          }
-          if (author !== undefined) {
-            updatePayload.author = author;
-            updatedFields.push("author");
-          }
-          if (project_ids !== undefined) {
-            updatedReferences.projects = project_ids;
-            metadataChanged = true;
-            updatedFields.push("project_ids");
-          }
-          if (document_ids !== undefined) {
-            updatedReferences.documents = document_ids;
-            metadataChanged = true;
-            updatedFields.push("document_ids");
-          }
-
-          if (metadataChanged) {
-            updatePayload.metadata = {
-              ...existingMetadata,
-              references: updatedReferences,
-            };
-          }
-
-          const { error: updateError } = await thoughtRepository.update(
-            id,
-            updatePayload,
-          );
-
-          if (updateError) {
-            return errorResult(`Update failed: ${updateError.message}`);
-          }
-
-          return textResult(`Thought updated: ${updatedFields.join(", ")}`);
+        if (updateError) {
+          return errorResult(`Update failed: ${updateError.message}`);
         }
+
+        return textResult(`Thought updated: ${updatedFields.join(", ")}`);
       },
       logger,
     ),
@@ -882,131 +860,111 @@ const INGEST_PROVENANCE = {
   author: "gpt-4o-mini",
 };
 
-export async function handleIngestNote(
-  supabase: SupabaseClient,
-  aiProvider: AiProvider,
-  thoughtRepository: ThoughtRepository,
-  taskRepository: TaskRepository,
-  projectRepository: ProjectRepository,
-  personRepository: PersonRepository,
+type ExistingThought = { id: string; content: string; created_at: string };
+
+export interface ReconciliationPlan {
+  keep: string[];
+  update: { id: string; content: string }[];
+  add: string[];
+  delete: string[];
+}
+
+interface IngestResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+}
+
+/** Map a freshIngest McpToolResult onto the ingest-route result shape. */
+function freshIngestResult(
+  result: { isError?: boolean; content: { text: string }[] },
+): IngestResult {
+  return {
+    success: !result.isError,
+    message: result.content[0].text,
+    ...(result.isError ? { error: result.content[0].text } : {}),
+  };
+}
+
+/**
+ * Step 0 — skip if the stored snapshot content equals the incoming content
+ * (prevents duplicate ingestion from Obsidian Sync). Returns false when there is
+ * no note_id to compare against.
+ */
+async function checkUnchanged(
   noteSnapshotRepository: NoteSnapshotRepository,
-  { content, title, note_id }: {
-    content: string;
-    title?: string;
-    note_id?: string;
-  },
-): Promise<{ success: boolean; message?: string; error?: string }> {
-  try {
-    // Step 0: Skip if content is unchanged (prevents duplicate ingestion from Obsidian Sync)
-    if (note_id) {
-      const { data: existing } = await noteSnapshotRepository
-        .findContentByReference(note_id);
+  noteId: string | undefined,
+  content: string,
+): Promise<boolean> {
+  if (!noteId) return false;
+  const { data: existing } = await noteSnapshotRepository
+    .findContentByReference(noteId);
+  return !!(existing && existing.content === content);
+}
 
-      if (existing && existing.content === content) {
-        return { success: true, message: "Note unchanged — skipped." };
-      }
-    }
-
-    // Step 1: Upsert note snapshot
-    let noteSnapshotId: string | null = null;
-    if (note_id) {
-      const { data: snapshot, error: snapshotError } =
-        await noteSnapshotRepository
-          .upsert({
-            reference_id: note_id,
-            title: title || null,
-            content,
-            source: "obsidian",
-          });
-
-      if (snapshotError) {
-        console.error(`Note snapshot upsert failed: ${snapshotError.message}`);
-      } else if (snapshot) {
-        noteSnapshotId = snapshot.id;
-      }
-    }
-
-    // Step 2: Structural parse
-    const parsedNote = parseNote(
+/**
+ * Step 1 — upsert the note snapshot, returning its id (or null when there is no
+ * note_id, or the upsert failed — a failure is logged, never thrown).
+ */
+async function upsertSnapshot(
+  noteSnapshotRepository: NoteSnapshotRepository,
+  noteId: string | undefined,
+  title: string | undefined,
+  content: string,
+): Promise<string | null> {
+  if (!noteId) return null;
+  const { data: snapshot, error: snapshotError } = await noteSnapshotRepository
+    .upsert({
+      reference_id: noteId,
+      title: title || null,
       content,
-      title || null,
-      note_id || null,
-      "obsidian",
-    );
+      source: "obsidian",
+    });
+  if (snapshotError) {
+    console.error(`Note snapshot upsert failed: ${snapshotError.message}`);
+    return null;
+  }
+  return snapshot?.id ?? null;
+}
 
-    // Step 3: Run extractor pipeline
-    let references: Record<string, string[]> = {};
-    try {
-      references = await runExtractionPipeline(
-        parsedNote,
-        [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
-        supabase,
-        aiProvider,
-        taskRepository,
-        projectRepository,
-        personRepository,
-      );
-    } catch (pipelineError) {
-      console.error(
-        `Extractor pipeline error: ${(pipelineError as Error).message}`,
-      );
-    }
+/** Step 4 — fetch active thoughts already captured for this note. */
+async function fetchExistingThoughts(
+  thoughtRepository: ThoughtRepository,
+  noteId: string | undefined,
+): Promise<ExistingThought[]> {
+  if (!noteId) return [];
+  const { data, error } = await thoughtRepository.findByReference(noteId);
+  if (error) {
+    throw new Error(`Failed to fetch existing thoughts: ${error.message}`);
+  }
+  return data || [];
+}
 
-    // Step 4: Fetch existing thoughts for this note
-    type ExistingThought = { id: string; content: string; created_at: string };
-    let existingThoughts: ExistingThought[] = [];
+/**
+ * Step 6 — ask the LLM to reconcile the updated note against its existing
+ * thoughts. Returns the plan, or `null` to signal "fall back to a fresh ingest"
+ * (an unparseable plan). A transport-level failure aborts the reconcile (throws),
+ * matching the pre-refactor behavior exactly.
+ */
+export async function requestReconciliationPlan(
+  aiProvider: AiProvider,
+  existingThoughts: ExistingThought[],
+  title: string | undefined,
+  content: string,
+): Promise<ReconciliationPlan | null> {
+  const existingForPrompt = existingThoughts
+    .map((t) =>
+      `[ID:${t.id}] (captured ${
+        new Date(t.created_at).toLocaleDateString()
+      })\n${t.content}`
+    )
+    .join("\n\n");
 
-    if (note_id) {
-      const { data, error } = await thoughtRepository.findByReference(note_id);
-
-      if (error) {
-        throw new Error(`Failed to fetch existing thoughts: ${error.message}`);
-      }
-      existingThoughts = data || [];
-    }
-
-    // Step 5: No existing thoughts → fresh split and insert
-    if (existingThoughts.length === 0) {
-      const result = await freshIngest(
-        thoughtRepository,
-        aiProvider,
-        content,
-        title,
-        note_id,
-        noteSnapshotId,
-        references,
-        INGEST_PROVENANCE,
-      );
-      return {
-        success: !result.isError,
-        message: result.content[0].text,
-        ...(result.isError ? { error: result.content[0].text } : {}),
-      };
-    }
-
-    // Step 6: Existing thoughts found → reconcile with updated note
-    const existingForPrompt = existingThoughts
-      .map((t) =>
-        `[ID:${t.id}] (captured ${
-          new Date(t.created_at).toLocaleDateString()
-        })\n${t.content}`
-      )
-      .join("\n\n");
-
-    let plan: {
-      keep: string[];
-      update: { id: string; content: string }[];
-      add: string[];
-      delete: string[];
-    };
-
-    // An HTTP/transport failure aborts the reconcile (throws); an unparseable
-    // plan degrades to a fresh ingest — matching the pre-refactor behavior.
-    try {
-      plan = await aiProvider.completeJson(
-        {
-          systemPrompt:
-            `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
+  try {
+    return await aiProvider.completeJson(
+      {
+        systemPrompt:
+          `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
 
 You will receive:
 - EXISTING THOUGHTS: previously captured thoughts, each tagged with [ID:uuid]
@@ -1032,154 +990,279 @@ Return ONLY valid JSON in this exact structure:
   "add": ["new thought 1", "new thought 2"],
   "delete": ["id4"]
 }`,
-          userContent:
-            `EXISTING THOUGHTS:\n${existingForPrompt}\n\n---\n\nNEW NOTE CONTENT (title: ${
-              title || "untitled"
-            }):\n${content}`,
+        userContent:
+          `EXISTING THOUGHTS:\n${existingForPrompt}\n\n---\n\nNEW NOTE CONTENT (title: ${
+            title || "untitled"
+          }):\n${content}`,
+      },
+      (raw) => raw as ReconciliationPlan,
+    );
+  } catch (reconcileError) {
+    if (!(reconcileError instanceof AiProviderParseError)) {
+      throw reconcileError;
+    }
+    console.warn("Reconciliation parse failed, falling back to fresh ingest");
+    return null;
+  }
+}
+
+interface ReconcileContext {
+  noteSnapshotId: string | null;
+  noteId: string | undefined;
+  title: string | undefined;
+  references: Record<string, string[]>;
+}
+
+interface ReconcileCounts {
+  updated: number;
+  added: number;
+  deleted: number;
+  failures: number;
+  opsLength: number;
+}
+
+/**
+ * Step 7 — execute a reconciliation plan: update revised thoughts, add new ones,
+ * and SOFT-ARCHIVE (never hard-delete) the removed ones. Each op runs
+ * concurrently; counts reflect what actually succeeded.
+ */
+export async function executeReconciliationPlan(
+  thoughtRepository: ThoughtRepository,
+  aiProvider: AiProvider,
+  plan: ReconciliationPlan,
+  ctx: ReconcileContext,
+): Promise<ReconcileCounts> {
+  const { noteSnapshotId, noteId, title, references } = ctx;
+  const ops: Promise<void>[] = [];
+  let updated = 0, added = 0, deleted = 0;
+
+  for (const updateItem of (plan.update || [])) {
+    ops.push((async () => {
+      const [embedding, metadata] = await Promise.all([
+        getEmbedding(aiProvider, updateItem.content),
+        extractMetadata(aiProvider, updateItem.content),
+      ]);
+      const { error } = await thoughtRepository.update(updateItem.id, {
+        content: updateItem.content,
+        embedding,
+        note_snapshot_id: noteSnapshotId,
+        reliability: INGEST_PROVENANCE.reliability,
+        author: INGEST_PROVENANCE.author,
+        metadata: {
+          ...metadata,
+          source: "obsidian",
+          note_title: title || null,
+          updated_at: new Date().toISOString(),
+          references,
         },
-        (raw) =>
-          raw as {
-            keep: string[];
-            update: { id: string; content: string }[];
-            add: string[];
-            delete: string[];
-          },
-      );
-    } catch (reconcileError) {
-      if (!(reconcileError instanceof AiProviderParseError)) {
-        throw reconcileError;
+      });
+      if (error) {
+        throw new Error(`Update failed for ${updateItem.id}: ${error.message}`);
       }
-      console.warn("Reconciliation parse failed, falling back to fresh ingest");
-      const result = await freshIngest(
-        thoughtRepository,
+      updated++;
+    })());
+  }
+
+  for (const addItem of (plan.add || [])) {
+    const thoughtContent = typeof addItem === "string"
+      ? addItem
+      : (addItem as unknown as { thought: string }).thought || addItem;
+    ops.push((async () => {
+      const [embedding, metadata] = await Promise.all([
+        getEmbedding(aiProvider, thoughtContent as string),
+        extractMetadata(aiProvider, thoughtContent as string),
+      ]);
+      const { error } = await thoughtRepository.insert({
+        content: thoughtContent,
+        embedding,
+        reference_id: noteId || null,
+        note_snapshot_id: noteSnapshotId,
+        reliability: INGEST_PROVENANCE.reliability,
+        author: INGEST_PROVENANCE.author,
+        metadata: {
+          ...metadata,
+          source: "obsidian",
+          note_title: title || null,
+          references,
+        },
+      });
+      if (error) throw new Error(`Insert failed: ${error.message}`);
+      added++;
+    })());
+  }
+
+  for (const id of (plan.delete || [])) {
+    ops.push((async () => {
+      // Soft-archive, never hard-delete: an LLM-produced (and possibly
+      // hallucinated) ID must never permanently destroy captured knowledge.
+      // Archived thoughts stay retrievable and are excluded from the next
+      // reconciliation fetch (which filters archived_at IS NULL).
+      const { error } = await thoughtRepository.archive(id);
+      if (error) {
+        throw new Error(`Archive failed for ${id}: ${error.message}`);
+      }
+      deleted++;
+    })());
+  }
+
+  const results = await Promise.allSettled(ops);
+  const failures = results.filter((r) => r.status === "rejected").length;
+  return { updated, added, deleted, failures, opsLength: ops.length };
+}
+
+/**
+ * Build the "Synced …" summary message + error flag from a completed
+ * reconciliation. Pure — no I/O. `isError` is true only when EVERY op failed.
+ */
+export function formatIngestSummary(params: {
+  keep: number;
+  counts: ReconcileCounts;
+  references: Record<string, string[]>;
+  title: string | undefined;
+  noteId: string | undefined;
+}): { message: string; isError: boolean } {
+  const { keep, counts, references, title, noteId } = params;
+  const { updated, added, deleted, failures, opsLength } = counts;
+
+  const parts: string[] = [];
+  if (keep > 0) parts.push(`${keep} unchanged`);
+  if (updated > 0) parts.push(`${updated} updated`);
+  if (added > 0) parts.push(`${added} added`);
+  if (deleted > 0) parts.push(`${deleted} removed`);
+  if (failures > 0) parts.push(`${failures} failed`);
+
+  const taskCount = references.tasks?.length || 0;
+  const projectCount = references.projects?.length || 0;
+  const peopleCount = references.people?.length || 0;
+  const extractionParts: string[] = [];
+  if (taskCount > 0) {
+    extractionParts.push(
+      `${taskCount} task${taskCount !== 1 ? "s" : ""} detected`,
+    );
+  }
+  if (projectCount > 0) {
+    extractionParts.push(
+      `${projectCount} project${projectCount !== 1 ? "s" : ""} linked`,
+    );
+  }
+  if (peopleCount > 0) {
+    extractionParts.push(
+      `${peopleCount} ${peopleCount !== 1 ? "people" : "person"} referenced`,
+    );
+  }
+  const extractionSuffix = extractionParts.length > 0
+    ? ` | ${extractionParts.join(", ")}`
+    : "";
+
+  const message = `Synced "${title || noteId || "note"}": ${
+    parts.join(", ") || "no changes"
+  }${extractionSuffix}`;
+  const isError = failures > 0 && failures === opsLength;
+  return { message, isError };
+}
+
+export async function handleIngestNote(
+  supabase: SupabaseClient,
+  aiProvider: AiProvider,
+  thoughtRepository: ThoughtRepository,
+  taskRepository: TaskRepository,
+  projectRepository: ProjectRepository,
+  personRepository: PersonRepository,
+  noteSnapshotRepository: NoteSnapshotRepository,
+  { content, title, note_id }: {
+    content: string;
+    title?: string;
+    note_id?: string;
+  },
+): Promise<IngestResult> {
+  try {
+    if (await checkUnchanged(noteSnapshotRepository, note_id, content)) {
+      return { success: true, message: "Note unchanged — skipped." };
+    }
+
+    const noteSnapshotId = await upsertSnapshot(
+      noteSnapshotRepository,
+      note_id,
+      title,
+      content,
+    );
+
+    const parsedNote = parseNote(
+      content,
+      title || null,
+      note_id || null,
+      "obsidian",
+    );
+
+    let references: Record<string, string[]> = {};
+    try {
+      references = await runExtractionPipeline(
+        parsedNote,
+        [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
+        supabase,
         aiProvider,
-        content,
-        title,
-        note_id,
-        noteSnapshotId,
-        references,
-        INGEST_PROVENANCE,
+        taskRepository,
+        projectRepository,
+        personRepository,
       );
-      return {
-        success: !result.isError,
-        message: result.content[0].text,
-        ...(result.isError ? { error: result.content[0].text } : {}),
-      };
-    }
-
-    // Step 7: Execute reconciliation plan
-    const ops: Promise<void>[] = [];
-    let updated = 0, added = 0, deleted = 0;
-
-    for (const updateItem of (plan.update || [])) {
-      ops.push((async () => {
-        const [embedding, metadata] = await Promise.all([
-          getEmbedding(aiProvider, updateItem.content),
-          extractMetadata(aiProvider, updateItem.content),
-        ]);
-        const { error } = await thoughtRepository.update(updateItem.id, {
-          content: updateItem.content,
-          embedding,
-          note_snapshot_id: noteSnapshotId,
-          reliability: INGEST_PROVENANCE.reliability,
-          author: INGEST_PROVENANCE.author,
-          metadata: {
-            ...metadata,
-            source: "obsidian",
-            note_title: title || null,
-            updated_at: new Date().toISOString(),
-            references,
-          },
-        });
-        if (error) {
-          throw new Error(
-            `Update failed for ${updateItem.id}: ${error.message}`,
-          );
-        }
-        updated++;
-      })());
-    }
-
-    for (const addItem of (plan.add || [])) {
-      const thoughtContent = typeof addItem === "string"
-        ? addItem
-        : (addItem as unknown as { thought: string }).thought || addItem;
-      ops.push((async () => {
-        const [embedding, metadata] = await Promise.all([
-          getEmbedding(aiProvider, thoughtContent as string),
-          extractMetadata(aiProvider, thoughtContent as string),
-        ]);
-        const { error } = await thoughtRepository.insert({
-          content: thoughtContent,
-          embedding,
-          reference_id: note_id || null,
-          note_snapshot_id: noteSnapshotId,
-          reliability: INGEST_PROVENANCE.reliability,
-          author: INGEST_PROVENANCE.author,
-          metadata: {
-            ...metadata,
-            source: "obsidian",
-            note_title: title || null,
-            references,
-          },
-        });
-        if (error) throw new Error(`Insert failed: ${error.message}`);
-        added++;
-      })());
-    }
-
-    for (const id of (plan.delete || [])) {
-      ops.push((async () => {
-        // Soft-archive, never hard-delete: an LLM-produced (and possibly
-        // hallucinated) ID must never permanently destroy captured knowledge.
-        // Archived thoughts stay retrievable and are excluded from the next
-        // reconciliation fetch (which filters archived_at IS NULL).
-        const { error } = await thoughtRepository.archive(id);
-        if (error) {
-          throw new Error(`Archive failed for ${id}: ${error.message}`);
-        }
-        deleted++;
-      })());
-    }
-
-    const results = await Promise.allSettled(ops);
-    const failures = results.filter((r) => r.status === "rejected").length;
-
-    const kept = (plan.keep || []).length;
-    const parts: string[] = [];
-    if (kept > 0) parts.push(`${kept} unchanged`);
-    if (updated > 0) parts.push(`${updated} updated`);
-    if (added > 0) parts.push(`${added} added`);
-    if (deleted > 0) parts.push(`${deleted} removed`);
-    if (failures > 0) parts.push(`${failures} failed`);
-
-    const taskCount = references.tasks?.length || 0;
-    const projectCount = references.projects?.length || 0;
-    const peopleCount = references.people?.length || 0;
-    const extractionParts: string[] = [];
-    if (taskCount > 0) {
-      extractionParts.push(
-        `${taskCount} task${taskCount !== 1 ? "s" : ""} detected`,
+    } catch (pipelineError) {
+      console.error(
+        `Extractor pipeline error: ${(pipelineError as Error).message}`,
       );
     }
-    if (projectCount > 0) {
-      extractionParts.push(
-        `${projectCount} project${projectCount !== 1 ? "s" : ""} linked`,
-      );
-    }
-    if (peopleCount > 0) {
-      extractionParts.push(
-        `${peopleCount} ${peopleCount !== 1 ? "people" : "person"} referenced`,
-      );
-    }
-    const extractionSuffix = extractionParts.length > 0
-      ? ` | ${extractionParts.join(", ")}`
-      : "";
 
-    const message = `Synced "${title || note_id || "note"}": ${
-      parts.join(", ") || "no changes"
-    }${extractionSuffix}`;
-    const isError = failures > 0 && failures === ops.length;
+    // Fresh split + insert, used for both "no existing thoughts" and the
+    // unparseable-plan fallback below.
+    const runFreshIngest = async () =>
+      freshIngestResult(
+        await freshIngest(
+          thoughtRepository,
+          aiProvider,
+          content,
+          title,
+          note_id,
+          noteSnapshotId,
+          references,
+          INGEST_PROVENANCE,
+        ),
+      );
+
+    const existingThoughts = await fetchExistingThoughts(
+      thoughtRepository,
+      note_id,
+    );
+
+    // No existing thoughts → fresh split and insert.
+    if (existingThoughts.length === 0) {
+      return await runFreshIngest();
+    }
+
+    // Existing thoughts found → reconcile. A null plan (unparseable) degrades to
+    // a fresh ingest, exactly as before.
+    const plan = await requestReconciliationPlan(
+      aiProvider,
+      existingThoughts,
+      title,
+      content,
+    );
+    if (plan === null) {
+      return await runFreshIngest();
+    }
+
+    const counts = await executeReconciliationPlan(
+      thoughtRepository,
+      aiProvider,
+      plan,
+      { noteSnapshotId, noteId: note_id, title, references },
+    );
+
+    const { message, isError } = formatIngestSummary({
+      keep: (plan.keep || []).length,
+      counts,
+      references,
+      title,
+      noteId: note_id,
+    });
 
     return {
       success: !isError,
