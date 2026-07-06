@@ -1,5 +1,6 @@
 {
   "tasks": {
+    "dev": "./scripts/dev.sh",
     "test": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/unit/ tests/integration/",
     "test:unit": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/unit/",
     "test:integration": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/integration/",
@@ -8,10 +9,30 @@
   "imports": {
     "@supabase/supabase-js": "npm:@supabase/supabase-js@2.47.10",
     "@modelcontextprotocol/sdk/server/mcp.js": "npm:@modelcontextprotocol/sdk@1.24.3/server/mcp.js",
+    "@supabase/functions-js/edge-runtime.d.ts": "jsr:@supabase/functions-js@2/edge-runtime.d.ts",
+    "@std/assert": "jsr:@std/assert@1",
     "zod": "npm:zod@4.1.13",
     "hono": "npm:hono@4.9.2",
     "hono/": "npm:hono@4.9.2/",
     "@hono/mcp": "npm:@hono/mcp@0.1.1"
+  },
+  "lint": {
+    "include": ["supabase/functions/", "tests/"],
+    "exclude": [
+      "obsidian-plugin/",
+      "dist/",
+      "node_modules/",
+      "**/node_modules/"
+    ]
+  },
+  "fmt": {
+    "include": ["supabase/functions/", "tests/"],
+    "exclude": [
+      "obsidian-plugin/",
+      "dist/",
+      "node_modules/",
+      "**/node_modules/"
+    ]
   },
   "lock": false
 }

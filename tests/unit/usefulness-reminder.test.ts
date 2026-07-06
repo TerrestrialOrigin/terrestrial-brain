@@ -3,10 +3,7 @@
 // queries), so a wording drift must fail loudly here rather than silently
 // changing what the model sees.
 
-import {
-  assertEquals,
-  assertStringIncludes,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   buildUsefulnessHeader,
   buildUsefulnessReminder,

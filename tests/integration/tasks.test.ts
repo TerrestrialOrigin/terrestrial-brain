@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertExists } from "@std/assert";
 import {
   callTool,
   restUrl,
@@ -58,7 +58,10 @@ Deno.test("update_task to done archives it and hides it from list by default", a
     const taskId = taskIdFrom(createResult);
     created.push(taskId);
 
-    const result = await callTool("update_task", { id: taskId, status: "done" });
+    const result = await callTool("update_task", {
+      id: taskId,
+      status: "done",
+    });
     assertExists(result);
     assertEquals(result.includes("status"), true);
     assertEquals(result.includes("archived_at"), true);

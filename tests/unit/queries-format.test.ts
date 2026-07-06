@@ -4,10 +4,7 @@
 // exercises end-to-end, and give the "(section unavailable: …)" C9 branch fast
 // coverage a live query can't easily force.
 
-import {
-  assertEquals,
-  assertStringIncludes,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   dedupeByName,
   formatProjectSummary,

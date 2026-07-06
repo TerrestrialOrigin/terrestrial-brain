@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 import {
   extractProjectFromConventionalPath,
   extractProjectNameFromPath,
@@ -92,7 +92,9 @@ Deno.test("extractProjectFromConventionalPath: matches nested projects folder", 
 
 Deno.test("extractProjectFromConventionalPath: matches deeply nested with capitalization", () => {
   assertEquals(
-    extractProjectFromConventionalPath("work/clients/Projects/DemoProj/kickoff.md"),
+    extractProjectFromConventionalPath(
+      "work/clients/Projects/DemoProj/kickoff.md",
+    ),
     "DemoProj",
   );
 });
@@ -113,7 +115,10 @@ Deno.test("extractProjectFromConventionalPath: returns null for null referenceId
 });
 
 Deno.test("extractProjectFromConventionalPath: returns null for empty folder name (projects//file.md)", () => {
-  assertEquals(extractProjectFromConventionalPath("projects//somefile.md"), null);
+  assertEquals(
+    extractProjectFromConventionalPath("projects//somefile.md"),
+    null,
+  );
 });
 
 Deno.test("extractProjectFromConventionalPath: returns null for projects folder with no subfolder", () => {
@@ -123,11 +128,17 @@ Deno.test("extractProjectFromConventionalPath: returns null for projects folder 
 // ─── pathContainsProjectKeyword ─────────────────────────────────────────────
 
 Deno.test("pathContainsProjectKeyword: true for folder containing 'Project'", () => {
-  assertEquals(pathContainsProjectKeyword("farming/Rabbit Hutch Project/Plan.md"), true);
+  assertEquals(
+    pathContainsProjectKeyword("farming/Rabbit Hutch Project/Plan.md"),
+    true,
+  );
 });
 
 Deno.test("pathContainsProjectKeyword: true for filename containing 'Project'", () => {
-  assertEquals(pathContainsProjectKeyword("farming/Rabbit Hutch Project.md"), true);
+  assertEquals(
+    pathContainsProjectKeyword("farming/Rabbit Hutch Project.md"),
+    true,
+  );
 });
 
 Deno.test("pathContainsProjectKeyword: true for 'project' (lowercase)", () => {
@@ -135,7 +146,10 @@ Deno.test("pathContainsProjectKeyword: true for 'project' (lowercase)", () => {
 });
 
 Deno.test("pathContainsProjectKeyword: true for 'PROJECT' (uppercase)", () => {
-  assertEquals(pathContainsProjectKeyword("farming/BIG PROJECT/notes.md"), true);
+  assertEquals(
+    pathContainsProjectKeyword("farming/BIG PROJECT/notes.md"),
+    true,
+  );
 });
 
 Deno.test("pathContainsProjectKeyword: false for path without 'project'", () => {
@@ -251,5 +265,8 @@ Deno.test("extractProjectNameFromPath: sends correct path to the provider", asyn
     raw: { is_project: true, project_name: "Test" },
   });
   await extractProjectNameFromPath("some/path/Test Project.md", provider);
-  assertEquals(provider.lastRequest?.userContent, "Path: some/path/Test Project.md");
+  assertEquals(
+    provider.lastRequest?.userContent,
+    "Path: some/path/Test Project.md",
+  );
 });

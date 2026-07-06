@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 import { PeopleExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
 import type { ExtractionContext } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import { parseNote } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
@@ -41,7 +41,12 @@ function makeContext(
 }
 
 Deno.test("PeopleExtractor: keeps an explicit known-id match", async () => {
-  const note = parseNote("Ask Alice about the design", "Note", null, "obsidian");
+  const note = parseNote(
+    "Ask Alice about the design",
+    "Note",
+    null,
+    "obsidian",
+  );
   const provider = new FakeAiProvider(() => ({
     people: [{ name: "Alice", id: ALICE_ID }],
   }));

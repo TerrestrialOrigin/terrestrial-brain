@@ -3,7 +3,7 @@ import {
   assertAlmostEquals,
   assertEquals,
   assertInstanceOf,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+} from "@std/assert";
 import { FakeAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/fake-provider.ts";
 import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
 import { createAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/factory.ts";

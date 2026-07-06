@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { validateFilePath } from "./validators";
 
 // ─── Valid paths ───────────────────────────────────────────────────────────────
@@ -9,7 +9,8 @@ describe("validateFilePath — valid paths", () => {
   });
 
   it("accepts deeply nested valid path", () => {
-    expect(validateFilePath("projects/TeamA/2026/Q1/sprint-review.md")).toBeNull();
+    expect(validateFilePath("projects/TeamA/2026/Q1/sprint-review.md"))
+      .toBeNull();
   });
 
   it("accepts root-level file", () => {
@@ -136,11 +137,15 @@ describe("validateFilePath — trailing dot/space", () => {
 
 describe("validateFilePath — empty/whitespace", () => {
   it("rejects empty path", () => {
-    expect(validateFilePath("")).toBe("Invalid file path: path must not be empty.");
+    expect(validateFilePath("")).toBe(
+      "Invalid file path: path must not be empty.",
+    );
   });
 
   it("rejects whitespace-only path", () => {
-    expect(validateFilePath("   ")).toBe("Invalid file path: path must not be empty.");
+    expect(validateFilePath("   ")).toBe(
+      "Invalid file path: path must not be empty.",
+    );
   });
 });
 
@@ -149,7 +154,7 @@ describe("validateFilePath — empty/whitespace", () => {
 describe("validateFilePath — absolute paths", () => {
   it("rejects absolute path", () => {
     expect(validateFilePath("/projects/file.md")).toBe(
-      "Invalid file path: path must be vault-relative (no leading slash)."
+      "Invalid file path: path must be vault-relative (no leading slash).",
     );
   });
 });
@@ -159,7 +164,7 @@ describe("validateFilePath — absolute paths", () => {
 describe("validateFilePath — empty segments", () => {
   it("rejects consecutive slashes", () => {
     expect(validateFilePath("projects//file.md")).toBe(
-      "Invalid file path: path contains empty segments (consecutive slashes)."
+      "Invalid file path: path contains empty segments (consecutive slashes).",
     );
   });
 });
@@ -169,13 +174,13 @@ describe("validateFilePath — empty segments", () => {
 describe("validateFilePath — extension", () => {
   it("rejects file without .md extension", () => {
     expect(validateFilePath("projects/file.txt")).toBe(
-      "Invalid file path: file must have a .md extension."
+      "Invalid file path: file must have a .md extension.",
     );
   });
 
   it("rejects file with no extension", () => {
     expect(validateFilePath("projects/file")).toBe(
-      "Invalid file path: file must have a .md extension."
+      "Invalid file path: file must have a .md extension.",
     );
   });
 });

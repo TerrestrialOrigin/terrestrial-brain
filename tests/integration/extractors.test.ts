@@ -1,7 +1,4 @@
-import {
-  assertEquals,
-  assertExists,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertExists } from "@std/assert";
 import { createClient } from "@supabase/supabase-js";
 import { parseNote } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
 import type { ParsedNote } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
@@ -10,7 +7,6 @@ import {
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import type {
   ExtractionContext,
-  ExtractionResult,
   Extractor,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import {
@@ -67,10 +63,11 @@ const createdTaskIds: string[] = [];
 Deno.test("pipeline: single extractor returns correct references", async () => {
   const mockExtractor: Extractor = {
     referenceKey: "projects",
-    extract: async (_note: ParsedNote, _context: ExtractionContext) => ({
-      referenceKey: "projects",
-      ids: ["uuid-1", "uuid-2"],
-    }),
+    extract: (_note: ParsedNote, _context: ExtractionContext) =>
+      Promise.resolve({
+        referenceKey: "projects",
+        ids: ["uuid-1", "uuid-2"],
+      }),
   };
 
   const note = parseNote("Some content", "Test", null, "obsidian");
@@ -91,11 +88,12 @@ Deno.test("pipeline: single extractor returns correct references", async () => {
 Deno.test("pipeline: multiple extractors compose results", async () => {
   const projectExtractor: Extractor = {
     referenceKey: "projects",
-    extract: async () => ({ referenceKey: "projects", ids: ["p1"] }),
+    extract: () => Promise.resolve({ referenceKey: "projects", ids: ["p1"] }),
   };
   const taskExtractor: Extractor = {
     referenceKey: "tasks",
-    extract: async () => ({ referenceKey: "tasks", ids: ["t1", "t2"] }),
+    extract: () =>
+      Promise.resolve({ referenceKey: "tasks", ids: ["t1", "t2"] }),
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
@@ -118,23 +116,23 @@ Deno.test("pipeline: extractors run in sequential order", async () => {
 
   const extractorA: Extractor = {
     referenceKey: "alpha",
-    extract: async () => {
+    extract: () => {
       executionOrder.push("A");
-      return { referenceKey: "alpha", ids: [] };
+      return Promise.resolve({ referenceKey: "alpha", ids: [] });
     },
   };
   const extractorB: Extractor = {
     referenceKey: "beta",
-    extract: async () => {
+    extract: () => {
       executionOrder.push("B");
-      return { referenceKey: "beta", ids: [] };
+      return Promise.resolve({ referenceKey: "beta", ids: [] });
     },
   };
   const extractorC: Extractor = {
     referenceKey: "gamma",
-    extract: async () => {
+    extract: () => {
       executionOrder.push("C");
-      return { referenceKey: "gamma", ids: [] };
+      return Promise.resolve({ referenceKey: "gamma", ids: [] });
     },
   };
 
@@ -157,19 +155,22 @@ Deno.test("pipeline: context enrichment visible to downstream extractors", async
 
   const enrichingExtractor: Extractor = {
     referenceKey: "projects",
-    extract: async (_note, context) => {
+    extract: (_note, context) => {
       context.newlyCreatedProjects.push({ id: "new-proj-id", name: "NewProj" });
-      return { referenceKey: "projects", ids: ["new-proj-id"] };
+      return Promise.resolve({
+        referenceKey: "projects",
+        ids: ["new-proj-id"],
+      });
     },
   };
 
   const observingExtractor: Extractor = {
     referenceKey: "tasks",
-    extract: async (_note, context) => {
+    extract: (_note, context) => {
       downstreamSawProject = context.newlyCreatedProjects.some(
         (project) => project.id === "new-proj-id",
       );
-      return { referenceKey: "tasks", ids: [] };
+      return Promise.resolve({ referenceKey: "tasks", ids: [] });
     },
   };
 
@@ -190,7 +191,7 @@ Deno.test("pipeline: context enrichment visible to downstream extractors", async
 Deno.test("pipeline: extractor returning empty ids includes key in result", async () => {
   const emptyExtractor: Extractor = {
     referenceKey: "projects",
-    extract: async () => ({ referenceKey: "projects", ids: [] }),
+    extract: () => Promise.resolve({ referenceKey: "projects", ids: [] }),
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
@@ -213,9 +214,9 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
 
   const inspectingExtractor: Extractor = {
     referenceKey: "inspect",
-    extract: async (_note, context) => {
+    extract: (_note, context) => {
       capturedKnownProjects = context.knownProjects;
-      return { referenceKey: "inspect", ids: [] };
+      return Promise.resolve({ referenceKey: "inspect", ids: [] });
     },
   };
 
@@ -1222,9 +1223,9 @@ Deno.test("pipeline: knownTasks populated from DB for matching reference_id", as
 
   const inspectingExtractor: Extractor = {
     referenceKey: "inspect",
-    extract: async (_note, context) => {
+    extract: (_note, context) => {
       capturedKnownTasks = context.knownTasks;
-      return { referenceKey: "inspect", ids: [] };
+      return Promise.resolve({ referenceKey: "inspect", ids: [] });
     },
   };
 
@@ -1259,9 +1260,9 @@ Deno.test("pipeline: knownTasks empty for note with no referenceId", async () =>
 
   const inspectingExtractor: Extractor = {
     referenceKey: "inspect",
-    extract: async (_note, context) => {
+    extract: (_note, context) => {
       capturedKnownTasks = context.knownTasks;
-      return { referenceKey: "inspect", ids: [] };
+      return Promise.resolve({ referenceKey: "inspect", ids: [] });
     },
   };
 
@@ -1422,9 +1423,9 @@ Deno.test("pipeline: knownPeople populated from DB", async () => {
 
   const inspectingExtractor: Extractor = {
     referenceKey: "inspect",
-    extract: async (_note, context) => {
+    extract: (_note, context) => {
       capturedKnownPeople = context.knownPeople;
-      return { referenceKey: "inspect", ids: [] };
+      return Promise.resolve({ referenceKey: "inspect", ids: [] });
     },
   };
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Validate the whole repo: Deno integration suite + plugin tests + plugin build.
+# Validate the whole repo the same way CI does: deterministic Deno suite (fake AI
+# provider) + Deno lint/format checks + plugin tests + plugin build.
 # Prerequisite: the local Supabase stack must be running (npx supabase start),
 # with edge-function secrets in supabase/functions/.env.
 set -euo pipefail
@@ -12,8 +13,14 @@ if ! curl -s -o /dev/null -m 5 http://localhost:54321/functions/v1/terrestrial-b
   exit 1
 fi
 
-echo "==> Running Deno test suite (integration)..."
-(cd "$REPO_ROOT" && deno test --allow-net --allow-env tests/)
+echo "==> Running Deno test suite (deterministic, TB_AI_PROVIDER=fake)..."
+(cd "$REPO_ROOT" && deno task test)
+
+echo "==> Running Deno lint..."
+(cd "$REPO_ROOT" && deno lint)
+
+echo "==> Checking Deno formatting..."
+(cd "$REPO_ROOT" && deno fmt --check)
 
 echo "==> Running Obsidian plugin tests..."
 (cd "$REPO_ROOT/obsidian-plugin" && npm test)

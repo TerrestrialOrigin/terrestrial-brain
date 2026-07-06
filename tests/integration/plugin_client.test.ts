@@ -9,11 +9,7 @@
 // Requires the local stack (npx supabase start) with functions served. It fails
 // loudly (no skips) if the stack is unreachable, per the zero-skips rule.
 
-import {
-  assert,
-  assertEquals,
-  assertExists,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   HttpTerrestrialBrainClient,
 } from "../../obsidian-plugin/src/apiClient.ts";
@@ -48,7 +44,10 @@ Deno.test("plugin client ingests a note against the live stack", async () => {
       "Plugin Client Test",
       noteId,
     );
-    assert(typeof message === "string", "ingestNote should return a string message");
+    assert(
+      typeof message === "string",
+      "ingestNote should return a string message",
+    );
     assert(message.length > 0, "ingestNote message should be non-empty");
   } finally {
     await supabase.from("thoughts").delete().eq("reference_id", noteId);
@@ -59,7 +58,8 @@ Deno.test("plugin client ingests a note against the live stack", async () => {
 Deno.test("plugin client polls metadata, validates, fetches content, and marks picked up", async () => {
   const client = makeClient();
   const filePath = `plugin-client-test/${uniqueToken()}.md`;
-  const outputBody = "# Delivered By Plugin Client\n\nHello from the integration test.";
+  const outputBody =
+    "# Delivered By Plugin Client\n\nHello from the integration test.";
 
   // Setup via the MCP tool helper (not the tested path) — create a pending output.
   const createResult = await callTool("create_ai_output", {
@@ -80,10 +80,19 @@ Deno.test("plugin client polls metadata, validates, fetches content, and marks p
     assertEquals(typeof mine!.content_size, "number");
 
     const content = await client.fetchContent([outputId!]);
-    assertEquals(content.find((entry) => entry.id === outputId)?.content, outputBody);
+    assertEquals(
+      content.find((entry) => entry.id === outputId)?.content,
+      outputBody,
+    );
 
-    const marked = await client.call("mark-ai-output-picked-up", { ids: [outputId] });
-    assertEquals(marked.success, true, "mark-ai-output-picked-up should succeed");
+    const marked = await client.call("mark-ai-output-picked-up", {
+      ids: [outputId],
+    });
+    assertEquals(
+      marked.success,
+      true,
+      "mark-ai-output-picked-up should succeed",
+    );
   } finally {
     await supabase.from("ai_output").delete().eq("id", outputId);
   }

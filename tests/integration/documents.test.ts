@@ -1,4 +1,4 @@
-import { assertEquals, assertExists, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
 import {
   callTool,
   MCP_BASE,
@@ -40,7 +40,8 @@ Deno.test("write_document stores a document with explicit references", async () 
 });
 
 Deno.test("write_document stores content verbatim", async () => {
-  const verbatimContent = "Line 1: exact content\nLine 2: special chars <>&\"'\nLine 3: unicode \u2603\u2764\uFE0F";
+  const verbatimContent =
+    "Line 1: exact content\nLine 2: special chars <>&\"'\nLine 3: unicode \u2603\u2764\uFE0F";
 
   const result = await callTool("write_document", {
     title: "Verbatim Test",
@@ -68,7 +69,11 @@ Deno.test("write_document stores content verbatim", async () => {
   assertEquals(response.ok, true);
   const docs: { content: string }[] = await response.json();
   assertEquals(docs.length, 1);
-  assertEquals(docs[0].content, verbatimContent, "Content should be stored byte-for-byte");
+  assertEquals(
+    docs[0].content,
+    verbatimContent,
+    "Content should be stored byte-for-byte",
+  );
 });
 
 Deno.test("write_document rejects non-existent project_id", async () => {
@@ -98,7 +103,8 @@ Deno.test("write_document without references triggers pipeline extraction", asyn
 
   const result = await callTool("write_document", {
     title: "Extraction Pipeline Test",
-    content: "This document is about the DocExtractTest project. It mentions interesting technical details.",
+    content:
+      "This document is about the DocExtractTest project. It mentions interesting technical details.",
     project_id: projectId,
   });
 
@@ -124,7 +130,9 @@ Deno.test("get_document retrieves full document with content", async () => {
 
 Deno.test("get_document returns error for non-existent ID", async () => {
   try {
-    await callTool("get_document", { id: "00000000-0000-0000-0000-999999999999" });
+    await callTool("get_document", {
+      id: "00000000-0000-0000-0000-999999999999",
+    });
     // If it doesn't throw, the result should indicate not found
   } catch (error: unknown) {
     assertStringIncludes((error as Error).message, "No document found");
@@ -157,44 +165,59 @@ Deno.test("list_documents returns empty for project with no documents", async ()
   const emptyProjectId = projectMatch![1];
   cleanupProjectIds.push(emptyProjectId);
 
-  const result = await callTool("list_documents", { project_id: emptyProjectId });
+  const result = await callTool("list_documents", {
+    project_id: emptyProjectId,
+  });
   assertStringIncludes(result, "No documents found");
 });
 
 // ─── list_documents title_contains Filter Tests ────────────────────────────
 
 Deno.test("list_documents filters by title_contains (substring match)", async () => {
-  const result = await callTool("list_documents", { title_contains: "Integration Test" });
+  const result = await callTool("list_documents", {
+    title_contains: "Integration Test",
+  });
   assertExists(result);
   assertStringIncludes(result, "Integration Test Document");
   assertStringIncludes(result, "document(s)");
 });
 
 Deno.test("list_documents title_contains is case-insensitive", async () => {
-  const result = await callTool("list_documents", { title_contains: "integration test" });
+  const result = await callTool("list_documents", {
+    title_contains: "integration test",
+  });
   assertExists(result);
   assertStringIncludes(result, "Integration Test Document");
 });
 
 Deno.test("list_documents title_contains returns no results for non-matching string", async () => {
-  const result = await callTool("list_documents", { title_contains: "zzz-nonexistent-title-zzz" });
+  const result = await callTool("list_documents", {
+    title_contains: "zzz-nonexistent-title-zzz",
+  });
   assertStringIncludes(result, "No documents found");
 });
 
 // ─── list_documents search Filter Tests ────────────────────────────────────
 
 Deno.test("list_documents filters by content search", async () => {
-  const result = await callTool("list_documents", { search: "full test document stored verbatim" });
+  const result = await callTool("list_documents", {
+    search: "full test document stored verbatim",
+  });
   assertExists(result);
   assertStringIncludes(result, "Integration Test Document");
   assertStringIncludes(result, "document(s)");
   // Content body should NOT be in list results (metadata only)
-  assertEquals(result.includes("This is a full test document stored verbatim."), false,
-    "Content body should not appear in list results");
+  assertEquals(
+    result.includes("This is a full test document stored verbatim."),
+    false,
+    "Content body should not appear in list results",
+  );
 });
 
 Deno.test("list_documents search is case-insensitive", async () => {
-  const result = await callTool("list_documents", { search: "FULL TEST DOCUMENT STORED VERBATIM" });
+  const result = await callTool("list_documents", {
+    search: "FULL TEST DOCUMENT STORED VERBATIM",
+  });
   assertExists(result);
   assertStringIncludes(result, "Integration Test Document");
 });
@@ -244,7 +267,9 @@ Deno.test("capture_thought stores document_ids in metadata.references.documents"
 
   // Query DB to verify document_ids stored in metadata.references.documents
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id,metadata`,
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
+      encodeURIComponent(uniqueContent)
+    }&select=id,metadata`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -253,17 +278,22 @@ Deno.test("capture_thought stores document_ids in metadata.references.documents"
     },
   );
   assertEquals(response.ok, true);
-  const thoughts: { id: string; metadata: Record<string, unknown> }[] = await response.json();
+  const thoughts: { id: string; metadata: Record<string, unknown> }[] =
+    await response.json();
   assertEquals(thoughts.length, 1, "Should have exactly one thought");
 
-  const refs = thoughts[0].metadata?.references as Record<string, unknown> | undefined;
+  const refs = thoughts[0].metadata?.references as
+    | Record<string, unknown>
+    | undefined;
   assertExists(refs, "metadata.references should exist");
   const documents = refs.documents as string[];
   assertExists(documents, "references.documents should exist");
   assertEquals(
     documents.includes(fakeDocId),
     true,
-    `references.documents should contain ${fakeDocId}. Got: ${JSON.stringify(documents)}`,
+    `references.documents should contain ${fakeDocId}. Got: ${
+      JSON.stringify(documents)
+    }`,
   );
   cleanupThoughtIds.push(thoughts[0].id);
 });
@@ -275,7 +305,9 @@ Deno.test("capture_thought without document_ids does not add documents reference
   assertExists(result);
 
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id,metadata`,
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
+      encodeURIComponent(uniqueContent)
+    }&select=id,metadata`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -284,16 +316,21 @@ Deno.test("capture_thought without document_ids does not add documents reference
     },
   );
   assertEquals(response.ok, true);
-  const thoughts: { id: string; metadata: Record<string, unknown> }[] = await response.json();
+  const thoughts: { id: string; metadata: Record<string, unknown> }[] =
+    await response.json();
   assertEquals(thoughts.length, 1);
 
-  const refs = thoughts[0].metadata?.references as Record<string, unknown> | undefined;
+  const refs = thoughts[0].metadata?.references as
+    | Record<string, unknown>
+    | undefined;
   // documents should either not exist or be empty
   const documents = refs?.documents as string[] | undefined;
   assertEquals(
     !documents || documents.length === 0,
     true,
-    `references.documents should be absent or empty when document_ids not provided. Got: ${JSON.stringify(documents)}`,
+    `references.documents should be absent or empty when document_ids not provided. Got: ${
+      JSON.stringify(documents)
+    }`,
   );
   cleanupThoughtIds.push(thoughts[0].id);
 });
@@ -338,8 +375,11 @@ Deno.test("update_document updates title only (no thought churn)", async () => {
   assertStringIncludes(result, "Document updated");
   assertStringIncludes(result, "title");
   // Should NOT include thoughts_required since content didn't change
-  assertEquals(result.includes("thoughts_required"), false,
-    "Title-only update should not trigger thoughts_required");
+  assertEquals(
+    result.includes("thoughts_required"),
+    false,
+    "Title-only update should not trigger thoughts_required",
+  );
 
   // Verify title changed and updated_at refreshed
   const afterResp = await fetch(
@@ -351,10 +391,15 @@ Deno.test("update_document updates title only (no thought churn)", async () => {
       },
     },
   );
-  const afterDocs: { title: string; content: string; updated_at: string }[] = await afterResp.json();
+  const afterDocs: { title: string; content: string; updated_at: string }[] =
+    await afterResp.json();
   assertEquals(afterDocs[0].title, "Updated Title Test");
   assertEquals(afterDocs[0].content, "Content that should remain unchanged.");
-  assertEquals(afterDocs[0].updated_at !== originalUpdatedAt, true, "updated_at should have refreshed");
+  assertEquals(
+    afterDocs[0].updated_at !== originalUpdatedAt,
+    true,
+    "updated_at should have refreshed",
+  );
 });
 
 Deno.test("update_document updates content — archives old thoughts, re-extracts refs, returns thoughts_required", async () => {
@@ -380,7 +425,9 @@ Deno.test("update_document updates content — archives old thoughts, re-extract
 
   // Get the thought ID for verification
   const thoughtResp = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(thoughtContent)}&select=id`,
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
+      encodeURIComponent(thoughtContent)
+    }&select=id`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -389,7 +436,11 @@ Deno.test("update_document updates content — archives old thoughts, re-extract
     },
   );
   const thoughts: { id: string }[] = await thoughtResp.json();
-  assertEquals(thoughts.length, 1, "Should have the linked thought before update");
+  assertEquals(
+    thoughts.length,
+    1,
+    "Should have the linked thought before update",
+  );
   const thoughtId = thoughts[0].id;
   cleanupThoughtIds.push(thoughtId);
 
@@ -415,9 +466,17 @@ Deno.test("update_document updates content — archives old thoughts, re-extract
       },
     },
   );
-  const archivedThoughts: { id: string; archived_at: string | null }[] = await archivedThoughtResp.json();
-  assertEquals(archivedThoughts.length, 1, "Linked thought should still exist (archived, not deleted) after content update");
-  assertExists(archivedThoughts[0].archived_at, "Linked thought should have archived_at set after content update");
+  const archivedThoughts: { id: string; archived_at: string | null }[] =
+    await archivedThoughtResp.json();
+  assertEquals(
+    archivedThoughts.length,
+    1,
+    "Linked thought should still exist (archived, not deleted) after content update",
+  );
+  assertExists(
+    archivedThoughts[0].archived_at,
+    "Linked thought should have archived_at set after content update",
+  );
 
   // Verify content was updated verbatim
   const docResp = await fetch(
@@ -430,7 +489,11 @@ Deno.test("update_document updates content — archives old thoughts, re-extract
     },
   );
   const docs: { content: string }[] = await docResp.json();
-  assertEquals(docs[0].content, newContent, "Content should be updated verbatim");
+  assertEquals(
+    docs[0].content,
+    newContent,
+    "Content should be updated verbatim",
+  );
 });
 
 Deno.test("update_document with a failing document update leaves linked thoughts untouched (C3 ordering)", async () => {
@@ -453,7 +516,9 @@ Deno.test("update_document with a failing document update leaves linked thoughts
     document_ids: [docId],
   });
   const thoughtResp = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(thoughtContent)}&select=id,archived_at`,
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
+      encodeURIComponent(thoughtContent)
+    }&select=id,archived_at`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -461,8 +526,13 @@ Deno.test("update_document with a failing document update leaves linked thoughts
       },
     },
   );
-  const linked: { id: string; archived_at: string | null }[] = await thoughtResp.json();
-  assertEquals(linked.length, 1, "Should have the linked thought before the failing update");
+  const linked: { id: string; archived_at: string | null }[] = await thoughtResp
+    .json();
+  assertEquals(
+    linked.length,
+    1,
+    "Should have the linked thought before the failing update",
+  );
   const thoughtId = linked[0].id;
   cleanupThoughtIds.push(thoughtId);
 
@@ -474,13 +544,18 @@ Deno.test("update_document with a failing document update leaves linked thoughts
   try {
     await callTool("update_document", {
       id: docId,
-      content: "New content that should never persist because the update fails.",
+      content:
+        "New content that should never persist because the update fails.",
       project_id: invalidProjectId,
     });
   } catch (_error) {
     threw = true;
   }
-  assertEquals(threw, true, "update_document should error on an invalid project_id (FK violation)");
+  assertEquals(
+    threw,
+    true,
+    "update_document should error on an invalid project_id (FK violation)",
+  );
 
   // The linked thought must still exist and still be ACTIVE (not archived, not deleted).
   const afterResp = await fetch(
@@ -492,8 +567,13 @@ Deno.test("update_document with a failing document update leaves linked thoughts
       },
     },
   );
-  const after: { id: string; archived_at: string | null }[] = await afterResp.json();
-  assertEquals(after.length, 1, "Linked thought must still exist after a failed document update");
+  const after: { id: string; archived_at: string | null }[] = await afterResp
+    .json();
+  assertEquals(
+    after.length,
+    1,
+    "Linked thought must still exist after a failed document update",
+  );
   assertEquals(
     after[0].archived_at,
     null,
@@ -545,7 +625,11 @@ Deno.test("update_document updates project_id only", async () => {
     },
   );
   const docs: { project_id: string }[] = await docResp.json();
-  assertEquals(docs[0].project_id, newProjectId, "project_id should be updated");
+  assertEquals(
+    docs[0].project_id,
+    newProjectId,
+    "project_id should be updated",
+  );
 });
 
 Deno.test("update_document returns error when no optional fields provided", async () => {
@@ -553,7 +637,10 @@ Deno.test("update_document returns error when no optional fields provided", asyn
     await callTool("update_document", { id: testDocumentId });
     assertEquals(true, false, "Should have thrown validation error");
   } catch (error: unknown) {
-    assertStringIncludes((error as Error).message, "At least one of title, content, or project_id must be provided");
+    assertStringIncludes(
+      (error as Error).message,
+      "At least one of title, content, or project_id must be provided",
+    );
   }
 });
 
@@ -587,7 +674,7 @@ Deno.test("write_document description mentions update_document", async () => {
   const text = await res.text();
   let parsed;
   if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find(line => line.startsWith("data:"));
+    const dataLine = text.split("\n").find((line) => line.startsWith("data:"));
     assertExists(dataLine);
     parsed = JSON.parse(dataLine!.slice(5).trim());
   } else {
@@ -595,7 +682,9 @@ Deno.test("write_document description mentions update_document", async () => {
   }
 
   const tools = parsed.result?.tools || [];
-  const writeDoc = tools.find((tool: { name: string }) => tool.name === "write_document");
+  const writeDoc = tools.find((tool: { name: string }) =>
+    tool.name === "write_document"
+  );
   assertExists(writeDoc, "write_document tool should exist");
   assertStringIncludes(
     writeDoc.description,
@@ -619,7 +708,11 @@ Deno.test("cleanup documents test data", async () => {
         },
       },
     );
-    assertEquals(response.ok, true, `Cleanup of document ${docId} should succeed`);
+    assertEquals(
+      response.ok,
+      true,
+      `Cleanup of document ${docId} should succeed`,
+    );
   }
 
   // Clean up thoughts
@@ -634,7 +727,11 @@ Deno.test("cleanup documents test data", async () => {
         },
       },
     );
-    assertEquals(response.ok, true, `Cleanup of thought ${thoughtId} should succeed`);
+    assertEquals(
+      response.ok,
+      true,
+      `Cleanup of thought ${thoughtId} should succeed`,
+    );
   }
 
   // Clean up test projects (archive them)
@@ -651,6 +748,10 @@ Deno.test("cleanup documents test data", async () => {
         body: JSON.stringify({ archived_at: new Date().toISOString() }),
       },
     );
-    assertEquals(response.ok, true, `Cleanup of project ${projectId} should succeed`);
+    assertEquals(
+      response.ok,
+      true,
+      `Cleanup of project ${projectId} should succeed`,
+    );
   }
 });

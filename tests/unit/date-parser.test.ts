@@ -1,7 +1,4 @@
-import {
-  assertEquals,
-  assertExists,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertExists } from "@std/assert";
 import { extractDueDate } from "../../supabase/functions/terrestrial-brain-mcp/extractors/date-parser.ts";
 
 // Pure, deterministic date-parser unit tests. No DB, no network, no LLM.

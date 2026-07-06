@@ -5,11 +5,7 @@
 // transport error propagates, and the delete list SOFT-ARCHIVES rather than
 // hard-deletes (a hallucinated id must never destroy knowledge).
 
-import {
-  assertEquals,
-  assertRejects,
-  assertStringIncludes,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
   executeReconciliationPlan,
   formatIngestSummary,

@@ -1,11 +1,10 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 import {
   handleGetPendingAIOutput,
   handleMarkAIOutputPickedUp,
 } from "../../supabase/functions/terrestrial-brain-mcp/tools/ai_output.ts";
 import type {
   AiOutputRepository,
-  NewAiOutputValues,
   PendingAiOutputRow,
 } from "../../supabase/functions/terrestrial-brain-mcp/repositories/ai-output-repository.ts";
 import type { RepoResult } from "../../supabase/functions/terrestrial-brain-mcp/repositories/repo-result.ts";

@@ -27,10 +27,7 @@ import {
   getZonedDate,
 } from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
-import {
-  ASSIGNMENT_MARKER_PATTERN,
-  DUE_MARKER_PATTERN,
-} from "./markers.ts";
+import { ASSIGNMENT_MARKER_PATTERN, DUE_MARKER_PATTERN } from "./markers.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { NewTaskValues } from "../repositories/task-repository.ts";
 
@@ -844,7 +841,8 @@ export class TaskExtractor implements Extractor {
    * never null an existing association.
    */
   private async resolveProjects(run: ExtractionRun): Promise<void> {
-    const pipelineProjectIds = run.context.accumulatedReferences[REFERENCE_KEYS.projects] || [];
+    const pipelineProjectIds =
+      run.context.accumulatedReferences[REFERENCE_KEYS.projects] || [];
     const unassignedForAI: AiCandidate[] = [];
 
     for (let index = 0; index < run.checkboxes.length; index++) {

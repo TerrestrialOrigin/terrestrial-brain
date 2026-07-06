@@ -6,11 +6,33 @@
  */
 
 const INVALID_PATH_CHARACTERS = /[<>:"\\\|?*]/;
+// Intentionally matches ASCII control characters: filenames containing them are
+// invalid on real filesystems and must be rejected at this boundary.
+// deno-lint-ignore no-control-regex
 const CONTROL_CHARACTERS = /[\x00-\x1F]/;
 const RESERVED_WINDOWS_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
 ]);
 
 export function validateFilePath(filePath: string): string | null {
@@ -40,12 +62,16 @@ export function validateFilePath(filePath: string): string | null {
     const controlMatch = segment.match(CONTROL_CHARACTERS);
     if (controlMatch) {
       const charCode = controlMatch[0].charCodeAt(0);
-      return `Invalid file path: character U+${charCode.toString(16).padStart(4, "0").toUpperCase()} (control character) is not allowed in file or folder names.`;
+      return `Invalid file path: character U+${
+        charCode.toString(16).padStart(4, "0").toUpperCase()
+      } (control character) is not allowed in file or folder names.`;
     }
 
     const invalidCharMatch = segment.match(INVALID_PATH_CHARACTERS);
     if (invalidCharMatch) {
-      return `Invalid file path: character '${invalidCharMatch[0]}' is not allowed in file or folder names. Please use only letters, numbers, spaces, hyphens, underscores, and periods.`;
+      return `Invalid file path: character '${
+        invalidCharMatch[0]
+      }' is not allowed in file or folder names. Please use only letters, numbers, spaces, hyphens, underscores, and periods.`;
     }
 
     if (segment.endsWith(".") || segment.endsWith(" ")) {

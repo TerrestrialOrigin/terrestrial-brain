@@ -50,16 +50,16 @@ async function postTool(
   });
 
   const text = await res.text();
-  const parsed = text.startsWith("event:")
-    ? parseSse(text)
-    : JSON.parse(text);
+  const parsed = text.startsWith("event:") ? parseSse(text) : JSON.parse(text);
   return {
     text: parsed.result?.content?.[0]?.text || "",
     isError: !!parsed.result?.isError,
   };
 }
 
-function parseSse(text: string): { result?: { content?: { text?: string }[]; isError?: boolean } } {
+function parseSse(
+  text: string,
+): { result?: { content?: { text?: string }[]; isError?: boolean } } {
   const dataLine = text.split("\n").find((line) => line.startsWith("data:"));
   if (!dataLine) throw new Error("No data in SSE response");
   return JSON.parse(dataLine.slice(5).trim());

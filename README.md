@@ -333,6 +333,22 @@ Once connected, your AI agent has access to 31 MCP tools:
 
 ## Local Development
 
+### One command: `deno task dev`
+
+```bash
+deno task dev
+```
+
+This is the single entry point for local work. It starts the local Supabase
+stack (PostgreSQL, API server, and the edge-function runtime that serves the MCP
+function) and runs the Obsidian plugin's esbuild watcher. Press **Ctrl-C** to
+stop: the script tears down only what it started (the plugin watcher it launched
+and the Supabase stack) — it never kills unrelated processes, so it is safe to
+run alongside other projects. It expects `supabase/functions/.env` to exist with
+at least `MCP_ACCESS_KEY` (and `TB_AI_PROVIDER` / `OPENROUTER_API_KEY`).
+
+The two steps it automates can also be run manually:
+
 ### Start the local Supabase emulator
 
 ```bash
@@ -385,6 +401,21 @@ deno task test
 # Opt-in live-LLM smoke tier (requires a real key)
 OPENROUTER_API_KEY=sk-... deno task test:live-llm
 ```
+
+### Continuous integration
+
+Every push and pull request runs the GitHub Actions workflow at
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), which mirrors the local
+validation exactly:
+
+- **Backend job** — installs Deno and the Supabase CLI, starts a minimal
+  Supabase stack with `TB_AI_PROVIDER=fake` (no `OPENROUTER_API_KEY` required),
+  then runs `deno task test`, `deno lint`, and `deno fmt --check`.
+- **Plugin job** — runs `npm ci`, `npm test`, and `npm run build` in
+  `obsidian-plugin/`.
+
+To reproduce the full CI check locally with the stack already up, run
+`scripts/validate-all.sh`.
 
 `test` / `test:unit` / `test:integration` map to
 `TB_AI_PROVIDER=fake deno test --allow-net --allow-env <dir>`, so you can also

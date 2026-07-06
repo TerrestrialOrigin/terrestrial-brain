@@ -1,8 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertThrows,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { requireEnv } from "../../supabase/functions/terrestrial-brain-mcp/env.ts";
 
 // Pure, deterministic unit tests for the fail-fast env helper (fix-plan Step 10,
