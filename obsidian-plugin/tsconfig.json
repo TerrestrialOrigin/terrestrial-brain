@@ -6,9 +6,10 @@
     "module": "ESNext",
     "target": "ES6",
     "moduleResolution": "node",
+    "allowImportingTsExtensions": true,
     "importHelpers": true,
     "isolatedModules": true,
-    "strictNullChecks": true,
+    "strict": true,
     "lib": [
       "ES6",
       "DOM"
