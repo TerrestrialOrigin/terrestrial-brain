@@ -36,15 +36,35 @@ Deno.test("list_thoughts shows full ISO 8601 timestamps", async () => {
 });
 
 Deno.test("search_thoughts shows full ISO 8601 timestamps", async () => {
-  const result = await callTool("search_thoughts", { query: "project", limit: 3, threshold: 0.3 });
+  // Self-contained: capture a thought, then search for its own content so the
+  // deterministic fake embedding reliably returns it (no LLM-availability hedge).
+  const uniqueContent = `ISO timestamp search marker aardvark ${Date.now()}`;
+  await callTool("capture_thought", { content: uniqueContent });
+
+  const result = await callTool("search_thoughts", {
+    query: uniqueContent,
+    limit: 3,
+    threshold: 0.3,
+  });
   assertExists(result);
-  if (!result.includes("No thoughts found")) {
-    assertEquals(
-      ISO_TIMESTAMP_PATTERN.test(result),
-      true,
-      `search_thoughts should include ISO 8601 timestamps with time component. Got: ${result.substring(0, 300)}`,
-    );
-  }
+  assertEquals(result.includes("No thoughts found"), false, `Expected a match. Got: ${result.substring(0, 300)}`);
+  assertEquals(
+    ISO_TIMESTAMP_PATTERN.test(result),
+    true,
+    `search_thoughts should include ISO 8601 timestamps with time component. Got: ${result.substring(0, 300)}`,
+  );
+
+  // Cleanup
+  await fetch(
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}`,
+    {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      },
+    },
+  );
 });
 
 Deno.test("get_thought_by_id shows full ISO 8601 timestamps", async () => {
@@ -114,10 +134,10 @@ Deno.test("list_thoughts with non-matching project_id returns no thoughts", asyn
 Deno.test("list_thoughts with project_id combined with type filter", async () => {
   const result = await callTool("list_thoughts", { project_id: TB_PROJECT_ID, type: "observation", limit: 50 });
   assertExists(result);
-  // Should return at least the seed thought about MCP batching (type=observation, project=TB)
-  if (result !== "No thoughts found.") {
-    assertEquals(result.includes("recent thought"), true);
-  }
+  // Seed guarantees the TB observation thought (MCP batching), so this is a hard
+  // assertion — list_thoughts is not LLM-dependent.
+  assertEquals(result.includes("No thoughts found"), false, `Expected the seeded TB observation thought. Got: ${result.substring(0, 300)}`);
+  assertEquals(result.includes("recent thought"), true);
 });
 
 Deno.test("list_thoughts output includes reliability and author", async () => {
@@ -145,9 +165,7 @@ Deno.test("list_thoughts output includes resolved project names", async () => {
 Deno.test("list_thoughts with author filter returns only matching thoughts", async () => {
   const result = await callTool("list_thoughts", { author: "claude-sonnet-4-6", limit: 50 });
   assertExists(result);
-  if (result === "No thoughts found.") {
-    throw new Error("Expected results for author='claude-sonnet-4-6' but got none");
-  }
+  assertEquals(result.includes("No thoughts found"), false, "Expected results for author='claude-sonnet-4-6' but got none");
   assertEquals(result.includes("Author: claude-sonnet-4-6"), true, `Should contain Author: claude-sonnet-4-6. Got: ${result.substring(0, 500)}`);
   // Should NOT contain thoughts from gpt-4o-mini
   assertEquals(result.includes("Author: gpt-4o-mini"), false, `Should NOT contain Author: gpt-4o-mini. Got: ${result.substring(0, 500)}`);
@@ -156,9 +174,7 @@ Deno.test("list_thoughts with author filter returns only matching thoughts", asy
 Deno.test("list_thoughts with reliability filter returns only matching thoughts", async () => {
   const result = await callTool("list_thoughts", { reliability: "less reliable", limit: 50 });
   assertExists(result);
-  if (result === "No thoughts found.") {
-    throw new Error("Expected results for reliability='less reliable' but got none");
-  }
+  assertEquals(result.includes("No thoughts found"), false, "Expected results for reliability='less reliable' but got none");
   assertEquals(result.includes("Reliability: less reliable"), true, `Should contain 'less reliable'. Got: ${result.substring(0, 500)}`);
   // Should NOT contain 'reliable' thoughts (but careful: "less reliable" contains "reliable")
   // Check that "Reliability: reliable" (without "less" prefix) does not appear
@@ -186,9 +202,7 @@ Deno.test("list_thoughts with combined author and project_id filter", async () =
     limit: 50,
   });
   assertExists(result);
-  if (result === "No thoughts found.") {
-    throw new Error("Expected results for author=claude-sonnet-4-6 + project=TB but got none");
-  }
+  assertEquals(result.includes("No thoughts found"), false, "Expected results for author=claude-sonnet-4-6 + project=TB but got none");
   assertEquals(result.includes("Author: claude-sonnet-4-6"), true, `Should contain correct author`);
   assertEquals(result.includes("Projects: Terrestrial Brain"), true, `Should contain correct project`);
 });
@@ -222,10 +236,11 @@ Deno.test("search_thoughts with author filter narrows results", async () => {
   });
   assertExists(result);
 
-  if (!result.includes("No thoughts found")) {
-    assertEquals(result.includes("Author: test-model-alpha"), true, `Should contain model-alpha. Got: ${result.substring(0, 500)}`);
-    assertEquals(result.includes("Author: test-model-beta"), false, `Should NOT contain model-beta. Got: ${result.substring(0, 500)}`);
-  }
+  // Query shares all its words with the captured thoughts, so the deterministic
+  // fake embedding matches — a hard assertion, not skipped when empty.
+  assertEquals(result.includes("No thoughts found"), false, `Expected the author-filtered match. Got: ${result.substring(0, 500)}`);
+  assertEquals(result.includes("Author: test-model-alpha"), true, `Should contain model-alpha. Got: ${result.substring(0, 500)}`);
+  assertEquals(result.includes("Author: test-model-beta"), false, `Should NOT contain model-beta. Got: ${result.substring(0, 500)}`);
 
   // Cleanup
   for (const suffix of ["— from model A", "— from model B"]) {
@@ -312,17 +327,18 @@ Deno.test("search_thoughts with reliability filter narrows results", async () =>
   });
   assertExists(result);
 
-  if (!result.includes("No thoughts found")) {
-    assertEquals(result.includes("Reliability: less reliable"), true, `Should contain 'less reliable'. Got: ${result.substring(0, 500)}`);
-    // Should not contain the "reliable" one (that's not "less reliable")
-    const lines = result.split("\n").filter(line => line.includes("Reliability:"));
-    for (const line of lines) {
-      assertEquals(
-        line.includes("less reliable"),
-        true,
-        `Every reliability line should say 'less reliable', but got: ${line}`,
-      );
-    }
+  // Both thoughts share the query's words, so the fake embedding matches; the
+  // reliability filter must then leave only the 'less reliable' one.
+  assertEquals(result.includes("No thoughts found"), false, `Expected the reliability-filtered match. Got: ${result.substring(0, 500)}`);
+  assertEquals(result.includes("Reliability: less reliable"), true, `Should contain 'less reliable'. Got: ${result.substring(0, 500)}`);
+  // Should not contain the "reliable" one (that's not "less reliable")
+  const lines = result.split("\n").filter(line => line.includes("Reliability:"));
+  for (const line of lines) {
+    assertEquals(
+      line.includes("less reliable"),
+      true,
+      `Every reliability line should say 'less reliable', but got: ${line}`,
+    );
   }
 });
 
@@ -379,13 +395,11 @@ Deno.test("search_thoughts output includes reliability and author when present",
   const result = await callTool("search_thoughts", { query: uniqueContent, limit: 5, threshold: 0.3 });
   assertExists(result);
 
-  if (result.includes("No thoughts found")) {
-    // Embedding may not match well enough; skip assertion but don't fail
-    console.warn("search_thoughts didn't find the test thought — embedding similarity may be too low");
-  } else {
-    assertEquals(result.includes("Reliability:"), true, `Search output should include Reliability. Got: ${result.substring(0, 500)}`);
-    assertEquals(result.includes("Author:"), true, `Search output should include Author. Got: ${result.substring(0, 500)}`);
-  }
+  // Searching for the just-captured content matches deterministically against
+  // the fake embedding — a hard assertion, never a silent skip.
+  assertEquals(result.includes("No thoughts found"), false, `Expected to find the just-captured thought. Got: ${result.substring(0, 500)}`);
+  assertEquals(result.includes("Reliability:"), true, `Search output should include Reliability. Got: ${result.substring(0, 500)}`);
+  assertEquals(result.includes("Author:"), true, `Search output should include Author. Got: ${result.substring(0, 500)}`);
 
   // Cleanup
   const response = await fetch(
@@ -959,11 +973,11 @@ Deno.test("search_thoughts payload starts with usefulness header and omits legac
   });
   assertExists(result);
 
-  if (result.includes("No thoughts found")) {
-    throw new Error(
-      `Expected to find the just-captured thought "${uniqueContent}" but got "No thoughts found".`,
-    );
-  }
+  assertEquals(
+    result.includes("No thoughts found"),
+    false,
+    `Expected to find the just-captured thought "${uniqueContent}" but got "No thoughts found".`,
+  );
 
   assertEquals(
     result.startsWith("⚠️ REQUIRED BEFORE NEXT USER RESPONSE:"),
@@ -1006,11 +1020,11 @@ Deno.test("search_thoughts payload ends with a trailing usefulness reminder foot
   });
   assertExists(result);
 
-  if (result.includes("No thoughts found")) {
-    throw new Error(
-      `Expected to find the just-captured thought "${uniqueContent}" but got "No thoughts found".`,
-    );
-  }
+  assertEquals(
+    result.includes("No thoughts found"),
+    false,
+    `Expected to find the just-captured thought "${uniqueContent}" but got "No thoughts found".`,
+  );
 
   const reminderPrefix = "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:";
   const firstReminderIndex = result.indexOf(reminderPrefix);

@@ -353,27 +353,46 @@ This watches for changes and rebuilds the plugin. The dev build is configured to
 
 ### Run tests
 
-The backend suite is written for [Deno](https://deno.com/). Deterministic unit
-tests need nothing running; the integration tests require the local Supabase
-stack (`npx supabase start`) and, until the LLM stub lands, an
-`OPENROUTER_API_KEY` in `supabase/functions/.env`.
+The backend suite is written for [Deno](https://deno.com/) and runs in two
+tiers:
+
+- **Default tier (deterministic, no LLM key).** `deno task test` (and
+  `test:unit` / `test:integration`) set `TB_AI_PROVIDER=fake`, which selects a
+  deterministic `FakeAiProvider` for embeddings and completions. The suite runs
+  green with **no `OPENROUTER_API_KEY` set** — no live, paid API, no flake. The
+  test stack sets `TB_AI_PROVIDER=fake` in `supabase/functions/.env` so the
+  served edge function uses the fake too. Deterministic unit tests need nothing
+  running; the integration tests require the local Supabase stack
+  (`npx supabase start`).
+- **Live-LLM tier (opt-in).** `deno task test:live-llm` runs a small smoke suite
+  against the **real** OpenRouter provider. It is never part of `deno task test`
+  and is not a skip: it requires `OPENROUTER_API_KEY` and fails loudly (naming
+  the variable) if the key is absent.
 
 ```bash
 # Plugin unit tests
 cd obsidian-plugin && npm test
 
-# Backend unit tests only (no stack needed)
+# Backend unit tests only (no stack needed, deterministic, no key)
 deno task test:unit
 
-# Backend integration tests (requires local Supabase stack running)
+# Backend integration tests (requires local Supabase stack running; deterministic, no key)
 deno task test:integration
 
-# Everything (unit + integration)
+# Everything in the default tier (unit + integration)
 deno task test
+
+# Opt-in live-LLM smoke tier (requires a real key)
+OPENROUTER_API_KEY=sk-... deno task test:live-llm
 ```
 
-Each task maps to `deno test --allow-net --allow-env <dir>`, so you can also run
-a single file directly, e.g. `deno test --allow-net --allow-env tests/integration/projects.test.ts`.
+`test` / `test:unit` / `test:integration` map to
+`TB_AI_PROVIDER=fake deno test --allow-net --allow-env <dir>`, so you can also
+run a single file directly, e.g.
+`TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/integration/projects.test.ts`.
+To exercise the served edge function against the real LLM locally, set
+`TB_AI_PROVIDER` to anything other than `fake` (or remove it) in
+`supabase/functions/.env`, provide `OPENROUTER_API_KEY`, and restart the stack.
 
 ### Create a new database migration
 
@@ -413,7 +432,8 @@ See [docs/upgrade.md](docs/upgrade.md) for detailed upgrade instructions and saf
 | Secret | Required | Description |
 |---|---|---|
 | `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-brain-key` header; `?key=` is deprecated). Use a strong random string. |
-| `OPENROUTER_API_KEY` | Yes | Used for LLM calls (metadata extraction, embeddings). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
+| `OPENROUTER_API_KEY` | Prod / live tests | Used for real LLM calls (metadata extraction, embeddings). Required in production and for the opt-in `deno task test:live-llm` tier. NOT needed for the default test suite, which runs against the deterministic fake (`TB_AI_PROVIDER=fake`). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
+| `TB_AI_PROVIDER` | No | Set to exactly `fake` to select the deterministic offline `FakeAiProvider` (used by the default test stack so it runs with no OpenRouter key). Any other value — unset, empty, or differently-cased — selects the live OpenRouter provider. Never set to `fake` in production. |
 | `TB_USER_TIMEZONE` | No | IANA timezone name (e.g. `America/New_York`, `Europe/Zurich`) used to resolve relative task due-dates ("today", "tomorrow", weekday names) against your local calendar day instead of UTC. Defaults to `UTC`; an invalid value falls back to `UTC` with a warning. |
 
 ---

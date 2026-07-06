@@ -22,7 +22,7 @@ import {
 import {
   PeopleExtractor,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
-import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
+import { createAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/factory.ts";
 import { SupabaseTaskRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-task-repository.ts";
 import { SupabaseProjectRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-project-repository.ts";
 import { SupabasePersonRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-person-repository.ts";
@@ -42,10 +42,11 @@ const taskRepository = new SupabaseTaskRepository(supabase);
 const projectRepository = new SupabaseProjectRepository(supabase);
 const personRepository = new SupabasePersonRepository(supabase);
 
-// These tests drive the REAL extraction pipeline against the live LLM (via the
-// served function's OPENROUTER_API_KEY), so they inject the real OpenRouter
-// provider — the same network calls as before Step 15, now behind the seam.
-const testAiProvider = new OpenRouterAiProvider();
+// These tests drive the REAL extraction pipeline in-process. The provider is
+// chosen by the same factory the served function uses (Step 22): the default
+// suite runs with TB_AI_PROVIDER=fake, so extraction is deterministic and needs
+// no live key; the opt-in live-LLM tier runs the real provider.
+const testAiProvider = createAiProvider();
 
 // Seed project IDs (from seed.sql)
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
@@ -350,10 +351,10 @@ Deno.test("ProjectExtractor: heading not matching any project returns no match f
 
   const result = await extractor.extract(note, context);
 
-  // LLM might or might not match — but heading detection itself won't match
-  // We mainly verify it doesn't crash and returns a valid result
+  // Neither the heading nor the content names "Test Proj", so no project matches.
+  // Against the deterministic fake this is a hard assertion (empty result).
   assertEquals(result.referenceKey, "projects");
-  assertEquals(Array.isArray(result.ids), true);
+  assertEquals(result.ids, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -1381,16 +1382,10 @@ Deno.test("PeopleExtractor: with known people and content returns valid result",
   };
 
   const result = await extractor.extract(note, context);
-  // LLM may or may not be available — verify structure is valid
+  // The note names Alice (a known person) and not Claude, so extraction resolves
+  // to exactly Alice's id. Deterministic against the fake — a hard assertion.
   assertEquals(result.referenceKey, "people");
-  assertEquals(Array.isArray(result.ids), true);
-  // If LLM is available, only valid known IDs should be returned
-  for (const personId of result.ids) {
-    assertEquals(
-      personId === ALICE_ID || personId === CLAUDE_ID,
-      true,
-    );
-  }
+  assertEquals(result.ids, [ALICE_ID]);
 });
 
 Deno.test("PeopleExtractor: does not return unknown people", async () => {
