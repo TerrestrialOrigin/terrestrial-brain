@@ -27,4 +27,20 @@ export interface NoteSnapshotRepository {
 
   /** Upsert a snapshot on conflict of `reference_id`; returns the row id. */
   upsert(values: NoteSnapshotUpsert): Promise<RepoResult<{ id: string }>>;
+
+  /**
+   * The snapshot id for a note reference, or `null` when none exists. Used by
+   * the `forget_note` erasure pathway (Step 25) to resolve the snapshot before
+   * deleting its thoughts. A missing note is `data: null` (not an error), so
+   * erasing an unsynced note stays an idempotent no-op.
+   */
+  findIdByReference(
+    referenceId: string,
+  ): Promise<RepoResult<{ id: string } | null>>;
+
+  /**
+   * HARD-delete the snapshot for a note reference (GDPR erasure, Step 25).
+   * Idempotent: deleting a reference with no row is a success.
+   */
+  deleteByReference(referenceId: string): Promise<RepoResult<void>>;
 }

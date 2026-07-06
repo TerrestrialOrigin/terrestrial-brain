@@ -50,6 +50,17 @@ describe("HttpTerrestrialBrainClient — header auth", () => {
     expect((init.headers as Record<string, string>)["x-brain-key"]).toBe("secret123");
     expect(init.body).toBe(JSON.stringify({ content: "note content", title: "Test", note_id: "folder/Test.md" }));
   });
+
+  it("forgetNote posts the note_id to /forget-note with the key header", async () => {
+    const fetchMock = mockFetch({ ok: true, json: async () => ({ success: true, message: "Forgot note" }) });
+    const message = await client("secret123").forgetNote("folder/Test.md");
+
+    expect(message).toBe("Forgot note");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${ENDPOINT}/forget-note`);
+    expect((init.headers as Record<string, string>)["x-brain-key"]).toBe("secret123");
+    expect(init.body).toBe(JSON.stringify({ note_id: "folder/Test.md" }));
+  });
 });
 
 describe("HttpTerrestrialBrainClient — envelope handling", () => {

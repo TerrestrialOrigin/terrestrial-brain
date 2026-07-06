@@ -23,6 +23,11 @@ import { register as registerQueries } from "./tools/queries.ts";
 import { register as registerPeople } from "./tools/people.ts";
 import { register as registerDocuments } from "./tools/documents.ts";
 import {
+  forgetNote,
+  formatForgetOutcome,
+  register as registerForgetNote,
+} from "./tools/forget_note.ts";
+import {
   createFunctionCallLogger,
   extractIpAddress,
   FunctionCallLogger,
@@ -100,6 +105,7 @@ function createMcpServer(
     document: DocumentRepository;
     aiOutput: AiOutputRepository;
     query: QueryRepository;
+    noteSnapshot: NoteSnapshotRepository;
   },
 ): McpServer {
   const server = new McpServer({
@@ -146,6 +152,12 @@ function createMcpServer(
     repos.project,
     repos.person,
     repos.document,
+    repos.thought,
+  );
+  registerForgetNote(
+    server,
+    callLogger,
+    repos.noteSnapshot,
     repos.thought,
   );
 
@@ -268,6 +280,31 @@ const HTTP_ROUTES: HttpRoute[] = [
         };
       }
       return { ok: true, message: result.message, recordCount: 1 };
+    },
+  },
+  {
+    suffix: "/forget-note",
+    logName: "forget-note",
+    parseBody: true,
+    handle: async ({ noteSnapshotRepository, thoughtRepository, body }) => {
+      const noteId = body.note_id;
+      if (!noteId || typeof noteId !== "string" || noteId.trim().length === 0) {
+        return { ok: false, error: "note_id is required", status: 400 };
+      }
+      const outcome = await forgetNote(
+        noteSnapshotRepository,
+        thoughtRepository,
+        noteId,
+      );
+      if (!outcome.ok) {
+        return { ok: false, error: outcome.error, status: 500 };
+      }
+      return {
+        ok: true,
+        message: formatForgetOutcome(noteId, outcome),
+        recordCount: outcome.thoughtsDeleted +
+          (outcome.snapshotExisted ? 1 : 0),
+      };
     },
   },
   {
@@ -440,6 +477,7 @@ app.all("*", async (c) => {
       document: documentRepository,
       aiOutput: aiOutputRepository,
       query: queryRepository,
+      noteSnapshot: noteSnapshotRepository,
     });
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);

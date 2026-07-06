@@ -97,6 +97,7 @@ export class FakePrompt implements ConflictPrompt {
 export class FakeApiClient implements TerrestrialBrainApiClient {
   callLog: { endpoint: string; body?: Record<string, unknown> }[] = [];
   ingestImpl?: (content: string, title: string, noteId: string) => Promise<string>;
+  forgetImpl?: (noteId: string) => Promise<string>;
   metadataImpl?: () => Promise<AIOutputMetadata[]>;
   contentImpl?: (ids: string[]) => Promise<AIOutputContent[]>;
   callImpl?: (endpoint: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -109,6 +110,11 @@ export class FakeApiClient implements TerrestrialBrainApiClient {
   ingestNote(content: string, title: string, noteId: string): Promise<string> {
     if (!this.ingestImpl) throw new Error("ingestImpl not set");
     return this.ingestImpl(content, title, noteId);
+  }
+  forgetNote(noteId: string): Promise<string> {
+    this.callLog.push({ endpoint: "forget-note", body: { note_id: noteId } });
+    if (!this.forgetImpl) throw new Error("forgetImpl not set");
+    return this.forgetImpl(noteId);
   }
   fetchPendingMetadata(): Promise<AIOutputMetadata[]> {
     if (!this.metadataImpl) throw new Error("metadataImpl not set");

@@ -197,4 +197,15 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
     });
     return { data, error: toRepoError(error) };
   }
+
+  async deleteByNoteSnapshot(
+    snapshotId: string,
+  ): Promise<RepoResult<number>> {
+    const { data, error } = await this.supabase
+      .from("thoughts")
+      .delete()
+      .eq("note_snapshot_id", snapshotId)
+      .select("id");
+    return { data: data?.length ?? 0, error: toRepoError(error) };
+  }
 }
