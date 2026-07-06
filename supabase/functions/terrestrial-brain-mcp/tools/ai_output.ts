@@ -4,6 +4,9 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { validateFilePath } from "../validators.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { resolveNames } from "../repositories/name-resolution.ts";
+import type { AiOutputRepository } from "../repositories/ai-output-repository.ts";
+import type { TaskRepository } from "../repositories/task-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Task input type for create_tasks_with_output
@@ -137,52 +140,36 @@ export function generateTaskMarkdown(
 // Standalone handler functions — used by HTTP route handlers in index.ts
 // ---------------------------------------------------------------------------
 
-export async function handleGetPendingAIOutput(supabase: SupabaseClient) {
-  const { data, error } = await supabase
-    .from("ai_output")
-    .select("id, title, content, file_path, created_at")
-    .eq("picked_up", false)
-    .eq("rejected", false)
-    .order("created_at", { ascending: true });
-
+export async function handleGetPendingAIOutput(
+  aiOutputRepository: AiOutputRepository,
+) {
+  const { data, error } = await aiOutputRepository.listPending();
   if (error) return { error: error.message };
   return { data: data || [] };
 }
 
 export async function handleGetPendingAIOutputMetadata(
-  supabase: SupabaseClient,
+  aiOutputRepository: AiOutputRepository,
 ) {
-  const { data, error } = await supabase
-    .rpc("get_pending_ai_output_metadata");
-
+  const { data, error } = await aiOutputRepository.listPendingMetadata();
   if (error) return { error: error.message };
   return { data: data || [] };
 }
 
 export async function handleFetchAIOutputContent(
-  supabase: SupabaseClient,
+  aiOutputRepository: AiOutputRepository,
   ids: string[],
 ) {
-  const { data, error } = await supabase
-    .from("ai_output")
-    .select("id, content")
-    .in("id", ids)
-    .eq("picked_up", false)
-    .eq("rejected", false);
-
+  const { data, error } = await aiOutputRepository.findContentByIds(ids);
   if (error) return { error: error.message };
   return { data: data || [] };
 }
 
 export async function handleMarkAIOutputPickedUp(
-  supabase: SupabaseClient,
+  aiOutputRepository: AiOutputRepository,
   ids: string[],
-) {
-  const { error } = await supabase
-    .from("ai_output")
-    .update({ picked_up: true, picked_up_at: new Date().toISOString() })
-    .in("id", ids);
-
+): Promise<{ error: string } | { message: string }> {
+  const { error } = await aiOutputRepository.markPickedUp(ids);
   if (error) return { error: error.message };
   return {
     message: `Marked ${ids.length} output${
@@ -192,14 +179,10 @@ export async function handleMarkAIOutputPickedUp(
 }
 
 export async function handleRejectAIOutput(
-  supabase: SupabaseClient,
+  aiOutputRepository: AiOutputRepository,
   ids: string[],
-) {
-  const { error } = await supabase
-    .from("ai_output")
-    .update({ rejected: true, rejected_at: new Date().toISOString() })
-    .in("id", ids);
-
+): Promise<{ error: string } | { message: string }> {
+  const { error } = await aiOutputRepository.reject(ids);
   if (error) return { error: error.message };
   return {
     message: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.`,
@@ -214,6 +197,8 @@ export function register(
   server: McpServer,
   supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  aiOutputRepository: AiOutputRepository,
+  taskRepository: TaskRepository,
 ) {
   server.registerTool(
     "create_ai_output",
@@ -246,19 +231,17 @@ export function register(
           return errorResult(pathError);
         }
 
-        const { data, error } = await supabase
-          .from("ai_output")
-          .insert({
-            title,
-            content,
-            file_path,
-            source_context: source_context || null,
-          })
-          .select("id")
-          .single();
+        const { data, error } = await aiOutputRepository.insert({
+          title,
+          content,
+          file_path,
+          source_context: source_context || null,
+        });
 
-        if (error) {
-          return errorResult(`Failed to create AI output: ${error.message}`);
+        if (error || !data) {
+          return errorResult(
+            `Failed to create AI output: ${error?.message || "unknown"}`,
+          );
         }
 
         return textResult(
@@ -348,6 +331,8 @@ export function register(
         if (parentError) {
           return errorResult(parentError);
         }
+        // Fetch project + person names via the shared batched resolver (raw-id
+        // fallback on error, never a silently-empty map — finding C9).
         const projectIds = [
           ...new Set(
             typedTasks.filter((task) => task.project_id).map((task) =>
@@ -355,31 +340,12 @@ export function register(
             ),
           ),
         ];
-        let projectNameMap: Record<string, string> = {};
-        if (projectIds.length > 0) {
-          const { data: projects, error: projectsError } = await supabase
-            .from("projects")
-            .select("id, name")
-            .in("id", projectIds);
-          // Log + raw-id fallback on error, never a silently-empty map (finding C9).
-          if (projectsError) {
-            console.error(
-              `create_tasks_with_output project-name lookup failed: ${projectsError.message}`,
-            );
-            projectNameMap = Object.fromEntries(
-              projectIds.map((pid) => [pid, pid]),
-            );
-          } else {
-            projectNameMap = Object.fromEntries(
-              (projects || []).map((project: { id: string; name: string }) => [
-                project.id,
-                project.name,
-              ]),
-            );
-          }
-        }
+        const projectNameMap: Record<string, string> = projectIds.length > 0
+          ? Object.fromEntries(
+            await resolveNames(supabase, "projects", projectIds),
+          )
+          : {};
 
-        // Fetch person names for markdown assignee labels
         const personIds = [
           ...new Set(
             typedTasks.filter((task) => task.assigned_to).map((task) =>
@@ -387,28 +353,11 @@ export function register(
             ),
           ),
         ];
-        let personNameMap: Record<string, string> = {};
-        if (personIds.length > 0) {
-          const { data: people, error: peopleError } = await supabase
-            .from("people")
-            .select("id, name")
-            .in("id", personIds);
-          if (peopleError) {
-            console.error(
-              `create_tasks_with_output assignee lookup failed: ${peopleError.message}`,
-            );
-            personNameMap = Object.fromEntries(
-              personIds.map((pid) => [pid, pid]),
-            );
-          } else {
-            personNameMap = Object.fromEntries(
-              (people || []).map((person: { id: string; name: string }) => [
-                person.id,
-                person.name,
-              ]),
-            );
-          }
-        }
+        const personNameMap: Record<string, string> = personIds.length > 0
+          ? Object.fromEntries(
+            await resolveNames(supabase, "people", personIds),
+          )
+          : {};
 
         // Insert task rows sequentially (parent_index → parent_id resolution)
         const taskIds: string[] = [];
@@ -423,7 +372,7 @@ export function register(
             parentId = dbIdByIndex.get(task.parent_index) || null;
           }
 
-          const insertData: Record<string, unknown> = {
+          const insertValues = {
             content: task.content,
             status,
             reference_id: file_path,
@@ -431,27 +380,21 @@ export function register(
             parent_id: parentId,
             due_by: task.due_by || null,
             assigned_to: task.assigned_to || null,
+            ...(status === "done"
+              ? { archived_at: new Date().toISOString() }
+              : {}),
           };
 
-          if (status === "done") {
-            insertData.archived_at = new Date().toISOString();
-          }
+          const { data, error } = await taskRepository.insert(insertValues);
 
-          const { data, error } = await supabase
-            .from("tasks")
-            .insert(insertData)
-            .select("id")
-            .single();
-
-          if (error) {
+          if (error || !data) {
             // Roll back the tasks already inserted in this call so a mid-loop
             // failure never leaves orphaned rows (all-or-nothing, finding C4).
             let rollbackNote = "";
             if (taskIds.length > 0) {
-              const { error: rollbackError } = await supabase
-                .from("tasks")
-                .delete()
-                .in("id", taskIds);
+              const { error: rollbackError } = await taskRepository.deleteByIds(
+                taskIds,
+              );
               rollbackNote = rollbackError
                 ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${
                   taskIds.join(", ")
@@ -459,7 +402,9 @@ export function register(
                 : ` Rolled back ${taskIds.length} already-inserted task(s).`;
             }
             return errorResult(
-              `Failed to create task "${task.content}": ${error.message}.${rollbackNote}`,
+              `Failed to create task "${task.content}": ${
+                error?.message || "unknown"
+              }.${rollbackNote}`,
             );
           }
 
@@ -476,24 +421,24 @@ export function register(
         );
 
         // Create ai_output row
-        const { data: outputData, error: outputError } = await supabase
-          .from("ai_output")
-          .insert({
-            title,
-            content: markdown,
-            file_path,
-            source_context: source_context || null,
-          })
-          .select("id")
-          .single();
+        const { data: outputData, error: outputError } =
+          await aiOutputRepository
+            .insert({
+              title,
+              content: markdown,
+              file_path,
+              source_context: source_context || null,
+            });
 
-        if (outputError) {
+        if (outputError || !outputData) {
           // Roll back orphaned task rows
           if (taskIds.length > 0) {
-            await supabase.from("tasks").delete().in("id", taskIds);
+            await taskRepository.deleteByIds(taskIds);
           }
           return errorResult(
-            `Failed to create AI output (tasks rolled back): ${outputError.message}`,
+            `Failed to create AI output (tasks rolled back): ${
+              outputError?.message || "unknown"
+            }`,
           );
         }
 

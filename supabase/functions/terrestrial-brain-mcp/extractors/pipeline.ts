@@ -9,6 +9,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedNote } from "../parser.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+import type { ProjectRepository } from "../repositories/project-repository.ts";
+import type { PersonRepository } from "../repositories/person-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,6 +22,10 @@ export interface ExtractionContext {
   aiProvider: AiProvider;
   /** Injected tasks-table seam — TaskExtractor writes through this, not supabase. */
   taskRepository: TaskRepository;
+  /** Injected projects-table seam — ProjectExtractor writes through this. */
+  projectRepository: ProjectRepository;
+  /** Injected people-table seam — PeopleExtractor writes through this. */
+  personRepository: PersonRepository;
   knownProjects: { id: string; name: string }[];
   knownTasks: { id: string; content: string; reference_id: string | null }[];
   knownPeople: { id: string; name: string }[];
@@ -65,11 +71,13 @@ export async function runExtractionPipeline(
   supabase: SupabaseClient,
   aiProvider: AiProvider,
   taskRepository: TaskRepository,
+  projectRepository: ProjectRepository,
+  personRepository: PersonRepository,
 ): Promise<Record<string, string[]>> {
-  // Initialize context — fetch known projects and people from DB
+  // Initialize context — fetch known projects and people through the repos
   const [{ data: activeProjects }, { data: activePeople }] = await Promise.all([
-    supabase.from("projects").select("id, name").is("archived_at", null),
-    supabase.from("people").select("id, name").is("archived_at", null),
+    projectRepository.listActive(),
+    personRepository.listActive(),
   ]);
 
   // Fetch known tasks for this note's reference_id (for reconciliation)
@@ -79,10 +87,9 @@ export async function runExtractionPipeline(
     reference_id: string | null;
   }[] = [];
   if (note.referenceId) {
-    const { data: existingTasks } = await supabase
-      .from("tasks")
-      .select("id, content, reference_id")
-      .eq("reference_id", note.referenceId);
+    const { data: existingTasks } = await taskRepository.findByReference(
+      note.referenceId,
+    );
     knownTasks = (existingTasks || []).map(
       (task: { id: string; content: string; reference_id: string | null }) => ({
         id: task.id,
@@ -96,6 +103,8 @@ export async function runExtractionPipeline(
     supabase,
     aiProvider,
     taskRepository,
+    projectRepository,
+    personRepository,
     knownProjects: (activeProjects || []).map(
       (project: { id: string; name: string }) => ({
         id: project.id,

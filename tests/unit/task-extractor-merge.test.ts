@@ -13,6 +13,33 @@ import type {
   NewTaskValues,
   TaskRepository,
 } from "../../supabase/functions/terrestrial-brain-mcp/repositories/task-repository.ts";
+import type { ProjectRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/project-repository.ts";
+import type { PersonRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/person-repository.ts";
+
+// TaskExtractor never touches the project/person repositories — these stubs only
+// satisfy the ExtractionContext shape (fix-plan Step 17).
+const STUB_PROJECT_REPOSITORY: ProjectRepository = {
+  insert: () => Promise.reject(new Error("unused in these tests")),
+  list: () => Promise.reject(new Error("unused")),
+  findById: () => Promise.reject(new Error("unused")),
+  findName: () => Promise.reject(new Error("unused")),
+  listChildrenBasic: () => Promise.reject(new Error("unused")),
+  listChildParentIds: () => Promise.reject(new Error("unused")),
+  listActiveChildIds: () => Promise.reject(new Error("unused")),
+  update: () => Promise.reject(new Error("unused")),
+  archiveManyActive: () => Promise.reject(new Error("unused")),
+  listActive: () => Promise.reject(new Error("unused")),
+};
+
+const STUB_PERSON_REPOSITORY: PersonRepository = {
+  insert: () => Promise.reject(new Error("unused in these tests")),
+  list: () => Promise.reject(new Error("unused")),
+  findById: () => Promise.reject(new Error("unused")),
+  findName: () => Promise.reject(new Error("unused")),
+  update: () => Promise.reject(new Error("unused")),
+  archive: () => Promise.reject(new Error("unused")),
+  listActive: () => Promise.reject(new Error("unused")),
+};
 
 // Unit tests for TaskExtractor re-ingest MERGE SEMANTICS (finding C6, Step 8).
 // Drives the REAL TaskExtractor.extract against a fake Supabase context and a
@@ -127,6 +154,24 @@ function makeFakeTaskRepository(
     findByIds() {
       return Promise.resolve({ data: [], error: null });
     },
+    countOpenByProject() {
+      return Promise.resolve({ data: 0, error: null });
+    },
+    countOpenByAssignee() {
+      return Promise.resolve({ data: 0, error: null });
+    },
+    findOpenIdsByProjects() {
+      return Promise.resolve({ data: [], error: null });
+    },
+    archiveMany() {
+      return Promise.resolve({ data: null, error: null });
+    },
+    deleteByIds() {
+      return Promise.resolve({ data: null, error: null });
+    },
+    findByReference() {
+      return Promise.resolve({ data: [], error: null });
+    },
   };
 
   return { taskRepository, writes };
@@ -210,6 +255,8 @@ function baseContext(
   return {
     supabase: DUMMY_SUPABASE,
     taskRepository,
+    projectRepository: STUB_PROJECT_REPOSITORY,
+    personRepository: STUB_PERSON_REPOSITORY,
     // The extractor reaches the LLM through this seam (Step 15). The real
     // OpenRouter provider calls globalThis.fetch, which these tests stub — so an
     // HTTP-500 stub surfaces as a provider error the extractor catches (preserve

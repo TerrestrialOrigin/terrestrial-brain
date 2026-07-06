@@ -21,10 +21,11 @@ export interface RecordedQuery {
   table?: string;
   rpcName?: string;
   rpcParams?: Record<string, unknown>;
-  op?: "select" | "insert" | "update";
+  op?: "select" | "insert" | "update" | "upsert" | "delete";
   columns?: string;
   selectOptions?: { count?: string; head?: boolean };
   payload?: Record<string, unknown>;
+  onConflict?: string;
   filters: RecordedFilter[];
   single: boolean;
   order?: { column: string; ascending?: boolean };
@@ -38,6 +39,11 @@ interface FakeBuilder {
   ): FakeBuilder;
   insert(payload: Record<string, unknown>): FakeBuilder;
   update(payload: Record<string, unknown>): FakeBuilder;
+  upsert(
+    payload: Record<string, unknown>,
+    options?: { onConflict?: string },
+  ): FakeBuilder;
+  delete(): FakeBuilder;
   order(column: string, options?: { ascending?: boolean }): FakeBuilder;
   limit(count: number): FakeBuilder;
   eq(column: string, value: unknown): FakeBuilder;
@@ -46,6 +52,7 @@ interface FakeBuilder {
   lt(column: string, value: unknown): FakeBuilder;
   gte(column: string, value: unknown): FakeBuilder;
   in(column: string, value: unknown): FakeBuilder;
+  ilike(column: string, value: unknown): FakeBuilder;
   contains(column: string, value: unknown): FakeBuilder;
   returns(): FakeBuilder;
   single(): FakeBuilder;
@@ -84,6 +91,16 @@ export function makeFakeClient(
       recorded.payload = payload;
       return builder;
     },
+    upsert(payload, options) {
+      recorded.op = "upsert";
+      recorded.payload = payload;
+      if (options?.onConflict) recorded.onConflict = options.onConflict;
+      return builder;
+    },
+    delete() {
+      recorded.op = "delete";
+      return builder;
+    },
     order(column, options) {
       recorded.order = { column, ascending: options?.ascending };
       return builder;
@@ -98,6 +115,7 @@ export function makeFakeClient(
     lt: (column, value) => pushFilter("lt", column, value),
     gte: (column, value) => pushFilter("gte", column, value),
     in: (column, value) => pushFilter("in", column, value),
+    ilike: (column, value) => pushFilter("ilike", column, value),
     contains: (column, value) => pushFilter("contains", column, value),
     returns() {
       return builder;

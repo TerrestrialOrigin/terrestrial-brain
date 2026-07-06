@@ -69,7 +69,8 @@ export async function extractProjectNameFromPath(
   try {
     return await aiProvider.completeJson(
       {
-        systemPrompt: `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
+        systemPrompt:
+          `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
 
 RULES:
 - A path segment or filename like "Rabbit Hutch Project" IS a project named "Rabbit Hutch"
@@ -153,7 +154,9 @@ function buildNoteSummary(note: ParsedNote): string {
         heading.lineEnd,
       );
       const sectionText = sectionLines.join("\n").substring(0, 200);
-      parts.push(`  ${"#".repeat(heading.level)} ${heading.text}: ${sectionText}`);
+      parts.push(
+        `  ${"#".repeat(heading.level)} ${heading.text}: ${sectionText}`,
+      );
     }
   } else {
     // No headings — just use first 400 chars of content
@@ -185,7 +188,8 @@ async function detectProjectsByContent(
   try {
     return await aiProvider.completeJson(
       {
-        systemPrompt: `You identify which projects a note is about. You are given a note summary and a list of known projects. Return ONLY project IDs from the list that the note clearly references or relates to. Do not invent new projects. If no projects match, return an empty array.
+        systemPrompt:
+          `You identify which projects a note is about. You are given a note summary and a list of known projects. Return ONLY project IDs from the list that the note clearly references or relates to. Do not invent new projects. If no projects match, return an empty array.
 
 Return JSON: {"project_ids": ["uuid1", "uuid2"]}
 
@@ -204,7 +208,9 @@ ${projectList}`,
     );
   } catch (error) {
     console.error(
-      `ProjectExtractor LLM content matching error: ${(error as Error).message}`,
+      `ProjectExtractor LLM content matching error: ${
+        (error as Error).message
+      }`,
     );
     return [];
   }
@@ -234,13 +240,19 @@ export class ProjectExtractor implements Extractor {
     }
 
     // Signal 1b: LLM path analysis (only if Signal 1a didn't match and path contains "project")
-    if (!conventionalPathMatched && note.referenceId && pathContainsProjectKeyword(note.referenceId)) {
+    if (
+      !conventionalPathMatched && note.referenceId &&
+      pathContainsProjectKeyword(note.referenceId)
+    ) {
       const pathResult = await extractProjectNameFromPath(
         note.referenceId,
         context.aiProvider,
       );
       if (pathResult.isProject && pathResult.projectName) {
-        const projectId = await this.matchOrCreateProject(pathResult.projectName, context);
+        const projectId = await this.matchOrCreateProject(
+          pathResult.projectName,
+          context,
+        );
         if (projectId) matchedIds.push(projectId);
       }
     }
@@ -283,12 +295,10 @@ export class ProjectExtractor implements Extractor {
       return existingProject.id;
     }
 
-    // Auto-create project
-    const { data: newProject, error } = await context.supabase
-      .from("projects")
-      .insert({ name: projectName })
-      .select("id, name")
-      .single();
+    // Auto-create project through the injected repository seam.
+    const { data: newProject, error } = await context.projectRepository.insert({
+      name: projectName,
+    });
 
     if (!error && newProject) {
       context.newlyCreatedProjects.push({

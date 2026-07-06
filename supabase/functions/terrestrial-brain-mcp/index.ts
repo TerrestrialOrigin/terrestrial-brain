@@ -34,8 +34,20 @@ import type { AiProvider } from "./ai/ai-provider.ts";
 import { createAiProvider } from "./ai/factory.ts";
 import type { ThoughtRepository } from "./repositories/thought-repository.ts";
 import type { TaskRepository } from "./repositories/task-repository.ts";
+import type { ProjectRepository } from "./repositories/project-repository.ts";
+import type { PersonRepository } from "./repositories/person-repository.ts";
+import type { DocumentRepository } from "./repositories/document-repository.ts";
+import type { AiOutputRepository } from "./repositories/ai-output-repository.ts";
+import type { NoteSnapshotRepository } from "./repositories/note-snapshot-repository.ts";
+import type { QueryRepository } from "./repositories/query-repository.ts";
 import { SupabaseThoughtRepository } from "./repositories/supabase-thought-repository.ts";
 import { SupabaseTaskRepository } from "./repositories/supabase-task-repository.ts";
+import { SupabaseProjectRepository } from "./repositories/supabase-project-repository.ts";
+import { SupabasePersonRepository } from "./repositories/supabase-person-repository.ts";
+import { SupabaseDocumentRepository } from "./repositories/supabase-document-repository.ts";
+import { SupabaseAiOutputRepository } from "./repositories/supabase-ai-output-repository.ts";
+import { SupabaseNoteSnapshotRepository } from "./repositories/supabase-note-snapshot-repository.ts";
+import { SupabaseQueryRepository } from "./repositories/supabase-query-repository.ts";
 
 // Composition-root secrets: validated at cold start so a missing var fails the
 // boot loudly (named in the error) rather than surfacing later as broken auth or
@@ -50,6 +62,14 @@ const logger = createFunctionCallLogger(supabase);
 // Stateless wrappers over the shared client — constructed once and injected.
 const thoughtRepository = new SupabaseThoughtRepository(supabase);
 const taskRepository = new SupabaseTaskRepository(supabase);
+// Remaining entity + composite-read seams (fix-plan Step 17). Stateless wrappers
+// over the shared client — constructed once and injected.
+const projectRepository = new SupabaseProjectRepository(supabase);
+const personRepository = new SupabasePersonRepository(supabase);
+const documentRepository = new SupabaseDocumentRepository(supabase);
+const aiOutputRepository = new SupabaseAiOutputRepository(supabase);
+const noteSnapshotRepository = new SupabaseNoteSnapshotRepository(supabase);
+const queryRepository = new SupabaseQueryRepository(supabase);
 // The single AiProvider seam over OpenRouter (fix-plan Step 15). Constructed once
 // here and injected into consumers; the provider is stateless, so one instance is
 // safe to share across requests. Step 22 will branch this factory on TB_AI_PROVIDER.
@@ -67,31 +87,62 @@ function createMcpServer(
   supabaseClient: SupabaseClient,
   callLogger: FunctionCallLogger,
   provider: AiProvider,
-  thoughtRepo: ThoughtRepository,
-  taskRepo: TaskRepository,
+  repos: {
+    thought: ThoughtRepository;
+    task: TaskRepository;
+    project: ProjectRepository;
+    person: PersonRepository;
+    document: DocumentRepository;
+    aiOutput: AiOutputRepository;
+    query: QueryRepository;
+  },
 ): McpServer {
   const server = new McpServer({
     name: "open-brain",
     version: "1.0.0",
   });
 
-  // Only thoughts + documents run the extraction pipeline / embeddings, so only
-  // they receive the AiProvider; thoughts + tasks + documents receive the
-  // repository seams (documents forwards taskRepo to the pipeline only).
+  // Each tool module receives exactly the seams it uses; only thoughts +
+  // documents run the extraction pipeline / embeddings and so receive the
+  // AiProvider plus the project/person repositories the pipeline seeds through.
   registerThoughts(
     server,
     supabaseClient,
     callLogger,
     provider,
-    thoughtRepo,
-    taskRepo,
+    repos.thought,
+    repos.task,
+    repos.project,
+    repos.person,
   );
-  registerProjects(server, supabaseClient, callLogger);
-  registerTasks(server, supabaseClient, callLogger, taskRepo);
-  registerAIOutput(server, supabaseClient, callLogger);
-  registerQueries(server, supabaseClient, callLogger);
-  registerPeople(server, supabaseClient, callLogger);
-  registerDocuments(server, supabaseClient, callLogger, provider, taskRepo);
+  registerProjects(
+    server,
+    supabaseClient,
+    callLogger,
+    repos.project,
+    repos.task,
+  );
+  registerTasks(server, supabaseClient, callLogger, repos.task);
+  registerAIOutput(
+    server,
+    supabaseClient,
+    callLogger,
+    repos.aiOutput,
+    repos.task,
+  );
+  registerQueries(server, supabaseClient, callLogger, repos.query);
+  registerPeople(server, supabaseClient, callLogger, repos.person, repos.task);
+  registerDocuments(
+    server,
+    supabaseClient,
+    callLogger,
+    provider,
+    repos.task,
+    repos.project,
+    repos.person,
+    repos.document,
+    repos.thought,
+  );
 
   return server;
 }
@@ -134,6 +185,10 @@ interface HttpRouteContext {
   aiProvider: AiProvider;
   thoughtRepository: ThoughtRepository;
   taskRepository: TaskRepository;
+  projectRepository: ProjectRepository;
+  personRepository: PersonRepository;
+  noteSnapshotRepository: NoteSnapshotRepository;
+  aiOutputRepository: AiOutputRepository;
   body: Record<string, unknown>;
 }
 
@@ -169,7 +224,16 @@ const HTTP_ROUTES: HttpRoute[] = [
     logName: "ingest-note",
     parseBody: true,
     handle: async (
-      { supabase, aiProvider, thoughtRepository, taskRepository, body },
+      {
+        supabase,
+        aiProvider,
+        thoughtRepository,
+        taskRepository,
+        projectRepository,
+        personRepository,
+        noteSnapshotRepository,
+        body,
+      },
     ) => {
       const content = body.content;
       if (
@@ -182,6 +246,9 @@ const HTTP_ROUTES: HttpRoute[] = [
         aiProvider,
         thoughtRepository,
         taskRepository,
+        projectRepository,
+        personRepository,
+        noteSnapshotRepository,
         {
           content,
           title: body.title as string | undefined,
@@ -202,27 +269,27 @@ const HTTP_ROUTES: HttpRoute[] = [
     suffix: "/get-pending-ai-output",
     logName: "get-pending-ai-output",
     parseBody: false,
-    handle: async ({ supabase }) =>
-      dataOutcome(await handleGetPendingAIOutput(supabase)),
+    handle: async ({ aiOutputRepository }) =>
+      dataOutcome(await handleGetPendingAIOutput(aiOutputRepository)),
   },
   {
     suffix: "/get-pending-ai-output-metadata",
     logName: "get-pending-ai-output-metadata",
     parseBody: false,
-    handle: async ({ supabase }) =>
-      dataOutcome(await handleGetPendingAIOutputMetadata(supabase)),
+    handle: async ({ aiOutputRepository }) =>
+      dataOutcome(await handleGetPendingAIOutputMetadata(aiOutputRepository)),
   },
   {
     suffix: "/fetch-ai-output-content",
     logName: "fetch-ai-output-content",
     parseBody: true,
-    handle: async ({ supabase, body }) => {
+    handle: async ({ aiOutputRepository, body }) => {
       const ids = body.ids;
       if (!ids || !Array.isArray(ids)) {
         return { ok: false, error: IDS_REQUIRED, status: 400 };
       }
       return dataOutcome(
-        await handleFetchAIOutputContent(supabase, ids as string[]),
+        await handleFetchAIOutputContent(aiOutputRepository, ids as string[]),
       );
     },
   },
@@ -230,13 +297,13 @@ const HTTP_ROUTES: HttpRoute[] = [
     suffix: "/mark-ai-output-picked-up",
     logName: "mark-ai-output-picked-up",
     parseBody: true,
-    handle: async ({ supabase, body }) => {
+    handle: async ({ aiOutputRepository, body }) => {
       const ids = body.ids;
       if (!ids || !Array.isArray(ids)) {
         return { ok: false, error: IDS_REQUIRED, status: 400 };
       }
       const result = await handleMarkAIOutputPickedUp(
-        supabase,
+        aiOutputRepository,
         ids as string[],
       );
       if ("error" in result) {
@@ -249,12 +316,15 @@ const HTTP_ROUTES: HttpRoute[] = [
     suffix: "/reject-ai-output",
     logName: "reject-ai-output",
     parseBody: true,
-    handle: async ({ supabase, body }) => {
+    handle: async ({ aiOutputRepository, body }) => {
       const ids = body.ids;
       if (!ids || !Array.isArray(ids)) {
         return { ok: false, error: IDS_REQUIRED, status: 400 };
       }
-      const result = await handleRejectAIOutput(supabase, ids as string[]);
+      const result = await handleRejectAIOutput(
+        aiOutputRepository,
+        ids as string[],
+      );
       if ("error" in result) {
         return { ok: false, error: result.error, status: 500 };
       }
@@ -314,6 +384,10 @@ app.all("*", async (c) => {
           aiProvider,
           thoughtRepository,
           taskRepository,
+          projectRepository,
+          personRepository,
+          noteSnapshotRepository,
+          aiOutputRepository,
           body,
         });
 
@@ -353,13 +427,15 @@ app.all("*", async (c) => {
   // context so tool handlers read THIS request's IP (finding C8), and a fresh
   // server + transport are built per request per the SDK's stateless pattern.
   return runWithRequestContext({ ipAddress }, async () => {
-    const server = createMcpServer(
-      supabase,
-      logger,
-      aiProvider,
-      thoughtRepository,
-      taskRepository,
-    );
+    const server = createMcpServer(supabase, logger, aiProvider, {
+      thought: thoughtRepository,
+      task: taskRepository,
+      project: projectRepository,
+      person: personRepository,
+      document: documentRepository,
+      aiOutput: aiOutputRepository,
+      query: queryRepository,
+    });
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
     return transport.handleRequest(c);

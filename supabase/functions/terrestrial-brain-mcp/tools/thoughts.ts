@@ -6,7 +6,6 @@ import {
   freshIngest,
   getEmbedding,
   getProjectRefs,
-  resolveProjectNames,
 } from "../helpers.ts";
 import { parseNote } from "../parser.ts";
 import { runExtractionPipeline } from "../extractors/pipeline.ts";
@@ -15,10 +14,14 @@ import { TaskExtractor } from "../extractors/task-extractor.ts";
 import { PeopleExtractor } from "../extractors/people-extractor.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { resolveNames } from "../repositories/name-resolution.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import { AiProviderParseError } from "../ai/ai-provider.ts";
 import type { ThoughtRepository } from "../repositories/thought-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+import type { ProjectRepository } from "../repositories/project-repository.ts";
+import type { PersonRepository } from "../repositories/person-repository.ts";
+import type { NoteSnapshotRepository } from "../repositories/note-snapshot-repository.ts";
 
 const USEFULNESS_REMINDER_LINES = [
   "⚠️ REQUIRED BEFORE NEXT USER RESPONSE:",
@@ -65,6 +68,8 @@ export function register(
   aiProvider: AiProvider,
   thoughtRepository: ThoughtRepository,
   taskRepository: TaskRepository,
+  projectRepository: ProjectRepository,
+  personRepository: PersonRepository,
 ) {
   // Tool 1: Semantic Search
   server.registerTool(
@@ -122,8 +127,9 @@ export function register(
           );
           allProjectUuids.push(...projectRefs);
         }
-        const projectNameMap = await resolveProjectNames(
+        const projectNameMap = await resolveNames(
           supabase,
+          "projects",
           allProjectUuids,
         );
 
@@ -278,8 +284,9 @@ export function register(
           );
           allProjectUuids.push(...projectRefs);
         }
-        const projectNameMap = await resolveProjectNames(
+        const projectNameMap = await resolveNames(
           supabase,
+          "projects",
           allProjectUuids,
         );
 
@@ -547,6 +554,8 @@ export function register(
             supabase,
             aiProvider,
             taskRepository,
+            projectRepository,
+            personRepository,
           );
         } catch (pipelineError) {
           console.error(
@@ -878,6 +887,9 @@ export async function handleIngestNote(
   aiProvider: AiProvider,
   thoughtRepository: ThoughtRepository,
   taskRepository: TaskRepository,
+  projectRepository: ProjectRepository,
+  personRepository: PersonRepository,
+  noteSnapshotRepository: NoteSnapshotRepository,
   { content, title, note_id }: {
     content: string;
     title?: string;
@@ -887,11 +899,8 @@ export async function handleIngestNote(
   try {
     // Step 0: Skip if content is unchanged (prevents duplicate ingestion from Obsidian Sync)
     if (note_id) {
-      const { data: existing } = await supabase
-        .from("note_snapshots")
-        .select("content")
-        .eq("reference_id", note_id)
-        .single();
+      const { data: existing } = await noteSnapshotRepository
+        .findContentByReference(note_id);
 
       if (existing && existing.content === content) {
         return { success: true, message: "Note unchanged — skipped." };
@@ -901,23 +910,18 @@ export async function handleIngestNote(
     // Step 1: Upsert note snapshot
     let noteSnapshotId: string | null = null;
     if (note_id) {
-      const { data: snapshot, error: snapshotError } = await supabase
-        .from("note_snapshots")
-        .upsert(
-          {
+      const { data: snapshot, error: snapshotError } =
+        await noteSnapshotRepository
+          .upsert({
             reference_id: note_id,
             title: title || null,
             content,
             source: "obsidian",
-          },
-          { onConflict: "reference_id" },
-        )
-        .select("id")
-        .single();
+          });
 
       if (snapshotError) {
         console.error(`Note snapshot upsert failed: ${snapshotError.message}`);
-      } else {
+      } else if (snapshot) {
         noteSnapshotId = snapshot.id;
       }
     }
@@ -939,6 +943,8 @@ export async function handleIngestNote(
         supabase,
         aiProvider,
         taskRepository,
+        projectRepository,
+        personRepository,
       );
     } catch (pipelineError) {
       console.error(

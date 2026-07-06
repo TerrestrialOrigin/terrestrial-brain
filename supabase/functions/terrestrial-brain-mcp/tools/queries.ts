@@ -4,6 +4,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { renderSectionBody } from "./section-format.ts";
+import type { QueryRepository } from "../repositories/query-repository.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,8 +24,9 @@ function formatDate(dateStr: string | null | undefined): string {
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   logger: FunctionCallLogger,
+  queryRepository: QueryRepository,
 ) {
   // ─── get_project_summary ─────────────────────────────────────────────────
 
@@ -44,11 +46,8 @@ export function register(
     },
     withMcpLogging("get_project_summary", async ({ id }) => {
       // 1. Fetch project
-      const { data: project, error: projectError } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data: project, error: projectError } = await queryRepository
+        .getProjectById(id);
 
       if (projectError || !project) {
         return errorResult(
@@ -59,11 +58,8 @@ export function register(
       // 2. Fetch parent name
       let parentName: string | null = null;
       if (project.parent_id) {
-        const { data: parent, error: parentError } = await supabase
-          .from("projects")
-          .select("name")
-          .eq("id", project.parent_id)
-          .single();
+        const { data: parent, error: parentError } = await queryRepository
+          .getProjectName(project.parent_id);
         if (parentError) {
           console.error(
             `get_project_summary parent lookup failed: ${parentError.message}`,
@@ -73,21 +69,12 @@ export function register(
       }
 
       // 3. Fetch children
-      const { data: children, error: childrenError } = await supabase
-        .from("projects")
-        .select("id, name, type")
-        .eq("parent_id", id)
-        .is("archived_at", null)
-        .order("name");
+      const { data: children, error: childrenError } = await queryRepository
+        .listChildProjects(id);
 
       // 4. Fetch open tasks
-      const { data: tasks, error: tasksError } = await supabase
-        .from("tasks")
-        .select("id, content, status, due_by, assigned_to, created_at")
-        .eq("project_id", id)
-        .is("archived_at", null)
-        .in("status", ["open", "in_progress"])
-        .order("created_at", { ascending: false });
+      const { data: tasks, error: tasksError } = await queryRepository
+        .listOpenTasksForProject(id);
 
       // 5. Fetch recent thoughts that reference this project (DB-side filtering)
       // Query both metadata formats in parallel: new (projects array) and old (project_id string)
@@ -95,20 +82,8 @@ export function register(
         { data: newFormatThoughts, error: newFormatThoughtsError },
         { data: oldFormatThoughts, error: oldFormatThoughtsError },
       ] = await Promise.all([
-        supabase
-          .from("thoughts")
-          .select("id, content, metadata, note_snapshot_id, created_at")
-          .contains("metadata", { references: { projects: [id] } })
-          .is("archived_at", null)
-          .order("created_at", { ascending: false })
-          .limit(25),
-        supabase
-          .from("thoughts")
-          .select("id, content, metadata, note_snapshot_id, created_at")
-          .contains("metadata", { references: { project_id: id } })
-          .is("archived_at", null)
-          .order("created_at", { ascending: false })
-          .limit(25),
+        queryRepository.listThoughtsForProjectNewFormat(id),
+        queryRepository.listThoughtsForProjectOldFormat(id),
       ]);
       // If either format query fails the thoughts view is incomplete — surface it
       // rather than silently showing a partial (or empty) list.
@@ -136,12 +111,8 @@ export function register(
       const snapshotIds = [
         ...new Set(
           matchingThoughts
-            .filter((thought: { note_snapshot_id: string | null }) =>
-              thought.note_snapshot_id
-            )
-            .map((thought: { note_snapshot_id: string }) =>
-              thought.note_snapshot_id
-            ),
+            .filter((thought) => thought.note_snapshot_id)
+            .map((thought) => thought.note_snapshot_id),
         ),
       ];
 
@@ -150,10 +121,8 @@ export function register(
         { title: string | null; reference_id: string }
       > = {};
       if (snapshotIds.length > 0) {
-        const { data: snapshots, error: snapshotsError } = await supabase
-          .from("note_snapshots")
-          .select("id, title, reference_id")
-          .in("id", snapshotIds);
+        const { data: snapshots, error: snapshotsError } = await queryRepository
+          .getNoteSnapshotsByIds(snapshotIds as string[]);
 
         if (snapshotsError) {
           console.error(
@@ -161,44 +130,24 @@ export function register(
           );
         }
         snapshotMap = Object.fromEntries(
-          (snapshots || []).map((
-            snapshot: {
-              id: string;
-              title: string | null;
-              reference_id: string;
-            },
-          ) => [
+          (snapshots || []).map((snapshot) => [
             snapshot.id,
             { title: snapshot.title, reference_id: snapshot.reference_id },
           ]),
         );
       }
 
-      // 6b. Resolve assigned person names for tasks
+      // 6b. Resolve assigned person names for tasks (shared batched resolver)
       const taskPersonIds = [
         ...new Set(
           (tasks || [])
-            .filter((task: { assigned_to: string | null }) => task.assigned_to)
-            .map((task: { assigned_to: string }) => task.assigned_to),
+            .filter((task) => task.assigned_to)
+            .map((task) => task.assigned_to),
         ),
       ];
-      let personMap: Record<string, string> = {};
-      if (taskPersonIds.length > 0) {
-        const { data: people, error: peopleError } = await supabase
-          .from("people")
-          .select("id, name")
-          .in("id", taskPersonIds);
-        if (peopleError) {
-          console.error(
-            `get_project_summary assignee lookup failed: ${peopleError.message}`,
-          );
-        }
-        personMap = Object.fromEntries(
-          (people || []).map((
-            person: { id: string; name: string },
-          ) => [person.id, person.name]),
-        );
-      }
+      const personMap = taskPersonIds.length > 0
+        ? await queryRepository.personNamesByIds(taskPersonIds as string[])
+        : new Map<string, string>();
 
       // ─── Format output ───────────────────────────────────────────────────
 
@@ -259,8 +208,8 @@ export function register(
                 }`
                 : "";
               const assigneePart =
-                task.assigned_to && personMap[task.assigned_to]
-                  ? ` (${personMap[task.assigned_to]})`
+                task.assigned_to && personMap.get(task.assigned_to)
+                  ? ` (${personMap.get(task.assigned_to)})`
                   : "";
               return `- ${statusIcon} ${task.content}${assigneePart}${duePart}`;
             })
@@ -360,48 +309,23 @@ export function register(
       const sinceIso = sinceDate.toISOString();
 
       // 1. Recent thoughts
-      const { data: thoughts, error: thoughtsError } = await supabase
-        .from("thoughts")
-        .select("id, content, metadata, created_at")
-        .is("archived_at", null)
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: false })
-        .limit(20);
+      const { data: thoughts, error: thoughtsError } = await queryRepository
+        .listRecentThoughts(sinceIso);
 
       // 2. Tasks created
-      const { data: tasksCreated, error: tasksCreatedError } = await supabase
-        .from("tasks")
-        .select("content, status, project_id, created_at")
-        .is("archived_at", null)
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: false });
+      const { data: tasksCreated, error: tasksCreatedError } =
+        await queryRepository.listTasksCreatedSince(sinceIso);
 
       // 3. Tasks completed (done + updated recently)
       const { data: tasksCompleted, error: tasksCompletedError } =
-        await supabase
-          .from("tasks")
-          .select("content, project_id, updated_at")
-          .eq("status", "done")
-          .is("archived_at", null)
-          .gte("updated_at", sinceIso)
-          .order("updated_at", { ascending: false });
+        await queryRepository.listTasksCompletedSince(sinceIso);
 
       // 4. Projects created or updated
       const { data: projectsCreated, error: projectsCreatedError } =
-        await supabase
-          .from("projects")
-          .select("name, type, created_at")
-          .is("archived_at", null)
-          .gte("created_at", sinceIso)
-          .order("created_at", { ascending: false });
+        await queryRepository.listProjectsCreatedSince(sinceIso);
 
       const { data: projectsUpdated, error: projectsUpdatedError } =
-        await supabase
-          .from("projects")
-          .select("name, type, updated_at")
-          .is("archived_at", null)
-          .gte("updated_at", sinceIso)
-          .order("updated_at", { ascending: false });
+        await queryRepository.listProjectsUpdatedSince(sinceIso);
       const projectsError = projectsCreatedError ?? projectsUpdatedError;
 
       // Deduplicate projects (could appear in both created and updated)
@@ -435,27 +359,15 @@ export function register(
       }
 
       // 5. AI outputs delivered
-      const { data: aiOutputs, error: aiOutputsError } = await supabase
-        .from("ai_output")
-        .select("title, file_path, picked_up_at")
-        .eq("picked_up", true)
-        .gte("picked_up_at", sinceIso)
-        .order("picked_up_at", { ascending: false });
+      const { data: aiOutputs, error: aiOutputsError } = await queryRepository
+        .listDeliveredAiOutputsSince(sinceIso);
 
       // 6. People created or updated
-      const { data: peopleCreated, error: peopleCreatedError } = await supabase
-        .from("people")
-        .select("name, type, created_at")
-        .is("archived_at", null)
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: false });
+      const { data: peopleCreated, error: peopleCreatedError } =
+        await queryRepository.listPeopleCreatedSince(sinceIso);
 
-      const { data: peopleUpdated, error: peopleUpdatedError } = await supabase
-        .from("people")
-        .select("name, type, updated_at")
-        .is("archived_at", null)
-        .gte("updated_at", sinceIso)
-        .order("updated_at", { ascending: false });
+      const { data: peopleUpdated, error: peopleUpdatedError } =
+        await queryRepository.listPeopleUpdatedSince(sinceIso);
       const peopleError = peopleCreatedError ?? peopleUpdatedError;
 
       // Deduplicate people (could appear in both created and updated)
@@ -497,23 +409,9 @@ export function register(
         if (task.project_id) projectIdSet.add(task.project_id);
       }
 
-      let projectNameMap: Record<string, string> = {};
-      if (projectIdSet.size > 0) {
-        const { data: projects, error: projectNamesError } = await supabase
-          .from("projects")
-          .select("id, name")
-          .in("id", [...projectIdSet]);
-        if (projectNamesError) {
-          console.error(
-            `get_recent_activity project-name lookup failed: ${projectNamesError.message}`,
-          );
-        }
-        projectNameMap = Object.fromEntries(
-          (projects || []).map((
-            project: { id: string; name: string },
-          ) => [project.id, project.name]),
-        );
-      }
+      const projectNameMap = projectIdSet.size > 0
+        ? await queryRepository.projectNamesByIds([...projectIdSet])
+        : new Map<string, string>();
 
       // ─── Format output ───────────────────────────────────────────────────
 
@@ -570,8 +468,8 @@ export function register(
           rows
             .map((task) => {
               const projectLabel =
-                task.project_id && projectNameMap[task.project_id]
-                  ? ` [${projectNameMap[task.project_id]}]`
+                task.project_id && projectNameMap.get(task.project_id)
+                  ? ` [${projectNameMap.get(task.project_id)}]`
                   : "";
               return `- ${task.content} (${task.status})${projectLabel} — ${
                 formatDate(task.created_at)
@@ -590,8 +488,8 @@ export function register(
           rows
             .map((task) => {
               const projectLabel =
-                task.project_id && projectNameMap[task.project_id]
-                  ? ` [${projectNameMap[task.project_id]}]`
+                task.project_id && projectNameMap.get(task.project_id)
+                  ? ` [${projectNameMap.get(task.project_id)}]`
                   : "";
               return `- ${task.content}${projectLabel} — ${
                 formatDate(task.updated_at)
@@ -694,13 +592,9 @@ export function register(
         return errorResult("Must provide either `id` or `reference_id`.");
       }
 
-      let query = supabase
-        .from("note_snapshots")
-        .select("id, reference_id, title, content, source, captured_at");
-
-      query = id ? query.eq("id", id) : query.eq("reference_id", reference_id!);
-
-      const { data: snapshot, error } = await query.single();
+      const { data: snapshot, error } = id
+        ? await queryRepository.getNoteSnapshotById(id)
+        : await queryRepository.getNoteSnapshotByReference(reference_id!);
 
       if (error || !snapshot) {
         return errorResult(

@@ -1,7 +1,5 @@
-import { SupabaseClient } from "@supabase/supabase-js";
 import type { AiProvider } from "./ai/ai-provider.ts";
 import { AiProviderParseError } from "./ai/ai-provider.ts";
-import { resolveNames } from "./repositories/name-resolution.ts";
 import type { ThoughtRepository } from "./repositories/thought-repository.ts";
 
 // ---------------------------------------------------------------------------
@@ -18,31 +16,6 @@ export function getProjectRefs(metadata: Record<string, unknown>): string[] {
   if (Array.isArray(refs.projects)) return refs.projects as string[];
   if (typeof refs.project_id === "string") return [refs.project_id];
   return [];
-}
-
-/**
- * Resolves project UUIDs to human-readable project names via a single batch query.
- * Falls back to the raw UUID for any project not found in the database.
- *
- * Thin delegate over the shared `resolveNames` helper (fix-plan Step 16) — the
- * only difference from the generic helper is the raw-id fallback for ids the
- * query did not return, which this function's callers rely on. (Step 17 migrates
- * those callers to `resolveNames` directly and removes this wrapper.)
- */
-export async function resolveProjectNames(
-  supabase: SupabaseClient,
-  projectUuids: string[],
-): Promise<Map<string, string>> {
-  const nameMap = await resolveNames(
-    supabase,
-    "projects",
-    projectUuids,
-    "name",
-  );
-  for (const uuid of new Set(projectUuids)) {
-    if (!nameMap.has(uuid)) nameMap.set(uuid, uuid);
-  }
-  return nameMap;
 }
 
 export function getEmbedding(

@@ -1,0 +1,46 @@
+/**
+ * AiOutputRepository — the single seam over the `ai_output` table and its
+ * `get_pending_ai_output_metadata` RPC (fix-plan Step 17, finding X2). Covers
+ * both the MCP tools and the HTTP AI-output pull API handlers.
+ */
+
+import type { RepoResult } from "./repo-result.ts";
+
+/** A pending AI-output row (full content) returned by the pull API. */
+export interface PendingAiOutputRow {
+  id: string;
+  title: string;
+  content: string;
+  file_path: string;
+  created_at: string;
+}
+
+/** Values for inserting an AI output. */
+export interface NewAiOutputValues {
+  title: string;
+  content: string;
+  file_path: string;
+  source_context?: string | null;
+}
+
+export interface AiOutputRepository {
+  /** Insert an AI output; returns the new row's id. */
+  insert(values: NewAiOutputValues): Promise<RepoResult<{ id: string }>>;
+
+  /** Pending (not picked up, not rejected) outputs, oldest first. */
+  listPending(): Promise<RepoResult<PendingAiOutputRow[]>>;
+
+  /** Lightweight pending metadata via the `get_pending_ai_output_metadata` RPC. */
+  listPendingMetadata(): Promise<RepoResult<unknown[]>>;
+
+  /** Content of specific pending outputs by id. */
+  findContentByIds(
+    ids: string[],
+  ): Promise<RepoResult<{ id: string; content: string }[]>>;
+
+  /** Mark outputs picked up (sets `picked_up` + `picked_up_at`). */
+  markPickedUp(ids: string[]): Promise<RepoResult<void>>;
+
+  /** Reject outputs (sets `rejected` + `rejected_at`). */
+  reject(ids: string[]): Promise<RepoResult<void>>;
+}

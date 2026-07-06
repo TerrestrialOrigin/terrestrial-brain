@@ -40,7 +40,9 @@ async function detectAllPeople(
   if (!noteContent.trim()) return [];
 
   const peopleList = knownPeople.length > 0
-    ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join("\n")
+    ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join(
+      "\n",
+    )
     : "(none)";
 
   const validIds = new Set(knownPeople.map((person) => person.id));
@@ -48,7 +50,8 @@ async function detectAllPeople(
   try {
     return await aiProvider.completeJson(
       {
-        systemPrompt: `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
+        systemPrompt:
+          `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
 
 For each person found:
 - If they match a known person, return their ID
@@ -172,11 +175,9 @@ export class PeopleExtractor implements Extractor {
     name: string,
     context: ExtractionContext,
   ): Promise<string | null> {
-    const { data: newPerson, error } = await context.supabase
-      .from("people")
-      .insert({ name })
-      .select("id, name")
-      .single();
+    const { data: newPerson, error } = await context.personRepository.insert({
+      name,
+    });
 
     if (!error && newPerson) {
       context.newlyCreatedPeople.push({

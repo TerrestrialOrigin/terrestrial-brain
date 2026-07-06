@@ -58,6 +58,13 @@ export interface TaskListFilters {
   status?: string;
 }
 
+/** A task row read for the extractor pipeline's reconciliation context seed. */
+export interface TaskReferenceRow {
+  id: string;
+  content: string;
+  reference_id: string | null;
+}
+
 export interface TaskRepository {
   /** Insert a task; returns the new row's id and content. */
   insert(values: NewTaskValues): Promise<RepoResult<CreatedTask>>;
@@ -82,4 +89,32 @@ export interface TaskRepository {
    * the reconciliation "removed from note" path (TaskExtractor Phase 5).
    */
   archiveIfActive(id: string): Promise<RepoResult<void>>;
+
+  /**
+   * Count open/in-progress tasks for a project (used by `get_project`). Does not
+   * filter on `archived_at` — preserves the exact prior query.
+   */
+  countOpenByProject(projectId: string): Promise<RepoResult<number>>;
+
+  /**
+   * Count active open/in-progress tasks assigned to a person (used by
+   * `get_person`). Filters out archived tasks — preserves the exact prior query.
+   */
+  countOpenByAssignee(personId: string): Promise<RepoResult<number>>;
+
+  /** Ids of active open/in-progress tasks for any of the given projects. */
+  findOpenIdsByProjects(
+    projectIds: string[],
+  ): Promise<RepoResult<{ id: string }[]>>;
+
+  /** Archive every task in `ids` (sets `archived_at`). */
+  archiveMany(ids: string[]): Promise<RepoResult<void>>;
+
+  /** Hard-delete tasks by id — the `create_tasks_with_output` rollback path. */
+  deleteByIds(ids: string[]): Promise<RepoResult<void>>;
+
+  /** Tasks for a note reference (extractor reconciliation context seed). */
+  findByReference(
+    referenceId: string,
+  ): Promise<RepoResult<TaskReferenceRow[]>>;
 }
