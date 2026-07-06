@@ -9,7 +9,7 @@
 // design.md, Decision 3), so this integration test guards the single-request
 // path and the refactor, not the race itself.
 
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals } from "@std/assert";
 import {
   MCP_KEY,
   restUrl,
@@ -48,12 +48,19 @@ Deno.test("MCP request records its client IP in function_call_logs (C8)", async 
   const logQuery =
     `function_call_logs?function_name=eq.list_projects&input=ilike.*${marker}*&select=input,ip_address`;
   for (let attempt = 0; attempt < 20 && rows.length === 0; attempt++) {
-    const logResponse = await fetch(restUrl(logQuery), { headers: serviceHeaders() });
+    const logResponse = await fetch(restUrl(logQuery), {
+      headers: serviceHeaders(),
+    });
     rows = await logResponse.json();
-    if (rows.length === 0) await new Promise((resolve) => setTimeout(resolve, 100));
+    if (rows.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
 
-  assert(rows.length >= 1, `expected a log row for marker ${marker}, found none`);
+  assert(
+    rows.length >= 1,
+    `expected a log row for marker ${marker}, found none`,
+  );
   assertEquals(rows[0].ip_address, clientIp);
 
   // Cleanup this test's log row(s).

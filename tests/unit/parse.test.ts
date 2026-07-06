@@ -1,17 +1,7 @@
+import { assertEquals } from "@std/assert";
 import {
-  assertEquals,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
-import {
-  parseNote,
-  parseHeadings,
-  parseCheckboxes,
-  detectCodeBlockLines,
   computeIndentDepth,
-} from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
-import type {
-  ParsedNote,
-  ParsedCheckbox,
-  ParsedHeading,
+  parseNote,
 } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
 
 // ---------------------------------------------------------------------------
@@ -199,9 +189,9 @@ Deno.test("heading: H2 through H6 levels", () => {
 Deno.test("heading: line ranges extend to next same-level heading", () => {
   const content = [
     "## Section A", // line 1
-    "content A",    // line 2
+    "content A", // line 2
     "## Section B", // line 3
-    "content B",    // line 4
+    "content B", // line 4
   ].join("\n");
   const result = parseNote(content, null, null, "obsidian");
   assertEquals(result.headings.length, 2);
@@ -226,9 +216,9 @@ Deno.test("heading: line range extends to EOF", () => {
 Deno.test("heading: lower-level heading does not end higher-level range", () => {
   const content = [
     "## Parent Section", // line 1
-    "### Subsection",    // line 2
-    "content",           // line 3
-    "## Next Section",   // line 4
+    "### Subsection", // line 2
+    "content", // line 3
+    "## Next Section", // line 4
   ].join("\n");
   const result = parseNote(content, null, null, "obsidian");
   assertEquals(result.headings.length, 3);
@@ -242,10 +232,10 @@ Deno.test("heading: lower-level heading does not end higher-level range", () => 
 
 Deno.test("heading: mixed levels with H1", () => {
   const content = [
-    "# H1",             // line 1
-    "## H2 under H1",   // line 2
-    "### H3 under H2",  // line 3
-    "## Another H2",    // line 4
+    "# H1", // line 1
+    "## H2 under H1", // line 2
+    "### H3 under H2", // line 3
+    "## Another H2", // line 4
   ].join("\n");
   const result = parseNote(content, null, null, "obsidian");
   assertEquals(result.headings.length, 4);
@@ -385,25 +375,30 @@ Deno.test("section: checkboxes under different headings", () => {
 
 Deno.test("mixed: full note with headings, checkboxes, prose, and code blocks", () => {
   const content = [
-    "# Project Plan",                         // line 1 - heading
-    "",                                        // line 2
-    "Some introductory prose.",                // line 3
-    "",                                        // line 4
-    "## Tasks",                                // line 5 - heading
-    "- [ ] Implement parser",                  // line 6 - checkbox
-    "- [x] Write design doc",                  // line 7 - checkbox
-    "  - [ ] Review with team",                // line 8 - checkbox (child)
-    "",                                        // line 9
-    "```typescript",                           // line 10 - code block start
-    "- [ ] not a real task",                   // line 11 - inside code
-    "## not a real heading",                   // line 12 - inside code
-    "```",                                     // line 13 - code block end
-    "",                                        // line 14
-    "## Notes",                                // line 15 - heading
-    "- [ ] Follow up on feedback",             // line 16 - checkbox
+    "# Project Plan", // line 1 - heading
+    "", // line 2
+    "Some introductory prose.", // line 3
+    "", // line 4
+    "## Tasks", // line 5 - heading
+    "- [ ] Implement parser", // line 6 - checkbox
+    "- [x] Write design doc", // line 7 - checkbox
+    "  - [ ] Review with team", // line 8 - checkbox (child)
+    "", // line 9
+    "```typescript", // line 10 - code block start
+    "- [ ] not a real task", // line 11 - inside code
+    "## not a real heading", // line 12 - inside code
+    "```", // line 13 - code block end
+    "", // line 14
+    "## Notes", // line 15 - heading
+    "- [ ] Follow up on feedback", // line 16 - checkbox
   ].join("\n");
 
-  const result = parseNote(content, "Project Plan", "projects/plan.md", "obsidian");
+  const result = parseNote(
+    content,
+    "Project Plan",
+    "projects/plan.md",
+    "obsidian",
+  );
 
   // Metadata
   assertEquals(result.title, "Project Plan");
@@ -472,10 +467,6 @@ Deno.test("edge: malformed checkbox - no text after bracket", () => {
 });
 
 Deno.test("edge: malformed checkbox - no text after bracket with space", () => {
-  const result = parseNote("- [ ] ", null, null, "obsidian");
-  // The regex (.+) requires at least one character — trailing space alone doesn't match
-  // Actually " " is one character so (.+)$ would match " "
-  // Let's check what actually happens
   const result2 = parseNote("- [ ]", null, null, "obsidian");
   assertEquals(result2.checkboxes.length, 0); // no space + text after ]
 });

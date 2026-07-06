@@ -135,7 +135,10 @@ export class FakeTaskRepository implements TaskRepository {
   }
 
   insert(values: { content: string }): Promise<RepoResult<CreatedTask>> {
-    const created = { id: `new-task-${this.nextId++}`, content: values.content };
+    const created = {
+      id: `new-task-${this.nextId++}`,
+      content: values.content,
+    };
     this.inserted.push(created);
     return ok(created);
   }

@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 
 // Auth accept/deny matrix for the header-based-auth change.
 // x-brain-key header is the primary mechanism; ?key= is a deprecated fallback.
@@ -49,10 +49,13 @@ async function callMcpRoot(options: AuthCallOptions): Promise<number> {
 
 /** POST to the direct /get-pending-ai-output-metadata route; returns the HTTP status. */
 async function callDirectRoute(options: AuthCallOptions): Promise<number> {
-  const response = await fetch(buildUrl("/get-pending-ai-output-metadata", options), {
-    method: "POST",
-    headers: buildHeaders(options),
-  });
+  const response = await fetch(
+    buildUrl("/get-pending-ai-output-metadata", options),
+    {
+      method: "POST",
+      headers: buildHeaders(options),
+    },
+  );
   await response.body?.cancel();
   return response.status;
 }
@@ -62,7 +65,12 @@ async function assertUnauthorized(options: AuthCallOptions): Promise<void> {
   const response = await fetch(buildUrl("", options), {
     method: "POST",
     headers: buildHeaders(options),
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: {},
+    }),
   });
   assertEquals(response.status, 401);
   const body = await response.json();
@@ -87,7 +95,10 @@ Deno.test("auth: deprecated ?key= query param fallback is still accepted", async
 });
 
 Deno.test("auth: valid header wins over an invalid query param", async () => {
-  const status = await callMcpRoot({ headerKey: VALID_KEY, queryKey: "wrong-key" });
+  const status = await callMcpRoot({
+    headerKey: VALID_KEY,
+    queryKey: "wrong-key",
+  });
   assertEquals(status, 200);
 });
 
@@ -102,7 +113,9 @@ Deno.test("auth: wrong header key is rejected with 401", async () => {
 });
 
 Deno.test("auth: prefix of the real key is rejected with 401", async () => {
-  await assertUnauthorized({ headerKey: VALID_KEY.slice(0, VALID_KEY.length - 1) });
+  await assertUnauthorized({
+    headerKey: VALID_KEY.slice(0, VALID_KEY.length - 1),
+  });
 });
 
 Deno.test("auth: key with an extra suffix is rejected with 401", async () => {

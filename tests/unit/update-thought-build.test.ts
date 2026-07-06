@@ -5,7 +5,7 @@
 // was load-bearing in the pre-refactor branches; these tests lock it in so a
 // future "cleanup" can't silently reorder the user-visible confirmation.
 
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 import { buildThoughtUpdate } from "../../supabase/functions/terrestrial-brain-mcp/tools/thoughts.ts";
 import {
   type AiJsonCompletionRequest,

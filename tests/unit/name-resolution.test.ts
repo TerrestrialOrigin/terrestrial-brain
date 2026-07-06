@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveNames } from "../../supabase/functions/terrestrial-brain-mcp/repositories/name-resolution.ts";
 

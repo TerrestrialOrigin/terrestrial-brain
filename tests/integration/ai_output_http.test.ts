@@ -1,7 +1,4 @@
-import {
-  assertEquals,
-  assertExists,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertExists } from "@std/assert";
 import {
   callHTTPWithStatus as callHTTP,
   callTool,
@@ -30,7 +27,12 @@ Deno.test("HTTP: /get-pending-ai-output-metadata returns metadata without conten
   const { status, body } = await callHTTP("get-pending-ai-output-metadata");
   assertEquals(status, 200);
   assertEquals(body.success, true);
-  const data = body.data as { id: string; title: string; content?: string; content_size: number }[];
+  const data = body.data as {
+    id: string;
+    title: string;
+    content?: string;
+    content_size: number;
+  }[];
   assertEquals(Array.isArray(data), true);
 
   const found = data.find((item) => item.id === httpTestOutputId);
@@ -61,7 +63,9 @@ Deno.test("HTTP: /get-pending-ai-output returns full content", async () => {
 // ---------------------------------------------------------------------------
 
 Deno.test("HTTP: /fetch-ai-output-content returns content for valid pending IDs", async () => {
-  const { status, body } = await callHTTP("fetch-ai-output-content", { ids: [httpTestOutputId] });
+  const { status, body } = await callHTTP("fetch-ai-output-content", {
+    ids: [httpTestOutputId],
+  });
   assertEquals(status, 200);
   assertEquals(body.success, true);
   const data = body.data as { id: string; content: string }[];
@@ -90,7 +94,9 @@ Deno.test("HTTP: /fetch-ai-output-content returns empty for non-existent IDs", a
 // ---------------------------------------------------------------------------
 
 Deno.test("HTTP: /mark-ai-output-picked-up marks output as picked up", async () => {
-  const { status, body } = await callHTTP("mark-ai-output-picked-up", { ids: [httpTestOutputId] });
+  const { status, body } = await callHTTP("mark-ai-output-picked-up", {
+    ids: [httpTestOutputId],
+  });
   assertEquals(status, 200);
   assertEquals(body.success, true);
   assertEquals((body.message as string).includes("1 output"), true);
@@ -100,7 +106,11 @@ Deno.test("HTTP: picked-up output no longer in pending", async () => {
   const { body } = await callHTTP("get-pending-ai-output-metadata");
   const data = body.data as { id: string }[];
   const found = data.find((item) => item.id === httpTestOutputId);
-  assertEquals(found, undefined, "Picked-up output should not appear in pending");
+  assertEquals(
+    found,
+    undefined,
+    "Picked-up output should not appear in pending",
+  );
 });
 
 Deno.test("HTTP: /mark-ai-output-picked-up returns 400 without ids", async () => {
@@ -128,7 +138,9 @@ Deno.test("HTTP: create output for reject test", async () => {
 });
 
 Deno.test("HTTP: /reject-ai-output rejects output", async () => {
-  const { status, body } = await callHTTP("reject-ai-output", { ids: [rejectTestId] });
+  const { status, body } = await callHTTP("reject-ai-output", {
+    ids: [rejectTestId],
+  });
   assertEquals(status, 200);
   assertEquals(body.success, true);
   assertEquals((body.message as string).includes("1 output"), true);
@@ -138,7 +150,11 @@ Deno.test("HTTP: rejected output no longer in pending", async () => {
   const { body } = await callHTTP("get-pending-ai-output");
   const data = body.data as { id: string }[];
   const found = data.find((item) => item.id === rejectTestId);
-  assertEquals(found, undefined, "Rejected output should not appear in pending");
+  assertEquals(
+    found,
+    undefined,
+    "Rejected output should not appear in pending",
+  );
 });
 
 Deno.test("HTTP: /reject-ai-output returns 400 without ids", async () => {
@@ -149,8 +165,14 @@ Deno.test("HTTP: /reject-ai-output returns 400 without ids", async () => {
 });
 
 Deno.test("HTTP: /fetch-ai-output-content returns empty for rejected IDs", async () => {
-  const { body } = await callHTTP("fetch-ai-output-content", { ids: [rejectTestId] });
-  assertEquals((body.data as unknown[]).length, 0, "Rejected output should not be fetchable");
+  const { body } = await callHTTP("fetch-ai-output-content", {
+    ids: [rejectTestId],
+  });
+  assertEquals(
+    (body.data as unknown[]).length,
+    0,
+    "Rejected output should not be fetchable",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -158,7 +180,8 @@ Deno.test("HTTP: /fetch-ai-output-content returns empty for rejected IDs", async
 // ---------------------------------------------------------------------------
 
 Deno.test("HTTP: endpoints return 401 without valid key", async () => {
-  const noAuthUrl = "http://localhost:54321/functions/v1/terrestrial-brain-mcp/get-pending-ai-output-metadata";
+  const noAuthUrl =
+    "http://localhost:54321/functions/v1/terrestrial-brain-mcp/get-pending-ai-output-metadata";
   const response = await fetch(noAuthUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -190,14 +213,18 @@ Deno.test("HTTP: migrated tools are NOT in MCP tool list", async () => {
   const text = await response.text();
   let result;
   if (text.startsWith("event:")) {
-    const dataLine = text.split("\n").find((line: string) => line.startsWith("data:"));
+    const dataLine = text.split("\n").find((line: string) =>
+      line.startsWith("data:")
+    );
     assertExists(dataLine, "SSE response should contain data line");
     result = JSON.parse(dataLine.slice(5).trim());
   } else {
     result = JSON.parse(text);
   }
 
-  const toolNames: string[] = (result.result?.tools || []).map((tool: { name: string }) => tool.name);
+  const toolNames: string[] = (result.result?.tools || []).map((
+    tool: { name: string },
+  ) => tool.name);
 
   // These should be REMOVED from MCP
   const removedTools = [
@@ -216,8 +243,16 @@ Deno.test("HTTP: migrated tools are NOT in MCP tool list", async () => {
   }
 
   // These should still be present as MCP tools
-  assertEquals(toolNames.includes("create_ai_output"), true, "create_ai_output should remain in MCP");
-  assertEquals(toolNames.includes("create_tasks_with_output"), true, "create_tasks_with_output should remain in MCP");
+  assertEquals(
+    toolNames.includes("create_ai_output"),
+    true,
+    "create_ai_output should remain in MCP",
+  );
+  assertEquals(
+    toolNames.includes("create_tasks_with_output"),
+    true,
+    "create_tasks_with_output should remain in MCP",
+  );
 });
 
 // ---------------------------------------------------------------------------

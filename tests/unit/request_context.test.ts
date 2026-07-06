@@ -1,5 +1,8 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { withMcpLogging, type FunctionCallLogger } from "../../supabase/functions/terrestrial-brain-mcp/logger.ts";
+import { assertEquals } from "@std/assert";
+import {
+  type FunctionCallLogger,
+  withMcpLogging,
+} from "../../supabase/functions/terrestrial-brain-mcp/logger.ts";
 import { runWithRequestContext } from "../../supabase/functions/terrestrial-brain-mcp/requestContext.ts";
 
 // Deterministic reproduction of finding C8 (fix-plan Step 11): the request-scoped
@@ -27,7 +30,12 @@ function createRecordingLogger(): {
 } {
   const recordedIpByMarker = new Map<string, string | null>();
   const logger: FunctionCallLogger = {
-    logCall(_functionName, _functionType, input, ipAddress): Promise<string | null> {
+    logCall(
+      _functionName,
+      _functionType,
+      input,
+      ipAddress,
+    ): Promise<string | null> {
       const marker = (input as { marker?: string }).marker ?? "unknown";
       recordedIpByMarker.set(marker, ipAddress ?? null);
       return Promise.resolve(null);

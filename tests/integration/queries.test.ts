@@ -1,4 +1,4 @@
-import { assertEquals, assertExists, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
 import {
   callTool,
   callToolRaw,
@@ -28,14 +28,18 @@ Deno.test("get_project_summary shows child projects", async () => {
 });
 
 Deno.test("get_project_summary shows parent project", async () => {
-  const result = await callTool("get_project_summary", { id: TEST_PROJ_BACKEND_ID });
+  const result = await callTool("get_project_summary", {
+    id: TEST_PROJ_BACKEND_ID,
+  });
   assertStringIncludes(result, "Parent:");
   assertStringIncludes(result, "Test Proj");
 });
 
 Deno.test("get_project_summary shows open tasks for Terrestrial Brain", async () => {
   // Seed data has 2 open tasks and 1 done task for Terrestrial Brain
-  const result = await callTool("get_project_summary", { id: TERRESTRIAL_BRAIN_ID });
+  const result = await callTool("get_project_summary", {
+    id: TERRESTRIAL_BRAIN_ID,
+  });
   assertStringIncludes(result, "Open Tasks");
   assertStringIncludes(result, "Write migration files for new tables");
   assertStringIncludes(result, "Refactor edge function into modules");
@@ -49,7 +53,9 @@ Deno.test("get_project_summary shows thoughts with old-format references (projec
 });
 
 Deno.test("get_project_summary returns error for non-existent project", async () => {
-  const result = await callToolRaw("get_project_summary", { id: "00000000-0000-0000-0000-999999999999" });
+  const result = await callToolRaw("get_project_summary", {
+    id: "00000000-0000-0000-0000-999999999999",
+  });
   assertEquals(result.isError, true);
   assertStringIncludes(result.text, "Project not found");
 });
@@ -74,7 +80,9 @@ Deno.test("get_project_summary handles project with no tasks or thoughts", async
   assertEquals(
     result.includes("section unavailable"),
     false,
-    `genuine-empty summary must not show the unavailable marker. Got: ${result.substring(0, 800)}`,
+    `genuine-empty summary must not show the unavailable marker. Got: ${
+      result.substring(0, 800)
+    }`,
   );
 
   // Clean up
@@ -140,10 +148,15 @@ const ARCHIVE_QUERY_CLEANUP_IDS: { table: string; id: string }[] = [];
 Deno.test("get_recent_activity excludes archived thoughts", async () => {
   // Capture a thought, archive it, then verify it doesn't appear in recent activity
   const uniqueContent = `Archived activity exclusion test ${Date.now()}`;
-  await callTool("capture_thought", { content: uniqueContent, author: "test-archived-activity" });
+  await callTool("capture_thought", {
+    content: uniqueContent,
+    author: "test-archived-activity",
+  });
 
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
+      encodeURIComponent(uniqueContent)
+    }&select=id`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -164,7 +177,9 @@ Deno.test("get_recent_activity excludes archived thoughts", async () => {
   assertEquals(
     result.includes(uniqueContent),
     false,
-    `Archived thought should not appear in get_recent_activity. Got: ${result.substring(0, 500)}`,
+    `Archived thought should not appear in get_recent_activity. Got: ${
+      result.substring(0, 500)
+    }`,
   );
 });
 
@@ -175,7 +190,8 @@ Deno.test("get_recent_activity excludes archived tasks", async () => {
     content: taskContent,
     project_id: TERRESTRIAL_BRAIN_ID,
   });
-  const taskMatch = createResult.match(/ID: ([0-9a-f-]+)/i) || createResult.match(/id: ([0-9a-f-]+)/i);
+  const taskMatch = createResult.match(/ID: ([0-9a-f-]+)/i) ||
+    createResult.match(/id: ([0-9a-f-]+)/i);
   assertExists(taskMatch, `Should have created a task. Got: ${createResult}`);
   const taskId = taskMatch![1];
   ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "tasks", id: taskId });
@@ -187,7 +203,9 @@ Deno.test("get_recent_activity excludes archived tasks", async () => {
   assertEquals(
     result.includes(taskContent),
     false,
-    `Archived task should not appear in get_recent_activity. Got: ${result.substring(0, 800)}`,
+    `Archived task should not appear in get_recent_activity. Got: ${
+      result.substring(0, 800)
+    }`,
   );
 });
 
@@ -198,7 +216,10 @@ Deno.test("get_recent_activity excludes archived projects", async () => {
     type: "personal",
   });
   const projectMatch = createResult.match(/id: ([0-9a-f-]+)/);
-  assertExists(projectMatch, `Should have created a project. Got: ${createResult}`);
+  assertExists(
+    projectMatch,
+    `Should have created a project. Got: ${createResult}`,
+  );
   const projectId = projectMatch![1];
   ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "projects", id: projectId });
 
@@ -209,7 +230,9 @@ Deno.test("get_recent_activity excludes archived projects", async () => {
   assertEquals(
     result.includes(projectName),
     false,
-    `Archived project should not appear in get_recent_activity. Got: ${result.substring(0, 800)}`,
+    `Archived project should not appear in get_recent_activity. Got: ${
+      result.substring(0, 800)
+    }`,
   );
 });
 
@@ -219,8 +242,12 @@ Deno.test("get_recent_activity excludes archived people", async () => {
     name: personName,
     type: "human",
   });
-  const personMatch = createResult.match(/id: ([0-9a-f-]+)/i) || createResult.match(/ID: ([0-9a-f-]+)/i);
-  assertExists(personMatch, `Should have created a person. Got: ${createResult}`);
+  const personMatch = createResult.match(/id: ([0-9a-f-]+)/i) ||
+    createResult.match(/ID: ([0-9a-f-]+)/i);
+  assertExists(
+    personMatch,
+    `Should have created a person. Got: ${createResult}`,
+  );
   const personId = personMatch![1];
   ARCHIVE_QUERY_CLEANUP_IDS.push({ table: "people", id: personId });
 
@@ -231,7 +258,9 @@ Deno.test("get_recent_activity excludes archived people", async () => {
   assertEquals(
     result.includes(personName),
     false,
-    `Archived person should not appear in get_recent_activity. Got: ${result.substring(0, 800)}`,
+    `Archived person should not appear in get_recent_activity. Got: ${
+      result.substring(0, 800)
+    }`,
   );
 });
 
@@ -245,7 +274,9 @@ Deno.test("get_project_summary excludes archived thoughts", async () => {
   });
 
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
+      encodeURIComponent(uniqueContent)
+    }&select=id`,
     {
       headers: {
         apikey: SUPABASE_SERVICE_KEY,
@@ -260,11 +291,15 @@ Deno.test("get_project_summary excludes archived thoughts", async () => {
   // Archive it
   await callTool("archive_thought", { id: thoughts[0].id });
 
-  const result = await callTool("get_project_summary", { id: TERRESTRIAL_BRAIN_ID });
+  const result = await callTool("get_project_summary", {
+    id: TERRESTRIAL_BRAIN_ID,
+  });
   assertEquals(
     result.includes(uniqueContent),
     false,
-    `Archived thought should not appear in get_project_summary. Got: ${result.substring(0, 800)}`,
+    `Archived thought should not appear in get_project_summary. Got: ${
+      result.substring(0, 800)
+    }`,
   );
 });
 
@@ -280,7 +315,11 @@ Deno.test("cleanup archive query test data", async () => {
         },
       },
     );
-    assertEquals(response.ok, true, `Cleanup of ${entry.table}/${entry.id} should succeed`);
+    assertEquals(
+      response.ok,
+      true,
+      `Cleanup of ${entry.table}/${entry.id} should succeed`,
+    );
   }
 });
 
@@ -288,12 +327,18 @@ Deno.test("cleanup archive query test data", async () => {
 
 const NOTE_SNAPSHOT_CLEANUP_IDS: string[] = [];
 
-async function createNoteSnapshot(overrides: Partial<{ reference_id: string; title: string; content: string }> = {}): Promise<{ id: string; reference_id: string; title: string; content: string }> {
+async function createNoteSnapshot(
+  overrides: Partial<{ reference_id: string; title: string; content: string }> =
+    {},
+): Promise<
+  { id: string; reference_id: string; title: string; content: string }
+> {
   const ts = Date.now() + Math.floor(Math.random() * 1000);
   const payload = {
     reference_id: overrides.reference_id ?? `test-snapshot-${ts}.md`,
     title: overrides.title ?? `Test Snapshot ${ts}`,
-    content: overrides.content ?? `# Test Note\n\nBody content for snapshot test ${ts}.`,
+    content: overrides.content ??
+      `# Test Note\n\nBody content for snapshot test ${ts}.`,
     source: "obsidian",
   };
   const response = await fetch(`${SUPABASE_URL}/rest/v1/note_snapshots`, {
@@ -307,9 +352,17 @@ async function createNoteSnapshot(overrides: Partial<{ reference_id: string; tit
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`Failed to seed note_snapshot: ${response.status} ${await response.text()}`);
+    throw new Error(
+      `Failed to seed note_snapshot: ${response.status} ${await response
+        .text()}`,
+    );
   }
-  const rows: { id: string; reference_id: string; title: string; content: string }[] = await response.json();
+  const rows: {
+    id: string;
+    reference_id: string;
+    title: string;
+    content: string;
+  }[] = await response.json();
   NOTE_SNAPSHOT_CLEANUP_IDS.push(rows[0].id);
   return rows[0];
 }
@@ -325,7 +378,9 @@ Deno.test("get_note_snapshot fetches by id", async () => {
 
 Deno.test("get_note_snapshot fetches by reference_id", async () => {
   const snapshot = await createNoteSnapshot();
-  const result = await callTool("get_note_snapshot", { reference_id: snapshot.reference_id });
+  const result = await callTool("get_note_snapshot", {
+    reference_id: snapshot.reference_id,
+  });
   assertStringIncludes(result, snapshot.title);
   assertStringIncludes(result, snapshot.content);
   assertStringIncludes(result, snapshot.reference_id);
@@ -334,7 +389,10 @@ Deno.test("get_note_snapshot fetches by reference_id", async () => {
 Deno.test("get_note_snapshot prefers id over reference_id when both provided", async () => {
   const s1 = await createNoteSnapshot({ content: "Content AAA unique marker" });
   const s2 = await createNoteSnapshot({ content: "Content BBB unique marker" });
-  const result = await callTool("get_note_snapshot", { id: s1.id, reference_id: s2.reference_id });
+  const result = await callTool("get_note_snapshot", {
+    id: s1.id,
+    reference_id: s2.reference_id,
+  });
   assertStringIncludes(result, "Content AAA unique marker");
   assertEquals(result.includes("Content BBB unique marker"), false);
 });
@@ -346,26 +404,37 @@ Deno.test("get_note_snapshot returns error when neither id nor reference_id prov
 });
 
 Deno.test("get_note_snapshot returns error for non-existent id", async () => {
-  const result = await callToolRaw("get_note_snapshot", { id: "00000000-0000-0000-0000-999999999999" });
+  const result = await callToolRaw("get_note_snapshot", {
+    id: "00000000-0000-0000-0000-999999999999",
+  });
   assertEquals(result.isError, true);
   assertStringIncludes(result.text, "not found");
 });
 
 Deno.test("get_note_snapshot returns error for non-existent reference_id", async () => {
-  const result = await callToolRaw("get_note_snapshot", { reference_id: `does-not-exist-${Date.now()}.md` });
+  const result = await callToolRaw("get_note_snapshot", {
+    reference_id: `does-not-exist-${Date.now()}.md`,
+  });
   assertEquals(result.isError, true);
   assertStringIncludes(result.text, "not found");
 });
 
 Deno.test("cleanup note snapshot test data", async () => {
   for (const id of NOTE_SNAPSHOT_CLEANUP_IDS) {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/note_snapshots?id=eq.${id}`, {
-      method: "DELETE",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/note_snapshots?id=eq.${id}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_SERVICE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        },
       },
-    });
-    assertEquals(response.ok, true, `Cleanup of note_snapshots/${id} should succeed`);
+    );
+    assertEquals(
+      response.ok,
+      true,
+      `Cleanup of note_snapshots/${id} should succeed`,
+    );
   }
 });

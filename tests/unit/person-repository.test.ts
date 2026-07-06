@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "@std/assert";
 import { SupabasePersonRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-person-repository.ts";
 import { makeFakeClient } from "./fake-supabase-client.ts";
 

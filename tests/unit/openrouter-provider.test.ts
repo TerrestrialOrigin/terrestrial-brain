@@ -1,8 +1,4 @@
-import {
-  assertEquals,
-  assertInstanceOf,
-  assertRejects,
-} from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertInstanceOf, assertRejects } from "@std/assert";
 import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
 import {
   AiProviderHttpError,
@@ -62,8 +58,7 @@ Deno.test("completeJson: runs the caller's parse callback (allowlist filtering)"
     const allow = new Set(["keep"]);
     const result = await provider.completeJson(
       { systemPrompt: "sys", userContent: "user" },
-      (raw) =>
-        ((raw as { ids: string[] }).ids).filter((id) => allow.has(id)),
+      (raw) => (raw as { ids: string[] }).ids.filter((id) => allow.has(id)),
     );
     assertEquals(result, ["keep"]);
   });
