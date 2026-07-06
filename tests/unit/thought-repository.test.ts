@@ -70,15 +70,57 @@ Deno.test("list: filters archived out and applies metadata/type filters", async 
   );
 });
 
-Deno.test("countActive: head count with archived filter, returns the count", async () => {
-  const { client, recorded } = makeFakeClient({ count: 42 });
+Deno.test("stats: calls the thought_stats RPC and parses its result", async () => {
+  const { client, recorded } = makeFakeClient({
+    data: {
+      total: 3,
+      oldest: "2026-01-01T00:00:00Z",
+      newest: "2026-02-01T00:00:00Z",
+      types: [{ key: "idea", count: 2 }],
+      topics: [],
+      people: [],
+    },
+  });
   const repo = new SupabaseThoughtRepository(client);
 
-  const { data } = await repo.countActive();
+  const { data, error } = await repo.stats("proj-1");
 
-  assertEquals(recorded.table, "thoughts");
-  assertEquals(recorded.selectOptions?.head, true);
-  assertEquals(data, 42);
+  assertEquals(recorded.rpcName, "thought_stats");
+  assertEquals(recorded.rpcParams?.p_project_id, "proj-1");
+  assertEquals(error, null);
+  assertEquals(data?.total, 3);
+  assertEquals(data?.types[0]?.key, "idea");
+});
+
+Deno.test("stats: passes null project id when unscoped", async () => {
+  const { client, recorded } = makeFakeClient({
+    data: {
+      total: 0,
+      oldest: null,
+      newest: null,
+      types: [],
+      topics: [],
+      people: [],
+    },
+  });
+  const repo = new SupabaseThoughtRepository(client);
+
+  await repo.stats();
+
+  // Unscoped → the optional arg is omitted (undefined), so the SQL default
+  // (null) applies. supabase's typegen types p_project_id as `string`, so we
+  // pass undefined rather than null.
+  assertEquals(recorded.rpcParams?.p_project_id, undefined);
+});
+
+Deno.test("stats: surfaces a malformed RPC result as an error", async () => {
+  const { client } = makeFakeClient({ data: { total: "nope" } });
+  const repo = new SupabaseThoughtRepository(client);
+
+  const { data, error } = await repo.stats();
+
+  assertEquals(data, null);
+  assertEquals(error !== null, true);
 });
 
 Deno.test("archive: soft-archives (update archived_at) rather than deleting", async () => {

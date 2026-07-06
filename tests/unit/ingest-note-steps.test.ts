@@ -48,8 +48,7 @@ function fakeThoughtRepository(
   return {
     matchByEmbedding: notImpl,
     list: notImpl,
-    countActive: notImpl,
-    listForStats: notImpl,
+    stats: notImpl,
     findById: notImpl,
     findForUpdate: notImpl,
     findActiveById: notImpl,

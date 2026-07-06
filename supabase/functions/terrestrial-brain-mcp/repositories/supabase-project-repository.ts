@@ -4,7 +4,7 @@
  * `tools/projects.ts` / `extractors/project-extractor.ts` lives here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NewProjectValues,
@@ -17,7 +17,7 @@ import type {
 } from "./project-repository.ts";
 
 export class SupabaseProjectRepository implements ProjectRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async insert(
     values: NewProjectValues,
@@ -77,7 +77,7 @@ export class SupabaseProjectRepository implements ProjectRepository {
 
   async listChildParentIds(
     parentIds: string[],
-  ): Promise<RepoResult<{ parent_id: string }[]>> {
+  ): Promise<RepoResult<{ parent_id: string | null }[]>> {
     const { data, error } = await this.supabase
       .from("projects")
       .select("parent_id")
@@ -100,12 +100,14 @@ export class SupabaseProjectRepository implements ProjectRepository {
   async update(
     id: string,
     updates: Record<string, unknown>,
-  ): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
+  ): Promise<RepoResult<{ id: string }>> {
+    const { data, error } = await this.supabase
       .from("projects")
       .update(updates)
-      .eq("id", id);
-    return { data: null, error: toRepoError(error) };
+      .eq("id", id)
+      .select("id")
+      .maybeSingle();
+    return { data, error: toRepoError(error) };
   }
 
   async archiveManyActive(ids: string[]): Promise<RepoResult<void>> {

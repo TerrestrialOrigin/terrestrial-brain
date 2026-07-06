@@ -56,6 +56,7 @@ interface FakeBuilder {
   contains(column: string, value: unknown): FakeBuilder;
   returns(): FakeBuilder;
   single(): FakeBuilder;
+  maybeSingle(): FakeBuilder;
   then(resolve: (value: FakeClientResult) => void): void;
 }
 
@@ -121,6 +122,10 @@ export function makeFakeClient(
       return builder;
     },
     single() {
+      recorded.single = true;
+      return builder;
+    },
+    maybeSingle() {
       recorded.single = true;
       return builder;
     },

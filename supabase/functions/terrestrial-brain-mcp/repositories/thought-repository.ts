@@ -9,71 +9,71 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { Database } from "../database.types.ts";
+import type { Row } from "../supabase-client.ts";
 
 // ---------------------------------------------------------------------------
-// Row & parameter shapes (hand-written until generated types land — Step 24)
+// Row & parameter shapes — row DTOs are projections of the generated schema
+// types (Step 24), so they can no longer drift from the database.
 // ---------------------------------------------------------------------------
 
 /** A row from the `match_thoughts` vector-search RPC. */
-export interface ThoughtMatchRow {
-  id: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  similarity: number;
-  created_at: string;
-  updated_at: string | null;
-  reliability: string | null;
-  author: string | null;
-}
+export type ThoughtMatchRow =
+  Database["public"]["Functions"]["match_thoughts"]["Returns"][number];
 
 /** A row shape used by `list_thoughts`. */
-export interface ThoughtListRow {
-  id: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string | null;
-  reliability: string | null;
-  author: string | null;
+export type ThoughtListRow = Pick<
+  Row<"thoughts">,
+  | "id"
+  | "content"
+  | "metadata"
+  | "created_at"
+  | "updated_at"
+  | "reliability"
+  | "author"
+>;
+
+/** A single `{ key, count }` bucket in the aggregated thought statistics. */
+export interface ThoughtStatCount {
+  key: string;
+  count: number;
 }
 
-/** Minimal row read by `thought_stats` for in-memory aggregation. */
-export interface ThoughtStatsRow {
-  metadata: Record<string, unknown>;
-  created_at: string;
+/**
+ * Aggregated knowledge-base statistics, computed in the database by the
+ * `thought_stats` RPC (Step 24). `types`/`topics`/`people` are already the
+ * top-10 buckets ordered by descending count; `oldest`/`newest` bound the
+ * active thoughts' created_at range (null when there are no thoughts).
+ */
+export interface ThoughtStatsResult {
+  total: number;
+  oldest: string | null;
+  newest: string | null;
+  types: ThoughtStatCount[];
+  topics: ThoughtStatCount[];
+  people: ThoughtStatCount[];
 }
 
 /** Full single-thought row read by `get_thought_by_id`. */
-export interface ThoughtDetailRow {
-  id: string;
-  content: string;
-  metadata: Record<string, unknown>;
-  reference_id: string | null;
-  created_at: string;
-  updated_at: string | null;
-}
+export type ThoughtDetailRow = Pick<
+  Row<"thoughts">,
+  "id" | "content" | "metadata" | "reference_id" | "created_at" | "updated_at"
+>;
 
 /** Row read by `update_thought` before applying an update. */
-export interface ThoughtForUpdateRow {
-  id: string;
-  content: string;
-  reliability: string | null;
-  author: string | null;
-  metadata: Record<string, unknown>;
-}
+export type ThoughtForUpdateRow = Pick<
+  Row<"thoughts">,
+  "id" | "content" | "reliability" | "author" | "metadata"
+>;
 
 /** Row read by `archive_thought` (active thoughts only). */
-export interface ThoughtActiveRow {
-  id: string;
-  content: string;
-}
+export type ThoughtActiveRow = Pick<Row<"thoughts">, "id" | "content">;
 
 /** Row read by `handleIngestNote` when fetching a note's existing thoughts. */
-export interface ThoughtByReferenceRow {
-  id: string;
-  content: string;
-  created_at: string;
-}
+export type ThoughtByReferenceRow = Pick<
+  Row<"thoughts">,
+  "id" | "content" | "created_at"
+>;
 
 export interface ThoughtListFilters {
   limit: number;
@@ -115,11 +115,12 @@ export interface ThoughtRepository {
   /** Recent thoughts with optional metadata/author/reliability/date filters. */
   list(filters: ThoughtListFilters): Promise<RepoResult<ThoughtListRow[]>>;
 
-  /** Count of active (non-archived) thoughts, optionally scoped to a project. */
-  countActive(projectId?: string): Promise<RepoResult<number>>;
-
-  /** Metadata rows for the stats aggregation, optionally scoped to a project. */
-  listForStats(projectId?: string): Promise<RepoResult<ThoughtStatsRow[]>>;
+  /**
+   * Aggregated statistics over active thoughts, computed in the database
+   * (`thought_stats` RPC), optionally scoped to a project. Replaces the former
+   * load-every-row client-side aggregation (finding 7.3).
+   */
+  stats(projectId?: string): Promise<RepoResult<ThoughtStatsResult>>;
 
   /** Single thought by id; a "no rows" miss surfaces as `error.code` PGRST116. */
   findById(id: string): Promise<RepoResult<ThoughtDetailRow>>;

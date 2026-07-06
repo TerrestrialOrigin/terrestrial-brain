@@ -4,7 +4,7 @@
  * `tools/ai_output.ts` lives here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   AiOutputRepository,
@@ -13,7 +13,7 @@ import type {
 } from "./ai-output-repository.ts";
 
 export class SupabaseAiOutputRepository implements AiOutputRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async insert(
     values: NewAiOutputValues,

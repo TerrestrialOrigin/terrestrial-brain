@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, McpToolResult, textResult } from "../mcp-response.ts";
@@ -8,6 +9,7 @@ import type {
   TaskRepository,
 } from "../repositories/task-repository.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import { TASK_STATUSES } from "../enums.ts";
 
 /** Resolves a batch of ids to a `Map<id, displayValue>` (injected for testing). */
 type NameResolver = (ids: string[]) => Promise<Map<string, string>>;
@@ -111,17 +113,17 @@ export function register(
         "it creates structured task rows AND delivers a markdown checklist to the user's Obsidian vault in one call.",
       inputSchema: {
         content: z.string().describe("Task description"),
-        project_id: z.string().optional().describe(
+        project_id: uuidField().optional().describe(
           "UUID of the project this task belongs to",
         ),
-        parent_id: z.string().optional().describe(
+        parent_id: uuidField().optional().describe(
           "UUID of parent task for sub-tasks",
         ),
         due_by: z.string().optional().describe("Due date as ISO 8601 string"),
-        status: z.string().optional().default("open").describe(
+        status: z.enum(TASK_STATUSES).optional().default("open").describe(
           "Status: open, in_progress, done, deferred",
         ),
-        assigned_to: z.string().optional().describe(
+        assigned_to: uuidField().optional().describe(
           "UUID of the person this task is assigned to",
         ),
       },
@@ -162,8 +164,10 @@ export function register(
         "set overdue_only=true to find tasks past their due date. " +
         "Results include project names and assigned person names for context.",
       inputSchema: {
-        project_id: z.string().optional().describe("Filter by project UUID"),
-        status: z.string().optional().describe(
+        project_id: uuidField().optional().describe(
+          "Filter by project UUID",
+        ),
+        status: z.enum(TASK_STATUSES).optional().describe(
           "Filter by status: open, in_progress, done, deferred",
         ),
         overdue_only: z.boolean().optional().default(false).describe(
@@ -172,7 +176,9 @@ export function register(
         include_archived: z.boolean().optional().default(false).describe(
           "Include archived tasks",
         ),
-        limit: z.number().optional().default(20).describe("Max results"),
+        limit: z.number().int().min(1).max(100).optional().default(20).describe(
+          "Max results (default 20, max 100)",
+        ),
       },
     },
     withMcpLogging(
@@ -198,18 +204,18 @@ export function register(
         "When the user says they finished something, started working on something, or wants to defer a task, use this to update the status accordingly. " +
         "Valid statuses: 'open' (not started), 'in_progress' (actively working), 'done' (completed, auto-archives), 'deferred' (postponed).",
       inputSchema: {
-        id: z.string().describe("Task UUID"),
+        id: uuidField().describe("Task UUID"),
         content: z.string().optional().describe("New task description"),
-        status: z.string().optional().describe(
+        status: z.enum(TASK_STATUSES).optional().describe(
           "New status: open, in_progress, done, deferred",
         ),
         due_by: z.string().nullable().optional().describe(
           "New due date (ISO 8601), or null to clear",
         ),
-        project_id: z.string().nullable().optional().describe(
+        project_id: uuidField().nullable().optional().describe(
           "New project UUID, or null to unlink",
         ),
-        assigned_to: z.string().nullable().optional().describe(
+        assigned_to: uuidField().nullable().optional().describe(
           "Person UUID to assign, or null to unassign",
         ),
       },
@@ -230,13 +236,19 @@ export function register(
         }
 
         if (Object.keys(updates).length === 0) {
-          return textResult("No fields to update.");
+          return errorResult(
+            "At least one of content, status, due_by, project_id, or assigned_to must be provided.",
+          );
         }
 
-        const { error } = await taskRepository.update(id, updates);
+        const { data, error } = await taskRepository.update(id, updates);
 
         if (error) {
           return errorResult(`Update failed: ${error.message}`);
+        }
+        if (!data) {
+          // Affected-row verification: no row matched — report not-found.
+          return errorResult(`Task not found: no task with id ${id}`);
         }
 
         return textResult(
@@ -255,7 +267,7 @@ export function register(
         "Use this to hide tasks that are no longer relevant but weren't completed (e.g. cancelled or superseded). " +
         "For tasks the user actually finished, prefer update_task with status='done' — that both marks completion and archives in one step.",
       inputSchema: {
-        id: z.string().describe("Task UUID to archive"),
+        id: uuidField().describe("Task UUID to archive"),
       },
     },
     withMcpLogging("archive_task", async ({ id }) => {
@@ -279,20 +291,14 @@ export function register(
         "Use this when you already have task IDs (e.g. from create_task, get_project_summary, or prior conversation) " +
         "and need to check their current state. Archived tasks are included — if you ask for an ID, you get it.",
       inputSchema: {
-        ids: z.array(z.string()).describe(
-          "Array of task UUIDs to retrieve (max 50)",
+        ids: uuidField().array().min(1).max(50).describe(
+          "Array of task UUIDs to retrieve (1–50)",
         ),
       },
     },
     withMcpLogging("get_tasks", async ({ ids }) => {
-      if (ids.length === 0) {
-        return errorResult("Error: At least one task ID is required.");
-      }
-
-      if (ids.length > 50) {
-        return errorResult("Error: Maximum 50 task IDs per request.");
-      }
-
+      // Empty/oversized `ids` are rejected at the schema boundary (min 1,
+      // max 50), so no imperative length check is needed here.
       const { data, error } = await taskRepository.findByIds(ids);
 
       if (error) {

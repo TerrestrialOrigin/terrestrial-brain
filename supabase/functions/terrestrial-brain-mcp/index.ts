@@ -29,7 +29,8 @@ import {
 } from "./logger.ts";
 import { runWithRequestContext } from "./requestContext.ts";
 import { requireEnv } from "./env.ts";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "./database.types.ts";
+import type { AppSupabaseClient } from "./supabase-client.ts";
 import type { AiProvider } from "./ai/ai-provider.ts";
 import { createAiProvider } from "./ai/factory.ts";
 import type { ThoughtRepository } from "./repositories/thought-repository.ts";
@@ -56,7 +57,10 @@ const SUPABASE_URL = requireEnv("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 const MCP_ACCESS_KEY = requireEnv("MCP_ACCESS_KEY");
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient<Database>(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+);
 const logger = createFunctionCallLogger(supabase);
 // Repository seams over the `thoughts` / `tasks` tables (fix-plan Step 16).
 // Stateless wrappers over the shared client — constructed once and injected.
@@ -85,7 +89,7 @@ const aiProvider = createAiProvider();
 // construction adds only in-memory wiring, not a DB reconnect.
 
 function createMcpServer(
-  supabaseClient: SupabaseClient,
+  supabaseClient: AppSupabaseClient,
   callLogger: FunctionCallLogger,
   provider: AiProvider,
   repos: {
@@ -182,7 +186,7 @@ async function accessKeyMatches(
 // below owns all the logging and JSON-envelope scaffolding.
 
 interface HttpRouteContext {
-  supabase: SupabaseClient;
+  supabase: AppSupabaseClient;
   aiProvider: AiProvider;
   thoughtRepository: ThoughtRepository;
   taskRepository: TaskRepository;

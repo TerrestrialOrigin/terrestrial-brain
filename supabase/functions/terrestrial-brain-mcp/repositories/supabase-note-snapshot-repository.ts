@@ -4,7 +4,7 @@
  * formerly inline in `handleIngestNote` live here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NoteSnapshotRepository,
@@ -12,7 +12,7 @@ import type {
 } from "./note-snapshot-repository.ts";
 
 export class SupabaseNoteSnapshotRepository implements NoteSnapshotRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async findContentByReference(
     referenceId: string,

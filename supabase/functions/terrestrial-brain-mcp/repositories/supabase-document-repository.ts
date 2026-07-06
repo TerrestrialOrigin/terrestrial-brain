@@ -4,8 +4,9 @@
  * `tools/documents.ts` lives here.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AppSupabaseClient } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
+import { escapeLikePattern } from "../escape-like.ts";
 import type {
   DocumentForUpdateRow,
   DocumentFullRow,
@@ -17,7 +18,7 @@ import type {
 } from "./document-repository.ts";
 
 export class SupabaseDocumentRepository implements DocumentRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: AppSupabaseClient) {}
 
   async insert(
     values: NewDocumentValues,
@@ -51,10 +52,18 @@ export class SupabaseDocumentRepository implements DocumentRepository {
       .limit(filters.limit);
 
     if (filters.projectId) query = query.eq("project_id", filters.projectId);
+    // Escape LIKE metacharacters so user text matches literally — a bare `%`
+    // must not return every row (finding 5.3). PostgREST applies the SQL
+    // default `\` escape character to the escaped pattern.
     if (filters.titleContains) {
-      query = query.ilike("title", `%${filters.titleContains}%`);
+      query = query.ilike(
+        "title",
+        `%${escapeLikePattern(filters.titleContains)}%`,
+      );
     }
-    if (filters.search) query = query.ilike("content", `%${filters.search}%`);
+    if (filters.search) {
+      query = query.ilike("content", `%${escapeLikePattern(filters.search)}%`);
+    }
 
     const { data, error } = await query;
     return { data, error: toRepoError(error) };

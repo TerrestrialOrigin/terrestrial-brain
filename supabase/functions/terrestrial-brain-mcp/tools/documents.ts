@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { parseNote } from "../parser.ts";
 import {
@@ -46,15 +47,15 @@ export function register(
         content: z.string().describe(
           "Full document text in markdown — stored verbatim, never modified",
         ),
-        project_id: z.string().describe("UUID of the owning project"),
+        project_id: uuidField().describe("UUID of the owning project"),
         file_path: z.string().optional().describe(
           "Vault-relative path if this came from Obsidian — provenance only, not a write target",
         ),
         references: z.object({
-          people: z.string().array().optional().default([]).describe(
+          people: uuidField().array().optional().default([]).describe(
             "UUIDs of referenced people",
           ),
-          tasks: z.string().array().optional().default([]).describe(
+          tasks: uuidField().array().optional().default([]).describe(
             "UUIDs of referenced tasks",
           ),
         }).optional().describe(
@@ -149,7 +150,7 @@ export function register(
         "Retrieve a full document by ID, including complete content text. " +
         "Use this when you need source-level detail from a research doc or brief, not just the atomized thoughts derived from it.",
       inputSchema: {
-        id: z.string().describe("Document UUID"),
+        id: uuidField().describe("Document UUID"),
       },
     },
     withMcpLogging("get_document", async ({ id }) => {
@@ -200,15 +201,17 @@ export function register(
         "search (case-insensitive substring match on content). All filters combine with AND logic. " +
         "Returns metadata only (no content body). Use get_document with a specific ID to retrieve full content.",
       inputSchema: {
-        project_id: z.string().optional().describe("Filter by project UUID"),
+        project_id: uuidField().optional().describe(
+          "Filter by project UUID",
+        ),
         title_contains: z.string().optional().describe(
           "Case-insensitive substring match against document title",
         ),
         search: z.string().optional().describe(
           "Case-insensitive substring match against document content",
         ),
-        limit: z.number().optional().default(20).describe(
-          "Max results (default 20)",
+        limit: z.number().int().min(1).max(100).optional().default(20).describe(
+          "Max results (default 20, max 100)",
         ),
       },
     },
@@ -285,12 +288,12 @@ export function register(
         "and references are re-extracted from the new content. " +
         "After a content update, use capture_thought with document_ids to re-atomize the document into thoughts.",
       inputSchema: {
-        id: z.string().describe("UUID of the document to update"),
+        id: uuidField().describe("UUID of the document to update"),
         title: z.string().optional().describe("New document title"),
         content: z.string().optional().describe(
           "New full document text in markdown — replaces existing content verbatim",
         ),
-        project_id: z.string().optional().describe(
+        project_id: uuidField().optional().describe(
           "UUID of the new owning project",
         ),
       },
