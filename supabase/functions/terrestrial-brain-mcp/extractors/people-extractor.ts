@@ -11,7 +11,9 @@ import type {
   ExtractionContext,
   ExtractionResult,
   Extractor,
+  KnownPerson,
 } from "./pipeline.ts";
+import { REFERENCE_KEYS } from "./pipeline.ts";
 import { findPersonByName } from "./name-matching.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 
@@ -34,7 +36,7 @@ interface DetectedPerson {
  */
 async function detectAllPeople(
   noteContent: string,
-  knownPeople: { id: string; name: string }[],
+  knownPeople: KnownPerson[],
   aiProvider: AiProvider,
 ): Promise<DetectedPerson[]> {
   if (!noteContent.trim()) return [];
@@ -96,7 +98,7 @@ ${peopleList}`,
 // ---------------------------------------------------------------------------
 
 export class PeopleExtractor implements Extractor {
-  readonly referenceKey = "people";
+  readonly referenceKey = REFERENCE_KEYS.people;
 
   async extract(
     note: ParsedNote,
@@ -135,7 +137,7 @@ export class PeopleExtractor implements Extractor {
         }
       } else {
         // New person — check if already known by case-insensitive name match
-        const existingMatch = this.findByName(detected.name, uniquePeople);
+        const existingMatch = findPersonByName(detected.name, uniquePeople);
         if (existingMatch) {
           if (!resultIds.includes(existingMatch)) {
             resultIds.push(existingMatch);
@@ -154,17 +156,6 @@ export class PeopleExtractor implements Extractor {
       referenceKey: this.referenceKey,
       ids: resultIds,
     };
-  }
-
-  /**
-   * Two-tier name lookup: exact case-insensitive match, then partial
-   * name-part match (unambiguous only). Delegates to shared utility.
-   */
-  private findByName(
-    name: string,
-    knownPeople: { id: string; name: string }[],
-  ): string | null {
-    return findPersonByName(name, knownPeople);
   }
 
   /**

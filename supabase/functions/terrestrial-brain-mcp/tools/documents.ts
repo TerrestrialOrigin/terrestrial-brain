@@ -2,10 +2,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { parseNote } from "../parser.ts";
-import { runExtractionPipeline } from "../extractors/pipeline.ts";
-import { ProjectExtractor } from "../extractors/project-extractor.ts";
-import { PeopleExtractor } from "../extractors/people-extractor.ts";
-import { TaskExtractor } from "../extractors/task-extractor.ts";
+import {
+  createDefaultExtractors,
+  runExtractionPipeline,
+} from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
@@ -75,11 +75,7 @@ export function register(
             const parsedNote = parseNote(content, title, null, "mcp");
             const extractedRefs = await runExtractionPipeline(
               parsedNote,
-              [
-                new ProjectExtractor(),
-                new PeopleExtractor(),
-                new TaskExtractor(),
-              ],
+              createDefaultExtractors(),
               supabase,
               aiProvider,
               taskRepository,
@@ -337,11 +333,7 @@ export function register(
             const parsedNote = parseNote(content, effectiveTitle, null, "mcp");
             const extractedRefs = await runExtractionPipeline(
               parsedNote,
-              [
-                new ProjectExtractor(),
-                new PeopleExtractor(),
-                new TaskExtractor(),
-              ],
+              createDefaultExtractors(),
               supabase,
               aiProvider,
               taskRepository,

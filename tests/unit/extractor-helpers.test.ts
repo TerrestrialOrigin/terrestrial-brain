@@ -4,8 +4,8 @@ import {
   buildTaskMetadata,
   computeSimilarity,
   extractAssignment,
-  matchPersonInText,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
+import { findPersonInText } from "../../supabase/functions/terrestrial-brain-mcp/extractors/name-matching.ts";
 // Pure, deterministic extractor-helper unit tests. No DB, no network, no LLM.
 // Moved here from tests/integration/extractors.test.ts (Step 5 test-suite split).
 
@@ -114,22 +114,22 @@ const TEST_PEOPLE = [
 ];
 
 Deno.test("matchPersonInText: exact match returns person UUID", () => {
-  const result = matchPersonInText("Ask Alice about the design", TEST_PEOPLE);
+  const result = findPersonInText("Ask Alice about the design", TEST_PEOPLE);
   assertEquals(result, ALICE_ID);
 });
 
 Deno.test("matchPersonInText: case-insensitive match", () => {
-  const result = matchPersonInText("ask ALICE about the design", TEST_PEOPLE);
+  const result = findPersonInText("ask ALICE about the design", TEST_PEOPLE);
   assertEquals(result, ALICE_ID);
 });
 
 Deno.test("matchPersonInText: no match returns null", () => {
-  const result = matchPersonInText("Fix the login page", TEST_PEOPLE);
+  const result = findPersonInText("Fix the login page", TEST_PEOPLE);
   assertEquals(result, null);
 });
 
 Deno.test("matchPersonInText: multiple people returns first by position", () => {
-  const result = matchPersonInText(
+  const result = findPersonInText(
     "Claude and Alice reviewed this",
     TEST_PEOPLE,
   );
@@ -137,18 +137,18 @@ Deno.test("matchPersonInText: multiple people returns first by position", () => 
 });
 
 Deno.test("matchPersonInText: empty text returns null", () => {
-  const result = matchPersonInText("", TEST_PEOPLE);
+  const result = findPersonInText("", TEST_PEOPLE);
   assertEquals(result, null);
 });
 
 Deno.test("matchPersonInText: empty people list returns null", () => {
-  const result = matchPersonInText("Ask Alice", []);
+  const result = findPersonInText("Ask Alice", []);
   assertEquals(result, null);
 });
 
 Deno.test("matchPersonInText: skips very short names", () => {
   const shortNamePeople = [{ id: "short-id", name: "X" }];
-  const result = matchPersonInText("Fix X component", shortNamePeople);
+  const result = findPersonInText("Fix X component", shortNamePeople);
   assertEquals(result, null);
 });
 
@@ -160,12 +160,12 @@ const PARTIAL_PEOPLE = [
 ];
 
 Deno.test("matchPersonInText: first name matches when unambiguous", () => {
-  const result = matchPersonInText("Ask Bub about the deploy", PARTIAL_PEOPLE);
+  const result = findPersonInText("Ask Bub about the deploy", PARTIAL_PEOPLE);
   assertEquals(result, "id-bub");
 });
 
 Deno.test("matchPersonInText: last name matches when unambiguous", () => {
-  const result = matchPersonInText("Goodwin will handle this", PARTIAL_PEOPLE);
+  const result = findPersonInText("Goodwin will handle this", PARTIAL_PEOPLE);
   assertEquals(result, "id-bub");
 });
 
@@ -174,23 +174,23 @@ Deno.test("matchPersonInText: ambiguous partial name returns null", () => {
     { id: "id-john-s", name: "John Smith" },
     { id: "id-john-d", name: "John Doe" },
   ];
-  const result = matchPersonInText("John will review", ambiguousPeople);
+  const result = findPersonInText("John will review", ambiguousPeople);
   assertEquals(result, null);
 });
 
 Deno.test("matchPersonInText: full name match takes priority over partial", () => {
-  const result = matchPersonInText("Bub Goodwin mentioned it", PARTIAL_PEOPLE);
+  const result = findPersonInText("Bub Goodwin mentioned it", PARTIAL_PEOPLE);
   assertEquals(result, "id-bub");
 });
 
 Deno.test("matchPersonInText: partial match is case-insensitive", () => {
-  const result = matchPersonInText("talk to goodwin", PARTIAL_PEOPLE);
+  const result = findPersonInText("talk to goodwin", PARTIAL_PEOPLE);
   assertEquals(result, "id-bub");
 });
 
 Deno.test("matchPersonInText: partial name not matched inside other words", () => {
   const alPeople = [{ id: "id-al", name: "Al Green" }];
-  const result = matchPersonInText("Also check the logs", alPeople);
+  const result = findPersonInText("Also check the logs", alPeople);
   assertEquals(result, null);
 });
 

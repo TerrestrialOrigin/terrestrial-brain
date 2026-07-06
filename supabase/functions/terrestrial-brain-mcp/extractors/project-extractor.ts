@@ -13,7 +13,9 @@ import type {
   ExtractionContext,
   ExtractionResult,
   Extractor,
+  KnownProject,
 } from "./pipeline.ts";
+import { REFERENCE_KEYS } from "./pipeline.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 
 // ---------------------------------------------------------------------------
@@ -112,7 +114,7 @@ Return JSON: {"is_project": true/false, "project_name": "name" or null}`,
  */
 function detectProjectsByHeadings(
   note: ParsedNote,
-  knownProjects: { id: string; name: string }[],
+  knownProjects: KnownProject[],
 ): string[] {
   if (knownProjects.length === 0 || note.headings.length === 0) return [];
 
@@ -172,7 +174,7 @@ function buildNoteSummary(note: ParsedNote): string {
  */
 async function detectProjectsByContent(
   note: ParsedNote,
-  knownProjects: { id: string; name: string }[],
+  knownProjects: KnownProject[],
   aiProvider: AiProvider,
 ): Promise<string[]> {
   if (knownProjects.length === 0) return [];
@@ -221,7 +223,7 @@ ${projectList}`,
 // ---------------------------------------------------------------------------
 
 export class ProjectExtractor implements Extractor {
-  readonly referenceKey = "projects";
+  readonly referenceKey = REFERENCE_KEYS.projects;
 
   async extract(
     note: ParsedNote,

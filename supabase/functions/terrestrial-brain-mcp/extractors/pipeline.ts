@@ -11,6 +11,48 @@ import type { AiProvider } from "../ai/ai-provider.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
+import type { KnownPerson } from "./name-matching.ts";
+import { ProjectExtractor } from "./project-extractor.ts";
+import { PeopleExtractor } from "./people-extractor.ts";
+import { TaskExtractor } from "./task-extractor.ts";
+
+// ---------------------------------------------------------------------------
+// Reference keys
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical reference-key names shared by every extractor. Each extractor's
+ * `referenceKey` and every cross-extractor read of `accumulatedReferences`
+ * (e.g. TaskExtractor consuming the projects list) sources its key here, so a
+ * rename is a single edit and the coupling is greppable rather than a bare
+ * string literal.
+ */
+export const REFERENCE_KEYS = {
+  projects: "projects",
+  tasks: "tasks",
+  people: "people",
+} as const;
+
+export type ReferenceKey = typeof REFERENCE_KEYS[keyof typeof REFERENCE_KEYS];
+
+// ---------------------------------------------------------------------------
+// Shared entity types
+// ---------------------------------------------------------------------------
+
+/** A known/known-created project the extractors reason over. */
+export type KnownProject = { id: string; name: string };
+
+/** An existing task (with its note reference) used for reconciliation. */
+export type KnownTask = {
+  id: string;
+  content: string;
+  reference_id: string | null;
+};
+
+/** A task just created in this pipeline run — no reference_id needed. */
+export type NewTaskRef = { id: string; content: string };
+
+export type { KnownPerson };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,12 +68,12 @@ export interface ExtractionContext {
   projectRepository: ProjectRepository;
   /** Injected people-table seam — PeopleExtractor writes through this. */
   personRepository: PersonRepository;
-  knownProjects: { id: string; name: string }[];
-  knownTasks: { id: string; content: string; reference_id: string | null }[];
-  knownPeople: { id: string; name: string }[];
-  newlyCreatedProjects: { id: string; name: string }[];
-  newlyCreatedTasks: { id: string; content: string }[];
-  newlyCreatedPeople: { id: string; name: string }[];
+  knownProjects: KnownProject[];
+  knownTasks: KnownTask[];
+  knownPeople: KnownPerson[];
+  newlyCreatedProjects: KnownProject[];
+  newlyCreatedTasks: NewTaskRef[];
+  newlyCreatedPeople: KnownPerson[];
   /** References accumulated by previously-run extractors in the pipeline. */
   accumulatedReferences: Record<string, string[]>;
 }
@@ -48,6 +90,23 @@ export interface ExtractionResult {
   errors?: string[];
 }
 
+/**
+ * An extractor detects a class of references (projects, tasks, or people) in a
+ * parsed note.
+ *
+ * **Ordering is significant.** Extractors run in the fixed order given to
+ * `runExtractionPipeline` (see `createDefaultExtractors`), and a later extractor
+ * MAY depend on the references an earlier one produced: `TaskExtractor` reads the
+ * project ids `ProjectExtractor` accumulated (`context.accumulatedReferences`),
+ * so ProjectExtractor MUST run before it.
+ *
+ * **`extract` has side effects (detect + mutate + enrich).** Despite returning
+ * an `ExtractionResult`, `extract` also WRITES to the database (auto-creating
+ * projects/people, updating/creating/archiving tasks) and enriches the shared
+ * `context` for downstream extractors. A mid-pipeline failure can therefore
+ * leave partial writes; such failures are reported via `ExtractionResult.errors`
+ * and surfaced by the runner rather than swallowed.
+ */
 export interface Extractor {
   readonly referenceKey: string;
   extract(
@@ -142,4 +201,24 @@ export async function runExtractionPipeline(
   }
 
   return references;
+}
+
+// ---------------------------------------------------------------------------
+// Default extractor factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the standard ordered extractor sequence. Ordering is load-bearing —
+ * ProjectExtractor runs before TaskExtractor so the latter can consume the
+ * project references the former accumulates (see the `Extractor` contract).
+ *
+ * A fresh array is returned on every call so callers can never share (and
+ * accidentally mutate) a common instance.
+ */
+export function createDefaultExtractors(): Extractor[] {
+  return [
+    new ProjectExtractor(),
+    new PeopleExtractor(),
+    new TaskExtractor(),
+  ];
 }

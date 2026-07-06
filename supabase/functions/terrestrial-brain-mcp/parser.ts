@@ -38,7 +38,9 @@ export interface ParsedHeading {
 // Regex patterns
 // ---------------------------------------------------------------------------
 
-const CHECKBOX_PATTERN = /^\s*- \[([ xX])\] (.+)$/;
+// Accepts `-`, `*`, or `+` as the list bullet — Markdown allows all three and
+// Obsidian renders each identically as a task checkbox.
+const CHECKBOX_PATTERN = /^\s*[-*+] \[([ xX])\] (.+)$/;
 const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/;
 const FENCE_PATTERN = /^(\s*)(```|~~~)/;
 
@@ -137,7 +139,14 @@ export function parseHeadings(
 
 /**
  * Computes indentation depth from the leading whitespace of a line.
- * Each tab = 1 level. Each group of 2+ consecutive spaces = 1 level.
+ * Each tab = 1 level. Each group of 2 consecutive spaces = 1 level.
+ *
+ * Note on the 2-space assumption: Obsidian's default list indent is 4 spaces,
+ * which this parser reads as depth 2 for a single visual indent level. This is
+ * intentional and harmless: parent resolution (see `parseCheckboxes`) uses the
+ * *nearest shallower* checkbox rather than an exact depth delta, so the absolute
+ * spaces-per-level multiplier does not affect which checkbox becomes the parent.
+ * Tabs (Obsidian's other default) are already one level each.
  */
 export function computeIndentDepth(line: string): number {
   let depth = 0;
@@ -191,21 +200,6 @@ export function parseCheckboxes(
     const checked = marker === "x" || marker === "X";
     const depth = computeIndentDepth(lines[index]);
 
-    // Parent detection: nearest preceding checkbox at depth - 1
-    let parentIndex: number | null = null;
-    if (depth > 0) {
-      for (
-        let previousIndex = checkboxes.length - 1;
-        previousIndex >= 0;
-        previousIndex--
-      ) {
-        if (checkboxes[previousIndex].depth === depth - 1) {
-          parentIndex = previousIndex;
-          break;
-        }
-      }
-    }
-
     // Section heading: nearest heading above this line
     let sectionHeading: string | null = null;
     for (
@@ -216,6 +210,28 @@ export function parseCheckboxes(
       if (headings[headingIndex].lineStart < lineNumber) {
         sectionHeading = headings[headingIndex].text;
         break;
+      }
+    }
+
+    // Parent detection: nearest preceding checkbox with a strictly smaller
+    // depth, within the same section. Using "smaller depth" (not exactly
+    // depth - 1) means a 0 -> 2 indent jump nests to the depth-0 item instead
+    // of orphaning the child. The scan stops at a section boundary so a subtask
+    // never parents to a checkbox under a different heading.
+    let parentIndex: number | null = null;
+    if (depth > 0) {
+      for (
+        let previousIndex = checkboxes.length - 1;
+        previousIndex >= 0;
+        previousIndex--
+      ) {
+        if (checkboxes[previousIndex].sectionHeading !== sectionHeading) {
+          break;
+        }
+        if (checkboxes[previousIndex].depth < depth) {
+          parentIndex = previousIndex;
+          break;
+        }
       }
     }
 
