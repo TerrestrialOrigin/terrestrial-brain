@@ -62,9 +62,6 @@ export class AIOutputConfirmModal extends Modal {
 
   private renderList(contentEl: HTMLElement): void {
     const listContainer = contentEl.createDiv({ cls: "tb-ai-output-list" });
-    listContainer.style.maxHeight = "300px";
-    listContainer.style.overflowY = "auto";
-    listContainer.style.marginBottom = "16px";
 
     for (const metadata of this.metadataList) {
       this.renderItem(listContainer, metadata);
@@ -76,18 +73,13 @@ export class AIOutputConfirmModal extends Modal {
     const hasConflict = this.conflicts[metadata.id] === true;
 
     const item = listContainer.createDiv({ cls: "tb-ai-output-item" });
-    item.style.padding = "6px 0";
-    item.style.borderBottom = "1px solid var(--background-modifier-border)";
 
     const titleRow = item.createDiv({ cls: "tb-ai-output-title-row" });
-    titleRow.style.display = "flex";
-    titleRow.style.alignItems = "center";
-    titleRow.style.gap = "8px";
 
     titleRow.createEl("span", {
       text: metadata.title || metadata.file_path,
       cls: "tb-ai-output-title",
-    }).style.fontWeight = "600";
+    });
 
     this.renderBadge(titleRow, hasConflict);
 
@@ -95,7 +87,7 @@ export class AIOutputConfirmModal extends Modal {
     item.createEl("div", {
       text: detailParts.join(" · "),
       cls: "tb-ai-output-details",
-    }).style.color = "var(--text-muted)";
+    });
 
     if (hasConflict) {
       this.renderConflictControl(item, metadata.id);
@@ -103,31 +95,18 @@ export class AIOutputConfirmModal extends Modal {
   }
 
   private renderBadge(titleRow: HTMLElement, hasConflict: boolean): void {
-    const badge = titleRow.createEl("span", {
+    titleRow.createEl("span", {
       text: hasConflict ? "overwrites existing" : "new file",
-      cls: hasConflict ? "tb-ai-output-conflict" : "tb-ai-output-new",
+      cls: `tb-ai-output-badge ${hasConflict ? "tb-ai-output-conflict" : "tb-ai-output-new"}`,
     });
-    badge.style.fontSize = "0.8em";
-    badge.style.padding = "1px 6px";
-    badge.style.borderRadius = "4px";
-    if (hasConflict) {
-      badge.style.backgroundColor = "var(--background-modifier-error)";
-      badge.style.color = "var(--text-on-accent)";
-    } else {
-      badge.style.backgroundColor = "var(--background-modifier-success)";
-      badge.style.color = "var(--text-on-accent)";
-    }
   }
 
   private renderConflictControl(item: HTMLElement, outputId: string): void {
     const controlRow = item.createDiv({ cls: "tb-ai-output-conflict-control" });
-    controlRow.style.marginTop = "4px";
 
     const select = controlRow.createEl("select", { cls: "dropdown" });
-    const overwriteOption = select.createEl("option", { text: "Overwrite", value: "overwrite" });
-    overwriteOption.value = "overwrite";
-    const renameOption = select.createEl("option", { text: "Save as copy", value: "rename" });
-    renameOption.value = "rename";
+    select.createEl("option", { text: "Overwrite", value: "overwrite" });
+    select.createEl("option", { text: "Save as copy", value: "rename" });
     select.value = "overwrite";
 
     select.addEventListener("change", () => {
@@ -137,10 +116,6 @@ export class AIOutputConfirmModal extends Modal {
 
   private renderButtons(contentEl: HTMLElement): void {
     const buttonContainer = contentEl.createDiv({ cls: "tb-ai-output-buttons" });
-    buttonContainer.style.display = "flex";
-    buttonContainer.style.justifyContent = "flex-end";
-    buttonContainer.style.gap = "8px";
-    buttonContainer.style.marginTop = "16px";
 
     const rejectButton = buttonContainer.createEl("button", { text: "Reject All" });
     rejectButton.addEventListener("click", () => this.resolve("rejected"));

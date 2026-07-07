@@ -50,18 +50,46 @@ class MenuItemStub {
   onClick(callback: () => void): this { this.callback = callback; return this; }
 }
 
-/** A chainable element stub whose `style` is a plain object and children re-stub. */
-function makeElementStub(): any {
+/**
+ * A chainable element stub. `style` is a plain object; `createEl`/`createDiv`
+ * record the tag, `cls`, and `text` from their options and append the new child
+ * to `children`, so tests can traverse the rendered tree and assert on classes,
+ * text, and the absence of inline styles.
+ */
+function makeElementStub(tagName = "div", options: any = {}): any {
   const element: any = {
-    style: {},
-    value: "",
+    tagName,
+    cls: options.cls ?? "",
+    className: options.cls ?? "",
+    textContent: options.text ?? "",
+    value: options.value ?? "",
+    type: options.type ?? "",
     inputEl: { type: "" },
-    empty() {},
+    children: [] as any[],
+    style: {},
+    empty() { this.children.length = 0; },
     addEventListener() {},
-    createEl() { return makeElementStub(); },
-    createDiv() { return makeElementStub(); },
+    createEl(tag: string, opts: any = {}) {
+      const child = makeElementStub(tag, opts);
+      this.children.push(child);
+      return child;
+    },
+    createDiv(opts: any = {}) {
+      const child = makeElementStub("div", opts);
+      this.children.push(child);
+      return child;
+    },
   };
   return element;
+}
+
+/** Recursively collect every descendant element of a stub tree (excluding the root). */
+export function collectDescendants(element: any): any[] {
+  const all: any[] = [];
+  for (const child of element.children ?? []) {
+    all.push(child, ...collectDescendants(child));
+  }
+  return all;
 }
 
 export class Modal {

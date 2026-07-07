@@ -1,6 +1,6 @@
 {
   "name": "terrestrial-brain-dev",
-  "version": "0.3.0",
+  "version": "1.1.0",
   "description": "Dev build of Terrestrial Brain Obsidian plugin — points at local Supabase",
   "main": "dist/main.js",
   "scripts": {
@@ -10,12 +10,12 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.0.0",
     "builtin-modules": "3.3.0",
-    "esbuild": "^0.25.0",
-    "obsidian": "latest",
+    "esbuild": "^0.28.0",
+    "obsidian": "1.12.3",
     "tslib": "2.6.0",
-    "typescript": "5.3.3",
+    "typescript": "^6.0.0",
     "vitest": "^4.1.0"
   }
 }

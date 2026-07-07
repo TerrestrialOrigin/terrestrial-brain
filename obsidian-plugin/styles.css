@@ -1,0 +1,57 @@
+/*
+ * Terrestrial Brain — AI-output confirmation modal.
+ * Styles are keyed on the tb-ai-output-* classes applied in src/confirmModal.ts
+ * so that Obsidian themes can override them. Colors use Obsidian CSS variables
+ * to stay theme-aware in light and dark modes.
+ */
+
+.tb-ai-output-list {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.tb-ai-output-item {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tb-ai-output-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tb-ai-output-title {
+  font-weight: 600;
+}
+
+.tb-ai-output-details {
+  color: var(--text-muted);
+}
+
+.tb-ai-output-badge {
+  font-size: 0.8em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--text-on-accent);
+}
+
+.tb-ai-output-conflict {
+  background-color: var(--background-modifier-error);
+}
+
+.tb-ai-output-new {
+  background-color: var(--background-modifier-success);
+}
+
+.tb-ai-output-conflict-control {
+  margin-top: 4px;
+}
+
+.tb-ai-output-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
