@@ -21,7 +21,10 @@ insert into public.tasks (content, status, project_id) values
   ('Write migration files for new tables', 'open', '00000000-0000-0000-0000-000000000002'),
   ('Refactor edge function into modules', 'open', '00000000-0000-0000-0000-000000000002');
 
--- Test thoughts with project references
+-- Test thoughts with LEGACY-format project references (references.project_id string).
+-- Intentional: exercises the retained backward-compatible read paths (getProjectRefs
+-- and get_project_summary's old-format query) that survive after the 20260707000001
+-- schema-cleanup migration normalizes real data. No writer emits this format anymore.
 insert into public.thoughts (content, metadata) values
   ('Test Proj Backend needs response caching for the record lookup endpoint.',
    '{"type": "observation", "topics": ["Test Proj", "caching"], "references": {"project_id": "00000000-0000-0000-0000-000000000001"}}'),
