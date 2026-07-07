@@ -68,6 +68,8 @@ terrestrial-brain/
 │   ├── src/main.ts               #   Plugin entry point
 │   ├── src/main.test.ts          #   Plugin tests (Vitest)
 │   ├── manifest.json             #   Obsidian plugin metadata
+│   ├── versions.json             #   Plugin version → minimum Obsidian version map
+│   ├── styles.css                #   Modal styling (theme-overridable)
 │   └── package.json              #   Node dependencies & scripts
 ├── supabase/                     # Supabase backend
 │   ├── config.toml               #   Local dev configuration
@@ -266,6 +268,7 @@ mkdir -p /path/to/your/vault/.obsidian/plugins/terrestrial-brain
 # Copy the built plugin files
 cp obsidian-plugin/dist/main.js /path/to/your/vault/.obsidian/plugins/terrestrial-brain/
 cp obsidian-plugin/manifest.json /path/to/your/vault/.obsidian/plugins/terrestrial-brain/
+cp obsidian-plugin/styles.css /path/to/your/vault/.obsidian/plugins/terrestrial-brain/
 ```
 
 #### 6c. Enable the plugin
@@ -287,6 +290,21 @@ cp obsidian-plugin/manifest.json /path/to/your/vault/.obsidian/plugins/terrestri
    - **Poll interval** (minutes between checking for AI output, default 10)
    - **Exclude tag** (notes with this tag are not synced)
    - **Projects folder base** (where AI-generated project files are created)
+
+#### 6e. Commands and usage
+
+Once enabled, the plugin adds the following commands (open the command palette with **Ctrl/Cmd+P**):
+
+- **Sync current note to Terrestrial Brain** -- immediately sync the active note, bypassing the debounce timer.
+- **Sync entire vault to Terrestrial Brain** -- sync all non-excluded markdown files in the vault.
+- **Pull AI output from Terrestrial Brain** -- manually check for and retrieve pending AI-generated content.
+
+The ribbon **brain icon** offers a quick menu with:
+
+- **Sync note to Terrestrial Brain** -- sync the active note.
+- **Pull AI Output from Terrestrial Brain** -- check for pending AI output.
+
+**Excluding a note from sync.** Put the exclude tag anywhere in a note (inline or in frontmatter) to keep it out of Terrestrial Brain. The tag is configurable in the plugin settings and defaults to `terrestrialBrainExclude`.
 
 ### Step 7: Connect AI Agents via MCP
 
