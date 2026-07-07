@@ -52,15 +52,26 @@ export function isExcludedByCache(cache: ExclusionCache | null, excludeTag: stri
   return [...inlineTags, ...frontmatterTagList].includes(tagLower);
 }
 
-export function simpleHash(str: string): string {
+/**
+ * djb2-style 32-bit string hash used only for change detection (has this note's
+ * content changed since we last synced it?). The 32-bit width means collisions
+ * are theoretically possible, but the consequence of one is merely a missed
+ * re-sync of a single note — never data loss — so the trade-off is accepted here
+ * in favour of a tiny, dependency-free, synchronous hash. Do NOT reuse this for
+ * anything security- or integrity-sensitive.
+ */
+export function simpleHash(input: string): string {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const chr = str.charCodeAt(i);
-    hash = (hash << 5) - hash + chr;
+  for (let i = 0; i < input.length; i++) {
+    const charCode = input.charCodeAt(i);
+    hash = (hash << 5) - hash + charCode;
     hash |= 0;
   }
   return String(hash);
 }
+
+/** Milliseconds in one minute — used to convert minute-based settings to ms. */
+export const MS_PER_MINUTE = 60000;
 
 /**
  * Given the MCP endpoint URL (e.g. "https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp?key=abc"),

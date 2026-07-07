@@ -109,7 +109,7 @@ function createMcpServer(
   },
 ): McpServer {
   const server = new McpServer({
-    name: "open-brain",
+    name: "terrestrial-brain",
     version: "1.0.0",
   });
 
@@ -390,29 +390,31 @@ app.use(
 // Supabase Edge Functions may not pass subpaths to Hono's router, so we check
 // the raw URL to distinguish /ingest-note from MCP requests.
 
-app.all("*", async (c) => {
-  const url = new URL(c.req.url);
+app.all("*", async (context) => {
+  const url = new URL(context.req.url);
   // x-brain-key header is the primary mechanism; ?key= is a deprecated
   // fallback kept for MCP clients that cannot set custom headers.
-  const providedKey = c.req.header("x-brain-key") ||
+  const providedKey = context.req.header("x-brain-key") ||
     url.searchParams.get("key");
   if (!providedKey || !(await accessKeyMatches(providedKey, MCP_ACCESS_KEY))) {
-    return c.json({ error: "Invalid or missing access key" }, 401);
+    return context.json({ error: "Invalid or missing access key" }, 401);
   }
 
-  const ipAddress = extractIpAddress(c.req.raw.headers);
+  const ipAddress = extractIpAddress(context.req.raw.headers);
 
   // Direct HTTP routes (table-driven; see HTTP_ROUTES above). Matched by path
   // suffix on POST; everything else falls through to the MCP transport below.
-  if (c.req.method === "POST") {
-    const route = HTTP_ROUTES.find((r) => url.pathname.endsWith(r.suffix));
+  if (context.req.method === "POST") {
+    const route = HTTP_ROUTES.find((httpRoute) =>
+      url.pathname.endsWith(httpRoute.suffix)
+    );
     if (route) {
       try {
         // parseBody routes read JSON up front; malformed JSON throws here and is
         // caught below as a 500 (matching the previous per-block behavior), and
         // no call is logged — the parse fails before logCall, as before.
         const body: Record<string, unknown> = route.parseBody
-          ? await c.req.json()
+          ? await context.req.json()
           : {};
         const logId = await logger.logCall(
           route.logName,
@@ -435,7 +437,10 @@ app.all("*", async (c) => {
 
         if (!result.ok) {
           if (logId) await logger.logResult(logId, 0, 0, result.error);
-          return c.json({ success: false, error: result.error }, result.status);
+          return context.json(
+            { success: false, error: result.error },
+            result.status,
+          );
         }
 
         if (result.data !== undefined) {
@@ -447,7 +452,7 @@ app.all("*", async (c) => {
               responseJson.length,
             );
           }
-          return c.json({ success: true, data: result.data });
+          return context.json({ success: true, data: result.data });
         }
 
         const responseText = result.message ?? "";
@@ -458,9 +463,12 @@ app.all("*", async (c) => {
             responseText.length,
           );
         }
-        return c.json({ success: true, message: result.message });
-      } catch (err: unknown) {
-        return c.json({ success: false, error: (err as Error).message }, 500);
+        return context.json({ success: true, message: result.message });
+      } catch (error: unknown) {
+        return context.json(
+          { success: false, error: (error as Error).message },
+          500,
+        );
       }
     }
   }
@@ -481,7 +489,7 @@ app.all("*", async (c) => {
     });
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
-    return transport.handleRequest(c);
+    return transport.handleRequest(context);
   });
 });
 

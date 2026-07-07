@@ -162,8 +162,10 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
     }),
   );
 
-  const succeeded = results.filter((r) => r.status === "fulfilled").length;
-  const failed = results.filter((r) => r.status === "rejected").length;
+  const succeeded =
+    results.filter((result) => result.status === "fulfilled").length;
+  const failed =
+    results.filter((result) => result.status === "rejected").length;
 
   const taskCount = pipelineRefs.tasks?.length || 0;
   const projectCount = pipelineRefs.projects?.length || 0;

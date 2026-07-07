@@ -12,7 +12,7 @@ import {
   SyncedHashStore,
   UserNotifier,
 } from "./ports";
-import { simpleHash, stripFrontmatter, truncateForNotice } from "./utils";
+import { MS_PER_MINUTE, simpleHash, stripFrontmatter, truncateForNotice } from "./utils";
 
 /** Outcome of a single processNote call — lets callers count real results. */
 export type SyncOutcome = "synced" | "skipped" | "failed";
@@ -21,7 +21,10 @@ export type SyncOutcome = "synced" | "skipped" | "failed";
 export const MAX_RETRY_ATTEMPTS = 3;
 
 /** Upper bound on the backoff delay between scheduled-sync retries. */
-export const MAX_RETRY_DELAY_MS = 30 * 60000; // 30 minutes
+export const MAX_RETRY_DELAY_MS = 30 * MS_PER_MINUTE; // 30 minutes
+
+/** How long the "Syncing…" progress Notice stays on screen (ms). */
+export const SYNCING_NOTICE_MS = 2000;
 
 export interface SyncEngineConfig {
   getEndpointUrl(): string;
@@ -204,10 +207,10 @@ export class SyncEngine {
 
   async processNote(
     file: TFile,
-    opts: { force?: boolean; silent?: boolean } = {},
+    options: { force?: boolean; silent?: boolean } = {},
   ): Promise<SyncOutcome> {
     if (this.deps.classifier.isExcluded(file)) {
-      if (opts.force && !opts.silent) {
+      if (options.force && !options.silent) {
         this.deps.notifier.notify(`⏭️ "${file.basename}" is excluded from Terrestrial Brain`);
       }
       return "skipped";
@@ -231,10 +234,12 @@ export class SyncEngine {
     if (!stripped) return "skipped";
 
     const hash = simpleHash(stripped);
-    if (!opts.force && this.deps.hashes.get(file.path) === hash) return "skipped";
+    if (!options.force && this.deps.hashes.get(file.path) === hash) {
+      return "skipped";
+    }
 
-    if (!opts.silent) {
-      this.deps.notifier.notify(`🧠 Syncing "${file.basename}"...`, 2000);
+    if (!options.silent) {
+      this.deps.notifier.notify(`🧠 Syncing "${file.basename}"...`, SYNCING_NOTICE_MS);
     }
 
     try {
@@ -243,13 +248,13 @@ export class SyncEngine {
       this.deps.hashes.set(file.path, hash);
       await this.deps.hashes.persist();
 
-      if (!opts.silent) {
+      if (!options.silent) {
         this.deps.notifier.notify(`✅ ${result}`);
       }
       return "synced";
     } catch (error) {
       console.error("TB Plugin error:", error);
-      if (!opts.silent) {
+      if (!options.silent) {
         this.deps.notifier.notify(`❌ Terrestrial Brain: ${truncateForNotice((error as Error).message)}`);
       }
       return "failed";

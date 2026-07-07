@@ -10,6 +10,7 @@ import type {
 } from "../repositories/task-repository.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { TASK_STATUSES } from "../enums.ts";
+import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 
 /** Resolves a batch of ids to a `Map<id, displayValue>` (injected for testing). */
 type NameResolver = (ids: string[]) => Promise<Map<string, string>>;
@@ -176,7 +177,9 @@ export function register(
         include_archived: z.boolean().optional().default(false).describe(
           "Include archived tasks",
         ),
-        limit: z.number().int().min(1).max(100).optional().default(20).describe(
+        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional().default(
+          DEFAULT_LIST_LIMIT,
+        ).describe(
           "Max results (default 20, max 100)",
         ),
       },

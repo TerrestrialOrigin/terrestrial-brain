@@ -10,6 +10,7 @@ import {
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
@@ -210,7 +211,9 @@ export function register(
         search: z.string().optional().describe(
           "Case-insensitive substring match against document content",
         ),
-        limit: z.number().int().min(1).max(100).optional().default(20).describe(
+        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional().default(
+          DEFAULT_LIST_LIMIT,
+        ).describe(
           "Max results (default 20, max 100)",
         ),
       },
