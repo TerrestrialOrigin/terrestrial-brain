@@ -24,7 +24,10 @@ import {
   TBSettingTab,
 } from "./settings";
 import { AIOutputMetadata } from "./apiClient";
-import { isExcludedByCache } from "./utils";
+import { isExcludedByCache, MS_PER_MINUTE } from "./utils";
+
+/** Delay before the first AI-output poll after startup (ms), so onload finishes first. */
+const INITIAL_POLL_DELAY_MS = 2000;
 
 export default class TerrestrialBrainPlugin extends Plugin {
   settings!: TBPluginSettings;
@@ -101,7 +104,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
       hashes,
       config: {
         getEndpointUrl: () => this.settings.tbEndpointUrl,
-        getSyncDelayMs: () => this.settings.syncDelayMinutes * 60000,
+        getSyncDelayMs: () => this.settings.syncDelayMinutes * MS_PER_MINUTE,
       },
     });
     this.poller = new AiOutputPoller({
@@ -201,7 +204,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   private startPolling(): void {
     // Poll for AI output shortly after startup (deferred so onload completes first).
-    window.setTimeout(() => this.poller.pollAIOutput(), 2000);
+    window.setTimeout(() => this.poller.pollAIOutput(), INITIAL_POLL_DELAY_MS);
     // Then poll on interval (tracked so it can be re-registered when settings change).
     this.applyPollInterval();
   }
@@ -235,7 +238,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
       window.clearInterval(this.pollIntervalId);
     }
     this.pollIntervalId = this.registerInterval(
-      window.setInterval(() => this.poller.pollAIOutput(), this.settings.pollIntervalMinutes * 60000),
+      window.setInterval(() => this.poller.pollAIOutput(), this.settings.pollIntervalMinutes * MS_PER_MINUTE),
     );
     this.appliedPollIntervalMinutes = this.settings.pollIntervalMinutes;
   }

@@ -4,7 +4,7 @@
 // unit-testable without a plugin instance.
 
 import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { extractKeyFromUrl, isInsecureEndpoint } from "./utils";
+import { extractKeyFromUrl, isInsecureEndpoint, MS_PER_MINUTE } from "./utils";
 import { MAX_RETRY_ATTEMPTS } from "./syncEngine";
 
 export interface TBPluginSettings {
@@ -62,12 +62,12 @@ export function mergeAndMigrateSettings(
 
   // Migrate legacy millisecond settings to minutes.
   if ("debounceMs" in raw && !("syncDelayMinutes" in raw)) {
-    const ms = raw.debounceMs;
-    settings.syncDelayMinutes = (typeof ms === "number" ? Math.round(ms / 60000) : 0) || DEFAULT_SETTINGS.syncDelayMinutes;
+    const legacyMilliseconds = raw.debounceMs;
+    settings.syncDelayMinutes = (typeof legacyMilliseconds === "number" ? Math.round(legacyMilliseconds / MS_PER_MINUTE) : 0) || DEFAULT_SETTINGS.syncDelayMinutes;
   }
   if ("pollIntervalMs" in raw && !("pollIntervalMinutes" in raw)) {
-    const ms = raw.pollIntervalMs;
-    settings.pollIntervalMinutes = (typeof ms === "number" ? Math.round(ms / 60000) : 0) || DEFAULT_SETTINGS.pollIntervalMinutes;
+    const legacyMilliseconds = raw.pollIntervalMs;
+    settings.pollIntervalMinutes = (typeof legacyMilliseconds === "number" ? Math.round(legacyMilliseconds / MS_PER_MINUTE) : 0) || DEFAULT_SETTINGS.pollIntervalMinutes;
   }
 
   let changed = OBSOLETE_SETTING_KEYS.some((key) => key in raw);

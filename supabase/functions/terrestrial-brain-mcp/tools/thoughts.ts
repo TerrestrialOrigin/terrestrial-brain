@@ -17,6 +17,7 @@ import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { RELIABILITIES, THOUGHT_TYPES } from "../enums.ts";
+import { DEFAULT_THOUGHT_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import {
   buildUsefulnessHeader,
   buildUsefulnessReminder,
@@ -31,6 +32,9 @@ import type { TaskRepository } from "../repositories/task-repository.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
 import type { NoteSnapshotRepository } from "../repositories/note-snapshot-repository.ts";
+
+/** Max characters of a thought's content shown in the archive-list preview. */
+const ARCHIVE_PREVIEW_LENGTH = 80;
 
 interface ThoughtUpdateFields {
   content?: string;
@@ -152,7 +156,9 @@ export function register(
         query: z.string().describe(
           "Natural language description of what to search for — works best as a phrase or sentence, not single keywords",
         ),
-        limit: z.number().int().min(1).max(100).optional().default(10),
+        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional().default(
+          DEFAULT_THOUGHT_LIMIT,
+        ),
         threshold: z.number().optional().default(0.5),
         author: z.string().optional().describe(
           "Filter by the model that authored the thought, e.g. 'claude-sonnet-4-6' or 'gpt-4o-mini'",
@@ -165,9 +171,9 @@ export function register(
     withMcpLogging(
       "search_thoughts",
       async ({ query, limit, threshold, author, reliability }) => {
-        const qEmb = await getEmbedding(aiProvider, query);
+        const queryEmbedding = await getEmbedding(aiProvider, query);
         const { data, error } = await thoughtRepository.matchByEmbedding({
-          embedding: qEmb,
+          embedding: queryEmbedding,
           threshold,
           count: limit,
           author: author || null,
@@ -197,51 +203,65 @@ export function register(
         );
 
         const results = data.map(
-          (t, i: number) => {
-            const m = (t.metadata ?? {}) as Record<string, unknown>;
+          (thought, i: number) => {
+            const metadata = (thought.metadata ?? {}) as Record<
+              string,
+              unknown
+            >;
             const parts = [
               `--- Result ${i + 1} (${
-                (t.similarity * 100).toFixed(1)
+                (thought.similarity * 100).toFixed(1)
               }% match) ---`,
-              `ID: ${t.id}`,
-              `Captured: ${new Date(t.created_at).toISOString()}`,
+              `ID: ${thought.id}`,
+              `Captured: ${new Date(thought.created_at).toISOString()}`,
             ];
-            if (t.updated_at) {
-              parts.push(`Updated: ${new Date(t.updated_at).toISOString()}`);
+            if (thought.updated_at) {
+              parts.push(
+                `Updated: ${new Date(thought.updated_at).toISOString()}`,
+              );
             }
-            parts.push(`Type: ${m.type || "unknown"}`);
-            if (t.reliability || t.author) {
+            parts.push(`Type: ${metadata.type || "unknown"}`);
+            if (thought.reliability || thought.author) {
               const provenanceParts: string[] = [];
-              if (t.reliability) {
+              if (thought.reliability) {
                 provenanceParts.push(
-                  `Reliability: ${t.reliability}`,
+                  `Reliability: ${thought.reliability}`,
                 );
               }
-              if (t.author) provenanceParts.push(`Author: ${t.author}`);
+              if (thought.author) {
+                provenanceParts.push(`Author: ${thought.author}`);
+              }
               parts.push(provenanceParts.join(" | "));
             }
-            if (Array.isArray(m.topics) && m.topics.length) {
-              parts.push(`Topics: ${(m.topics as string[]).join(", ")}`);
+            if (Array.isArray(metadata.topics) && metadata.topics.length) {
+              parts.push(`Topics: ${(metadata.topics as string[]).join(", ")}`);
             }
-            if (Array.isArray(m.people) && m.people.length) {
-              parts.push(`People: ${(m.people as string[]).join(", ")}`);
+            if (Array.isArray(metadata.people) && metadata.people.length) {
+              parts.push(`People: ${(metadata.people as string[]).join(", ")}`);
             }
-            const projectRefs = getProjectRefs(m as Record<string, unknown>);
+            const projectRefs = getProjectRefs(
+              metadata as Record<string, unknown>,
+            );
             if (projectRefs.length > 0) {
               const projectNames = projectRefs.map((uuid) =>
                 projectNameMap.get(uuid) || uuid
               );
               parts.push(`Projects: ${projectNames.join(", ")}`);
             }
-            if (Array.isArray(m.action_items) && m.action_items.length) {
-              parts.push(`Actions: ${(m.action_items as string[]).join("; ")}`);
+            if (
+              Array.isArray(metadata.action_items) &&
+              metadata.action_items.length
+            ) {
+              parts.push(
+                `Actions: ${(metadata.action_items as string[]).join("; ")}`,
+              );
             }
-            parts.push(`\n${t.content}`);
+            parts.push(`\n${thought.content}`);
             return parts.join("\n");
           },
         );
 
-        const thoughtIds = data.map((t: { id: string }) => t.id);
+        const thoughtIds = data.map((thought: { id: string }) => thought.id);
         // search_thoughts intentionally emits the reminder as BOTH header and
         // footer: a long results block pushes the header far up the context
         // window, so repeating the required-action reminder at the end keeps it
@@ -273,7 +293,9 @@ export function register(
         "If none contributed (common when browsing), call it with an empty array to acknowledge the scan. " +
         "Also scan the returned thoughts for contradictions or clearly outdated information — if you notice any, flag them to the user in your response (do NOT archive silently).",
       inputSchema: {
-        limit: z.number().int().min(1).max(100).optional().default(10),
+        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional().default(
+          DEFAULT_THOUGHT_LIMIT,
+        ),
         type: z.enum(THOUGHT_TYPES).optional().describe(
           "Filter by type: observation, task, idea, reference, person_note",
         ),
@@ -346,43 +368,54 @@ export function register(
         );
 
         const results = data.map(
-          (t, i: number) => {
-            const m = (t.metadata ?? {}) as Record<string, unknown>;
-            const tags = Array.isArray(m.topics)
-              ? (m.topics as string[]).join(", ")
+          (thought, i: number) => {
+            const metadata = (thought.metadata ?? {}) as Record<
+              string,
+              unknown
+            >;
+            const tags = Array.isArray(metadata.topics)
+              ? (metadata.topics as string[]).join(", ")
               : "";
             const parts = [
               `${i + 1}. [${
-                t.created_at ? new Date(t.created_at).toISOString() : "unknown"
-              }] (${m.type || "??"}${tags ? " - " + tags : ""})`,
-              `   ID: ${t.id}`,
+                thought.created_at
+                  ? new Date(thought.created_at).toISOString()
+                  : "unknown"
+              }] (${metadata.type || "??"}${tags ? " - " + tags : ""})`,
+              `   ID: ${thought.id}`,
             ];
-            if (t.updated_at) {
-              parts.push(`   Updated: ${new Date(t.updated_at).toISOString()}`);
+            if (thought.updated_at) {
+              parts.push(
+                `   Updated: ${new Date(thought.updated_at).toISOString()}`,
+              );
             }
-            if (t.reliability || t.author) {
+            if (thought.reliability || thought.author) {
               const provenanceParts: string[] = [];
-              if (t.reliability) {
+              if (thought.reliability) {
                 provenanceParts.push(
-                  `Reliability: ${t.reliability}`,
+                  `Reliability: ${thought.reliability}`,
                 );
               }
-              if (t.author) provenanceParts.push(`Author: ${t.author}`);
+              if (thought.author) {
+                provenanceParts.push(`Author: ${thought.author}`);
+              }
               parts.push(`   ${provenanceParts.join(" | ")}`);
             }
-            const projectRefs = getProjectRefs(m as Record<string, unknown>);
+            const projectRefs = getProjectRefs(
+              metadata as Record<string, unknown>,
+            );
             if (projectRefs.length > 0) {
               const projectNames = projectRefs.map((uuid) =>
                 projectNameMap.get(uuid) || uuid
               );
               parts.push(`   Projects: ${projectNames.join(", ")}`);
             }
-            parts.push(`   ${t.content}`);
+            parts.push(`   ${thought.content}`);
             return parts.join("\n");
           },
         );
 
-        const thoughtIds = data.map((t: { id: string }) => t.id);
+        const thoughtIds = data.map((thought: { id: string }) => thought.id);
         const header = buildUsefulnessHeader(thoughtIds, "soft");
         const footer = buildUsefulnessReminder(thoughtIds, "soft");
 
@@ -805,8 +838,8 @@ export function register(
         return errorResult(`Archive failed: ${archiveError.message}`);
       }
 
-      const preview = thought.content.length > 80
-        ? thought.content.slice(0, 80) + "…"
+      const preview = thought.content.length > ARCHIVE_PREVIEW_LENGTH
+        ? thought.content.slice(0, ARCHIVE_PREVIEW_LENGTH) + "…"
         : thought.content;
       return textResult(`Archived thought: "${preview}"`);
     }, logger),
@@ -915,10 +948,12 @@ export async function requestReconciliationPlan(
   content: string,
 ): Promise<ReconciliationPlan | null> {
   const existingForPrompt = existingThoughts
-    .map((t) =>
-      `[ID:${t.id}] (captured ${
-        t.created_at ? new Date(t.created_at).toLocaleDateString() : "unknown"
-      })\n${t.content}`
+    .map((thought) =>
+      `[ID:${thought.id}] (captured ${
+        thought.created_at
+          ? new Date(thought.created_at).toLocaleDateString()
+          : "unknown"
+      })\n${thought.content}`
     )
     .join("\n\n");
 
@@ -1068,7 +1103,8 @@ export async function executeReconciliationPlan(
   }
 
   const results = await Promise.allSettled(ops);
-  const failures = results.filter((r) => r.status === "rejected").length;
+  const failures =
+    results.filter((result) => result.status === "rejected").length;
   return { updated, added, deleted, failures, opsLength: ops.length };
 }
 

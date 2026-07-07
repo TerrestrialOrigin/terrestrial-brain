@@ -99,46 +99,51 @@ export function register(
 
         // Get parent names for display (shared batched resolver).
         const parentIds = data
-          .filter((p) => p.parent_id)
-          .map((p) => p.parent_id as string);
+          .filter((project) => project.parent_id)
+          .map((project) => project.parent_id as string);
         const parentMap = parentIds.length > 0
           ? await resolveNames(supabase, "projects", parentIds)
           : new Map<string, string>();
 
         // Get child counts
-        const projectIds = data.map((p) => p.id);
+        const projectIds = data.map((project) => project.id);
         const { data: children } = await projectRepository.listChildParentIds(
           projectIds,
         );
         const childCounts: Record<string, number> = {};
-        for (const c of children || []) {
+        for (const child of children || []) {
           // The query filters on `parent_id IN (…)`, so it is never null here;
           // the guard satisfies the schema-nullable type.
-          if (c.parent_id) {
-            childCounts[c.parent_id] = (childCounts[c.parent_id] || 0) + 1;
+          if (child.parent_id) {
+            childCounts[child.parent_id] = (childCounts[child.parent_id] || 0) +
+              1;
           }
         }
 
-        const lines = data.map((p, i) => {
+        const lines = data.map((project, i) => {
           const parts = [
-            `${i + 1}. ${p.name}`,
-            `   ID: ${p.id}`,
-            `   Type: ${p.type || "—"}`,
+            `${i + 1}. ${project.name}`,
+            `   ID: ${project.id}`,
+            `   Type: ${project.type || "—"}`,
           ];
-          if (p.parent_id && parentMap.get(p.parent_id)) {
-            parts.push(`   Parent: ${parentMap.get(p.parent_id)}`);
+          if (project.parent_id && parentMap.get(project.parent_id)) {
+            parts.push(`   Parent: ${parentMap.get(project.parent_id)}`);
           }
-          if (childCounts[p.id]) {
-            parts.push(`   Children: ${childCounts[p.id]}`);
+          if (childCounts[project.id]) {
+            parts.push(`   Children: ${childCounts[project.id]}`);
           }
           parts.push(
             `   Created: ${
-              p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"
+              project.created_at
+                ? new Date(project.created_at).toLocaleDateString()
+                : "—"
             }`,
           );
-          if (p.archived_at) {
+          if (project.archived_at) {
             parts.push(
-              `   Archived: ${new Date(p.archived_at).toLocaleDateString()}`,
+              `   Archived: ${
+                new Date(project.archived_at).toLocaleDateString()
+              }`,
             );
           }
           return parts.join("\n");
@@ -204,7 +209,8 @@ export function register(
       if (children && children.length > 0) {
         lines.push(
           `Children: ${
-            children.map((c) => `${c.name} (${c.type || "—"})`).join(", ")
+            children.map((child) => `${child.name} (${child.type || "—"})`)
+              .join(", ")
           }`,
         );
       }
@@ -302,12 +308,12 @@ export function register(
     },
     withMcpLogging("archive_project", async ({ id }) => {
       // Get the project name
-      const { data: project, error: fetchErr } = await projectRepository
+      const { data: project, error: fetchError } = await projectRepository
         .findName(id);
 
-      if (fetchErr || !project) {
+      if (fetchError || !project) {
         return errorResult(
-          `Project not found: ${fetchErr?.message || "unknown"}`,
+          `Project not found: ${fetchError?.message || "unknown"}`,
         );
       }
 
@@ -315,23 +321,24 @@ export function register(
       const allProjectIds: string[] = [id];
       let frontier = [id];
       while (frontier.length > 0) {
-        const { data: kids } = await projectRepository.listActiveChildIds(
-          frontier,
-        );
+        const { data: childProjects } = await projectRepository
+          .listActiveChildIds(
+            frontier,
+          );
 
-        frontier = (kids || []).map((k) => k.id);
+        frontier = (childProjects || []).map((child) => child.id);
         allProjectIds.push(...frontier);
       }
 
       const childCount = allProjectIds.length - 1;
 
       // Archive all projects
-      const { error: archiveErr } = await projectRepository.archiveManyActive(
+      const { error: archiveError } = await projectRepository.archiveManyActive(
         allProjectIds,
       );
 
-      if (archiveErr) {
-        throw new Error(`Archive projects failed: ${archiveErr.message}`);
+      if (archiveError) {
+        throw new Error(`Archive projects failed: ${archiveError.message}`);
       }
 
       // Archive open tasks for all these projects
@@ -341,11 +348,11 @@ export function register(
 
       let taskCount = 0;
       if (tasks && tasks.length > 0) {
-        const taskIds = tasks.map((t) => t.id);
-        const { error: taskErr } = await taskRepository.archiveMany(taskIds);
+        const taskIds = tasks.map((task) => task.id);
+        const { error: taskError } = await taskRepository.archiveMany(taskIds);
 
-        if (taskErr) {
-          throw new Error(`Archive tasks failed: ${taskErr.message}`);
+        if (taskError) {
+          throw new Error(`Archive tasks failed: ${taskError.message}`);
         }
         taskCount = tasks.length;
       }

@@ -21,6 +21,9 @@ import type {
   UpdatedNamedRow,
 } from "../repositories/query-repository.ts";
 
+/** Max thoughts shown in a project summary, most recent first. */
+const MAX_PROJECT_THOUGHTS = 25;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -136,7 +139,7 @@ async function fetchProjectSummary(
   ]);
   const thoughtsError = newFormatThoughtsError ?? oldFormatThoughtsError;
 
-  // Merge and deduplicate by ID, then take top 25 by date
+  // Merge and deduplicate by ID, then take the most recent by date
   const allProjectThoughts = [
     ...(newFormatThoughts || []),
     ...(oldFormatThoughts || []),
@@ -152,7 +155,7 @@ async function fetchProjectSummary(
       new Date(thoughtB.created_at ?? 0).getTime() -
       new Date(thoughtA.created_at ?? 0).getTime()
     )
-    .slice(0, 25);
+    .slice(0, MAX_PROJECT_THOUGHTS);
 
   const snapshotMap = await fetchSnapshotMap(queryRepository, matchingThoughts);
   const personMap = await fetchTaskPersonMap(queryRepository, tasks.data);
