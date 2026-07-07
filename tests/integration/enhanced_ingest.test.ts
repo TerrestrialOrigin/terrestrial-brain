@@ -1,5 +1,4 @@
 import { assertEquals, assertExists } from "@std/assert";
-import { getProjectRefs } from "../../supabase/functions/terrestrial-brain-mcp/helpers.ts";
 import {
   callHTTP,
   callIngestNote,
@@ -359,29 +358,9 @@ Deno.test("capture_thought: content with checkbox creates task", async () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// 5.7 — getProjectRefs backwards compatibility
-// ---------------------------------------------------------------------------
-
-Deno.test("getProjectRefs: reads new format (projects array)", () => {
-  const metadata = {
-    references: { projects: ["uuid-1", "uuid-2"], tasks: ["uuid-3"] },
-  };
-  const result = getProjectRefs(metadata);
-  assertEquals(result, ["uuid-1", "uuid-2"]);
-});
-
-Deno.test("getProjectRefs: reads old format (project_id string)", () => {
-  const metadata = { references: { project_id: "old-uuid" } };
-  const result = getProjectRefs(metadata);
-  assertEquals(result, ["old-uuid"]);
-});
-
-Deno.test("getProjectRefs: returns empty for no references", () => {
-  assertEquals(getProjectRefs({}), []);
-  assertEquals(getProjectRefs({ references: {} }), []);
-  assertEquals(getProjectRefs({ something: "else" }), []);
-});
+// Note: getProjectRefs backward-compatibility unit tests moved to
+// tests/unit/get-project-refs.test.ts (pure unit, no DB) as part of the
+// dual-format simplification (fix-plan Step 28).
 
 // ---------------------------------------------------------------------------
 // 5.8 — ingest_note thoughts have note_snapshot_id set

@@ -70,6 +70,27 @@ When adding new migrations, follow these rules to avoid data loss:
 - **Use `CREATE OR REPLACE FUNCTION`** for function updates so the old version is replaced cleanly.
 - **Test locally first.** Run `npx supabase db reset` locally to verify all migrations apply cleanly before pushing to production.
 
+## Conventions
+
+These conventions keep the append-only migration history readable as the schema grows.
+
+### `match_thoughts` canonical reference file
+
+Because migrations are append-only, a function like `match_thoughts` is re-created in full by whichever migration last changed it — so its live definition is otherwise only findable by diffing migrations. To make it discoverable from one place, [`supabase/schemas/match_thoughts.sql`](../supabase/schemas/match_thoughts.sql) holds an always-latest **reference copy**.
+
+That file is **not** part of the executable apply path (the migrations remain the single source of truth). Keep it in sync by rule:
+
+> **When you change `match_thoughts`:** add a new migration that re-creates it in full (`create or replace function ...`), **and** update `supabase/schemas/match_thoughts.sql` to match, updating its "Last synced with" comment to the new migration filename.
+
+Apply the same pattern to any other function that accumulates a re-paste history across migrations.
+
+### Index naming
+
+Name new indexes `idx_<table>_<column>[_<column>...]` (e.g. `idx_thoughts_archived_at`, `idx_function_call_logs_function_name_called_at`). This is the convention the newer migrations already follow.
+
+- **Do not rename existing indexes** to match — some older ones use the legacy `<table>_<column>_idx` order, and renaming them would be a churny, no-value migration. The convention applies going forward only.
+- Create indexes with `CREATE INDEX IF NOT EXISTS` so a re-run is safe.
+
 ## Quick Reference
 
 | What you want to do | Command |

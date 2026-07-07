@@ -500,6 +500,17 @@ npx supabase secrets set NEW_VAR=value --project-ref <your-project-ref>
 
 See [docs/upgrade.md](docs/upgrade.md) for detailed upgrade instructions and safe migration practices.
 
+### Repository scripts
+
+Convenience scripts live in [`scripts/`](scripts/):
+
+| Script | Purpose |
+|---|---|
+| [`scripts/dev.sh`](scripts/dev.sh) | One-command local dev stack (invoked by `deno task dev`): starts Supabase, serves the edge function with `TB_AI_PROVIDER=fake`, and builds/watches the plugin; cleans everything up on exit. |
+| [`scripts/validate-all.sh`](scripts/validate-all.sh) | Runs the full local validation the CI mirrors — `deno task test`, `deno lint`, `deno fmt --check`, and the plugin's `npm test` + `npm run build`. |
+| [`scripts/initial-setup-prod.sh`](scripts/initial-setup-prod.sh) | First-time production bring-up: links the project, pushes migrations, and prompts for secrets (read without echo). |
+| [`scripts/deploy-update-prod.sh`](scripts/deploy-update-prod.sh) | Deploys updates to the linked production project (migrations + edge functions); exits non-zero if any function deploy fails. Set `TB_SELINUX_WORKAROUND=1` to enable the optional SELinux relabel workaround. |
+
 ---
 
 ## Secrets Reference
