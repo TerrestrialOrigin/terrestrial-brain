@@ -94,7 +94,7 @@ export function register(
         }
 
         if (!data || data.length === 0) {
-          return textResult("No projects found.");
+          return textResult("No projects found.", { recordsReturned: 0 });
         }
 
         // Get parent names for display (shared batched resolver).
@@ -151,6 +151,7 @@ export function register(
 
         return textResult(
           `${data.length} project(s):\n\n${lines.join("\n\n")}`,
+          { recordsReturned: data.length },
         );
       },
       logger,
@@ -179,7 +180,9 @@ export function register(
         return errorResult(`Error: ${error.message}`);
       }
       if (!project) {
-        return textResult(`No project found with ID "${id}".`);
+        return textResult(`No project found with ID "${id}".`, {
+          recordsReturned: 0,
+        });
       }
 
       // Get parent name
@@ -235,7 +238,7 @@ export function register(
         );
       }
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), { recordsReturned: 1 });
     }, logger),
   );
 

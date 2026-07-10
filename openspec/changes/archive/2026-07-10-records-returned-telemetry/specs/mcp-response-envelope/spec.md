@@ -1,8 +1,5 @@
-# mcp-response-envelope Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change mcp-envelope-refactor. Update Purpose after archive.
-## Requirements
 ### Requirement: Centralized response envelope helpers
 
 The MCP server SHALL construct every tool response envelope through shared
@@ -78,29 +75,3 @@ suppression is required.
 
 - **WHEN** `logger.ts` is inspected
 - **THEN** `withMcpLogging` uses a generic argument tuple and contains no `deno-lint-ignore no-explicit-any` pragmas
-
-### Requirement: Table-driven HTTP route dispatch
-
-The direct HTTP routes (`/ingest-note` and the AI-output routes) SHALL be dispatched
-through a single table-driven helper that centralizes access-key auth, call logging,
-`ids`-array validation, result/error logging, and JSON response construction, so the
-per-route scaffolding exists exactly once. Each route's observable behavior — path,
-method, request validation, success payload, error payload, and HTTP status codes —
-MUST be identical to the previous hand-written blocks.
-
-#### Scenario: AI-output route with missing ids array
-
-- **WHEN** a POST to `/fetch-ai-output-content` omits the `ids` array
-- **THEN** the response is HTTP 400 with body `{ success: false, error: "ids array is required" }`
-
-#### Scenario: AI-output data route success
-
-- **WHEN** a POST to `/get-pending-ai-output` succeeds
-- **THEN** the response is HTTP 200 with body `{ success: true, data: [...] }`
-- **AND** the call and its record count are logged
-
-#### Scenario: ingest-note missing content
-
-- **WHEN** a POST to `/ingest-note` omits `content`
-- **THEN** the response is HTTP 400 with body `{ success: false, error: "content is required" }`
-

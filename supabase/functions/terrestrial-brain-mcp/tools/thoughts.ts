@@ -185,7 +185,9 @@ export function register(
         }
 
         if (!data || data.length === 0) {
-          return textResult(`No thoughts found matching "${query}".`);
+          return textResult(`No thoughts found matching "${query}".`, {
+            recordsReturned: 0,
+          });
         }
 
         // Collect all project UUIDs and resolve to names
@@ -273,6 +275,7 @@ export function register(
           `${header}Found ${data.length} thought(s):\n\n${
             results.join("\n\n")
           }\n\n${footer}`,
+          { recordsReturned: data.length, returnedIds: thoughtIds },
         );
       },
       logger,
@@ -350,7 +353,7 @@ export function register(
         }
 
         if (!data || !data.length) {
-          return textResult("No thoughts found.");
+          return textResult("No thoughts found.", { recordsReturned: 0 });
         }
 
         // Collect all project UUIDs and resolve to names
@@ -423,6 +426,7 @@ export function register(
           `${header}${data.length} recent thought(s):\n\n${
             results.join("\n\n")
           }\n\n${footer}`,
+          { recordsReturned: data.length, returnedIds: thoughtIds },
         );
       },
       logger,
@@ -502,10 +506,16 @@ export function register(
 
       if (error) {
         return error.code === "PGRST116"
-          ? textResult(`No thought found with ID "${id}".`)
+          ? textResult(`No thought found with ID "${id}".`, {
+            recordsReturned: 0,
+          })
           : errorResult(`Error: ${error.message}`);
       }
-      if (!data) return textResult(`No thought found with ID "${id}".`);
+      if (!data) {
+        return textResult(`No thought found with ID "${id}".`, {
+          recordsReturned: 0,
+        });
+      }
 
       // A fetch by ID implies the caller found the thought useful — auto-record
       // so the model doesn't need to make a separate record_useful_thoughts call.
@@ -559,7 +569,10 @@ export function register(
       }
       lines.push(`\n${data.content}`);
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), {
+        recordsReturned: 1,
+        returnedIds: [data.id],
+      });
     }, logger),
   );
 

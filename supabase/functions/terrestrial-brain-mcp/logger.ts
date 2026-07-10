@@ -59,6 +59,7 @@ export interface FunctionCallLogger {
     recordsReturned: number,
     responseCharacters: number,
     errorDetails?: string | null,
+    returnedIds?: string[] | null,
   ): Promise<void>;
 }
 
@@ -117,6 +118,7 @@ export function createFunctionCallLogger(
       recordsReturned,
       responseCharacters,
       errorDetails,
+      returnedIds,
     ): Promise<void> {
       try {
         const updatePayload: Record<string, unknown> = {
@@ -125,6 +127,11 @@ export function createFunctionCallLogger(
         };
         if (errorDetails) {
           updatePayload.error_details = errorDetails;
+        }
+        // Ids only, bounded, no content — retrieval analytics (Step 2b). Written
+        // only when a retrieval handler supplied ids; NULL otherwise.
+        if (returnedIds && returnedIds.length > 0) {
+          updatePayload.returned_ids = returnedIds;
         }
 
         const { error } = await supabase
@@ -173,15 +180,25 @@ export function withMcpLogging<Args extends unknown[]>(
       result = errorResult(`Error: ${(err as Error).message}`);
     }
 
+    const isError = result.isError === true;
+
     if (logId) {
       const contentEntries = result.content || [];
-      const recordsReturned = contentEntries.length;
+      // The true returned-row count comes from the handler via `meta` — the
+      // decorator only sees the rendered text envelope, whose block count is
+      // always 1 for a text result. Fall back to the content-block count for
+      // un-instrumented handlers (correct for single-record responses), and
+      // force 0 on any error path (a thrown/isError result returns no rows).
+      const recordsReturned = isError
+        ? 0
+        : (result.meta?.recordsReturned ?? contentEntries.length);
+      const returnedIds = isError ? null : (result.meta?.returnedIds ?? null);
       const responseCharacters = contentEntries.reduce(
         (total: number, entry: { text?: string }) =>
           total + (entry.text?.length || 0),
         0,
       );
-      const errorText = result.isError
+      const errorText = isError
         ? (contentEntries[0]?.text || "Unknown error")
         : null;
       await logger.logResult(
@@ -189,9 +206,13 @@ export function withMcpLogging<Args extends unknown[]>(
         recordsReturned,
         responseCharacters,
         errorText,
+        returnedIds,
       );
     }
 
-    return result;
+    // `meta` is internal telemetry for the logger — strip it so it never leaks
+    // into the JSON-RPC payload returned to the MCP client.
+    const { meta: _meta, ...clientResult } = result;
+    return clientResult;
   };
 }

@@ -83,7 +83,7 @@ export function register(
       }
 
       if (!data || data.length === 0) {
-        return textResult("No people found.");
+        return textResult("No people found.", { recordsReturned: 0 });
       }
 
       const lines = data.map((person, index) => {
@@ -104,7 +104,9 @@ export function register(
         return parts.join("\n");
       });
 
-      return textResult(`${data.length} person(s):\n\n${lines.join("\n\n")}`);
+      return textResult(`${data.length} person(s):\n\n${lines.join("\n\n")}`, {
+        recordsReturned: data.length,
+      });
     }, logger),
   );
 
@@ -129,7 +131,9 @@ export function register(
         return errorResult(`Error: ${error.message}`);
       }
       if (!person) {
-        return textResult(`No person found with ID "${id}".`);
+        return textResult(`No person found with ID "${id}".`, {
+          recordsReturned: 0,
+        });
       }
 
       const { data: taskCount } = await taskRepository.countOpenByAssignee(id);
@@ -150,7 +154,7 @@ export function register(
         );
       }
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), { recordsReturned: 1 });
     }, logger),
   );
 
