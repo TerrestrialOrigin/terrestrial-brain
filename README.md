@@ -535,4 +535,22 @@ Convenience scripts live in [`scripts/`](scripts/):
 
 ## License
 
-MIT
+Terrestrial Brain is licensed under the **Functional Source License, Version 1.1,
+MIT Future License (FSL-1.1-MIT)** — see [`LICENSE.md`](./LICENSE.md) for the full
+text.
+
+What that means in practice:
+
+- **Free to self-host.** You may run, modify, and redistribute the software for
+  any purpose except a *Competing Use* — i.e. offering it to others as a
+  commercial product or service that substitutes for Terrestrial Brain (such as
+  a paid managed-hosting offering of this software).
+- **Internal use, education, and research are always permitted.**
+- **Converts to MIT after two years.** Each released version automatically
+  becomes available under the permissive MIT License on the second anniversary
+  of its release.
+
+Third-party material incorporated into the project (portions of the schema and
+MCP server that originated from the MIT-era Open Brain tutorial by Nate B. Jones)
+is attributed in [`NOTICE.md`](./NOTICE.md); please keep that notice with any
+copies you distribute.
