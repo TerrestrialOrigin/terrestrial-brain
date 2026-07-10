@@ -106,7 +106,7 @@ rm -rf /tmp/thoughts-split
    ```bash
    curl -X POST https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp \
      -H "Content-Type: application/json" \
-     -H "x-brain-key: <your-mcp-access-key>" \
+     -H "x-tb-key: <your-mcp-access-key>" \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
    ```
    You should get a JSON-RPC response back (not a 401 or 500).

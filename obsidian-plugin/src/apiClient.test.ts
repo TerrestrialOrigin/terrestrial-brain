@@ -24,20 +24,20 @@ describe("HttpTerrestrialBrainClient — header auth", () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
-  it("sends the key as x-brain-key and keeps it out of the URL", async () => {
+  it("sends the key as x-tb-key and keeps it out of the URL", async () => {
     const fetchMock = mockFetch({ ok: true, json: async () => ({ success: true, data: [] }) });
     await client("secret123").call("get-pending-ai-output-metadata");
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect((init.headers as Record<string, string>)["x-brain-key"]).toBe("secret123");
+    expect((init.headers as Record<string, string>)["x-tb-key"]).toBe("secret123");
     expect(String(url)).not.toContain("key=");
     expect(String(url)).toBe(`${ENDPOINT}/get-pending-ai-output-metadata`);
   });
 
-  it("omits the x-brain-key header when the key is empty", async () => {
+  it("omits the x-tb-key header when the key is empty", async () => {
     const fetchMock = mockFetch({ ok: true, json: async () => ({ success: true, data: [] }) });
     await client("").call("get-pending-ai-output-metadata");
-    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>)["x-brain-key"]).toBeUndefined();
+    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>)["x-tb-key"]).toBeUndefined();
   });
 
   it("ingestNote sends the key as a header and posts the note body", async () => {
@@ -47,7 +47,7 @@ describe("HttpTerrestrialBrainClient — header auth", () => {
     expect(message).toBe("Captured 3 thoughts");
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${ENDPOINT}/ingest-note`);
-    expect((init.headers as Record<string, string>)["x-brain-key"]).toBe("secret123");
+    expect((init.headers as Record<string, string>)["x-tb-key"]).toBe("secret123");
     expect(init.body).toBe(JSON.stringify({ content: "note content", title: "Test", note_id: "folder/Test.md" }));
   });
 
@@ -58,7 +58,7 @@ describe("HttpTerrestrialBrainClient — header auth", () => {
     expect(message).toBe("Forgot note");
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toBe(`${ENDPOINT}/forget-note`);
-    expect((init.headers as Record<string, string>)["x-brain-key"]).toBe("secret123");
+    expect((init.headers as Record<string, string>)["x-tb-key"]).toBe("secret123");
     expect(init.body).toBe(JSON.stringify({ note_id: "folder/Test.md" }));
   });
 });

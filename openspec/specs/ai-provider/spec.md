@@ -128,7 +128,7 @@ a pure, deterministic function of the input text — the same text SHALL always
 yield the identical vector, with no randomness and no dependency on call order or
 process. Cosine similarity between two such vectors SHALL be exactly 1.0 for
 identical text, high for text with substantial word overlap, and low for
-unrelated text, so that `search_thoughts`/`match_thoughts` behave reproducibly
+unrelated text, so that `search_thoughts`/`search_thoughts_by_embedding` behave reproducibly
 against the fake. The vector dimension SHALL match the `thoughts.embedding`
 column (`vector(1536)`).
 

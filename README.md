@@ -48,7 +48,7 @@ AI Agents (Claude, etc.) -+---> Search thoughts semantically
 - **Function call logging** -- Every MCP tool call and HTTP endpoint invocation is logged with input, response size, record count, errors, and caller IP address for a complete audit trail. Logged input is capped in size, and rows are purged automatically after a retention window (see [Data privacy, retention & erasure](#data-privacy-retention--erasure)).
 - **Note erasure (GDPR)** -- Deleting a note in your vault erases its backend data (the note snapshot and every thought derived from it); a "Forget this note in Terrestrial Brain" command does the same on demand without deleting the vault file.
 - **MCP server** -- 31 tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
-- **Security model** -- A single shared secret (`MCP_ACCESS_KEY`) enforced at the edge function is the system's security boundary; send it via the `x-brain-key` request header (the `?key=` query parameter still works but is deprecated). The edge function talks to the database with the service-role key; Row-Level Security's role is to lock the public anon key out of all data entirely. See [ThreatModel.md](ThreatModel.md) for the full analysis.
+- **Security model** -- A single shared secret (`MCP_ACCESS_KEY`) enforced at the edge function is the system's security boundary; send it via the `x-tb-key` request header (the `?key=` query parameter still works but is deprecated). The edge function talks to the database with the service-role key; Row-Level Security's role is to lock the public anon key out of all data entirely. See [ThreatModel.md](ThreatModel.md) for the full analysis.
 
 ## Data privacy, retention & erasure
 
@@ -236,7 +236,7 @@ Test that your MCP server is responding:
 ```bash
 curl -X POST https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp \
   -H "Content-Type: application/json" \
-  -H "x-brain-key: <your-mcp-access-key>" \
+  -H "x-tb-key: <your-mcp-access-key>" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'
 ```
 
@@ -284,7 +284,7 @@ cp obsidian-plugin/styles.css /path/to/your/vault/.obsidian/plugins/terrestrial-
    ```
    https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp
    ```
-3. Set **Access key** to your `MCP_ACCESS_KEY`. The plugin sends it as an `x-brain-key` request header, never in the URL. (If you paste an old-style URL that still contains `?key=`, the plugin moves the key into this field automatically.)
+3. Set **Access key** to your `MCP_ACCESS_KEY`. The plugin sends it as an `x-tb-key` request header, never in the URL. (If you paste an old-style URL that still contains `?key=`, the plugin moves the key into this field automatically.)
 4. Adjust other settings as desired:
    - **Sync delay** (minutes before a saved note is synced, default 5)
    - **Poll interval** (minutes between checking for AI output, default 10)
@@ -308,7 +308,7 @@ The ribbon **brain icon** offers a quick menu with:
 
 ### Step 7: Connect AI Agents via MCP
 
-Any MCP-compatible AI agent can connect to your Terrestrial Brain. Authentication uses the `x-brain-key` request header when the client supports custom headers. The `?key=` query parameter shown below is **deprecated** — it is kept only for MCP clients that cannot set custom headers (keys in URLs can end up in proxy logs and request traces). Here's how to configure common ones:
+Any MCP-compatible AI agent can connect to your Terrestrial Brain. Authentication uses the `x-tb-key` request header when the client supports custom headers. The `?key=` query parameter shown below is **deprecated** — it is kept only for MCP clients that cannot set custom headers (keys in URLs can end up in proxy logs and request traces). Here's how to configure common ones:
 
 #### Claude Desktop
 
@@ -517,7 +517,7 @@ Convenience scripts live in [`scripts/`](scripts/):
 
 | Secret | Required | Description |
 |---|---|---|
-| `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-brain-key` header; `?key=` is deprecated). Use a strong random string. |
+| `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-tb-key` header; `?key=` is deprecated). Use a strong random string. |
 | `OPENROUTER_API_KEY` | Prod / live tests | Used for real LLM calls (metadata extraction, embeddings). Required in production and for the opt-in `deno task test:live-llm` tier. NOT needed for the default test suite, which runs against the deterministic fake (`TB_AI_PROVIDER=fake`). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
 | `TB_AI_PROVIDER` | No | Set to exactly `fake` to select the deterministic offline `FakeAiProvider` (used by the default test stack so it runs with no OpenRouter key). Any other value — unset, empty, or differently-cased — selects the live OpenRouter provider. Never set to `fake` in production. |
 | `TB_USER_TIMEZONE` | No | IANA timezone name (e.g. `America/New_York`, `Europe/Zurich`) used to resolve relative task due-dates ("today", "tomorrow", weekday names) against your local calendar day instead of UTC. Defaults to `UTC`; an invalid value falls back to `UTC` with a warning. |

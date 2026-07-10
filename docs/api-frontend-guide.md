@@ -16,7 +16,7 @@ http://localhost:54321/functions/v1/terrestrial-brain-mcp                   (loc
 All routes — the MCP endpoint at the base URL and every direct HTTP route — require the
 shared access key (`MCP_ACCESS_KEY`).
 
-- **Primary (use this):** `x-brain-key: <MCP_ACCESS_KEY>` request header.
+- **Primary (use this):** `x-tb-key: <MCP_ACCESS_KEY>` request header.
 - **Deprecated fallback:** `?key=<MCP_ACCESS_KEY>` query parameter. Kept only for MCP
   clients that cannot set custom headers. Do not use it in new client code — keys in
   URLs leak into logs and traces.

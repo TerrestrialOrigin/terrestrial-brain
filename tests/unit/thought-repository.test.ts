@@ -5,7 +5,7 @@ import { makeFakeClient } from "./fake-supabase-client.ts";
 // Unit tests for SupabaseThoughtRepository (fix-plan Step 16). A fake Supabase
 // client records the query/RPC each method builds — no database.
 
-Deno.test("matchByEmbedding: calls the match_thoughts RPC with the params", async () => {
+Deno.test("matchByEmbedding: calls the search_thoughts_by_embedding RPC with the params", async () => {
   const { client, recorded } = makeFakeClient({
     data: [{ id: "th-1", similarity: 0.9 }],
   });
@@ -19,7 +19,7 @@ Deno.test("matchByEmbedding: calls the match_thoughts RPC with the params", asyn
     reliability: null,
   });
 
-  assertEquals(recorded.rpcName, "match_thoughts");
+  assertEquals(recorded.rpcName, "search_thoughts_by_embedding");
   assertEquals(recorded.rpcParams?.match_threshold, 0.5);
   assertEquals(recorded.rpcParams?.match_count, 10);
   assertEquals(recorded.rpcParams?.filter_author, "gpt-4o-mini");

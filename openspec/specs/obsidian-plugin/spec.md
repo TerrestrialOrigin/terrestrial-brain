@@ -11,7 +11,7 @@ The Obsidian plugin (`terrestrial-brain-sync`) watches the vault for markdown fi
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `tbEndpointUrl` | `""` | MCP endpoint URL, stored without a `?key=` parameter (legacy key-in-URL values are auto-migrated) |
-| `accessKey` | `""` | MCP access key; sent as an `x-brain-key` request header, never in the URL |
+| `accessKey` | `""` | MCP access key; sent as an `x-tb-key` request header, never in the URL |
 | `excludeTag` | `"terrestrialBrainExclude"` | Notes with this tag (inline or frontmatter) are never synced |
 | `syncDelayMinutes` | `5` | Wait time after last edit before auto-syncing, in minutes. Minimum: 1 minute |
 | `pollIntervalMinutes` | `10` | Interval for checking for new AI output, in minutes. Minimum: 1 minute |
@@ -277,7 +277,7 @@ The plugin SHALL run `pollAIOutput()` immediately when the user triggers "Pull A
 
 ### Requirement: MCP communication
 
-The plugin SHALL communicate with the MCP endpoint through a `TerrestrialBrainApiClient` abstraction. The default `HttpTerrestrialBrainClient` implementation SHALL POST JSON to `{endpointUrl}/{endpointName}` (query string preserved), send the access key as an `x-brain-key` request header (never in the URL), parse the JSON response, throw an error carrying a bounded/sanitized `response.error` when `response.success` is false, and otherwise return the parsed response object. Note ingestion SHALL reuse the same request path (`ingestNote` is a thin wrapper over the shared call), eliminating a duplicated HTTP implementation.
+The plugin SHALL communicate with the MCP endpoint through a `TerrestrialBrainApiClient` abstraction. The default `HttpTerrestrialBrainClient` implementation SHALL POST JSON to `{endpointUrl}/{endpointName}` (query string preserved), send the access key as an `x-tb-key` request header (never in the URL), parse the JSON response, throw an error carrying a bounded/sanitized `response.error` when `response.success` is false, and otherwise return the parsed response object. Note ingestion SHALL reuse the same request path (`ingestNote` is a thin wrapper over the shared call), eliminating a duplicated HTTP implementation.
 
 #### Scenario: Successful HTTP call returns response object
 - **WHEN** the client POSTs to an endpoint and the server responds `{ success: true, ... }`
@@ -320,20 +320,20 @@ The plugin SHALL provide a `buildEndpointUrl(tbEndpointUrl, endpointName)` funct
 
 ### Requirement: Dedicated access-key setting sent as request header
 
-The plugin SHALL store the access key in a dedicated `accessKey` setting (default `""`), separate from the endpoint URL. Every HTTP request the plugin makes to the brain (`callHTTP`, `callIngestNote`) SHALL send the key in an `x-brain-key` request header when `accessKey` is non-empty, and SHALL NOT append the key to the request URL.
+The plugin SHALL store the access key in a dedicated `accessKey` setting (default `""`), separate from the endpoint URL. Every HTTP request the plugin makes to the brain (`callHTTP`, `callIngestNote`) SHALL send the key in an `x-tb-key` request header when `accessKey` is non-empty, and SHALL NOT append the key to the request URL.
 
 #### Scenario: Header sent on generic HTTP calls
 - **WHEN** `callHTTP` runs with `accessKey` set to `"secret123"`
-- **THEN** the outgoing request includes the header `x-brain-key: secret123`
+- **THEN** the outgoing request includes the header `x-tb-key: secret123`
 - **AND** the request URL contains no `key` query parameter
 
 #### Scenario: Header sent on note ingestion
 - **WHEN** `callIngestNote` runs with `accessKey` set
-- **THEN** the outgoing request includes the `x-brain-key` header with that value
+- **THEN** the outgoing request includes the `x-tb-key` header with that value
 
 #### Scenario: Empty key omits the header
 - **WHEN** `accessKey` is `""`
-- **THEN** no `x-brain-key` header is added (the server responds 401 and the existing error path surfaces it)
+- **THEN** no `x-tb-key` header is added (the server responds 401 and the existing error path surfaces it)
 
 ### Requirement: Legacy key-in-URL settings migration
 

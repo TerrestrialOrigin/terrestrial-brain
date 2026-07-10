@@ -46,7 +46,7 @@ The server exposes direct HTTP routes alongside the MCP transport for operations
 | `/mark-ai-output-picked-up` | POST | Marks outputs as delivered. Accepts `{ ids: string[] }`. Returns `{ success, message }`. |
 | `/reject-ai-output` | POST | Marks outputs as rejected. Accepts `{ ids: string[] }`. Returns `{ success, message }`. |
 
-Direct routes use the same `x-brain-key` authentication as MCP requests. Because Supabase Edge Functions do not pass URL subpaths to Hono's router, direct routes are dispatched by checking `url.pathname` inside the wildcard handler rather than using separate Hono route registrations.
+Direct routes use the same `x-tb-key` authentication as MCP requests. Because Supabase Edge Functions do not pass URL subpaths to Hono's router, direct routes are dispatched by checking `url.pathname` inside the wildcard handler rather than using separate Hono route registrations.
 
 ---
 
@@ -66,12 +66,12 @@ The server SHALL verify the provided access key against `MCP_ACCESS_KEY` using a
 
 #### Requirement: Header-primary authentication with deprecated query-param fallback
 
-The server SHALL read the access key from the `x-brain-key` request header as the primary mechanism. When the header is absent, the server SHALL fall back to the `?key=` query parameter. The query-param mechanism is deprecated (retained only for MCP clients that cannot set custom headers). When both are present, the header takes precedence.
+The server SHALL read the access key from the `x-tb-key` request header as the primary mechanism. When the header is absent, the server SHALL fall back to the `?key=` query parameter. The query-param mechanism is deprecated (retained only for MCP clients that cannot set custom headers). When both are present, the header takes precedence.
 
-- **WHEN** a request carries `x-brain-key: <valid key>` and no `?key=` parameter → authenticated
-- **WHEN** a request carries `?key=<valid key>` and no `x-brain-key` header → authenticated (deprecated path)
-- **WHEN** a request carries a valid `x-brain-key` header and an invalid `?key=` parameter → authenticated (the header value is the one compared)
-- **WHEN** a request carries an invalid `x-brain-key` header and a valid `?key=` parameter → HTTP 401 (the header, being present, is the value compared)
+- **WHEN** a request carries `x-tb-key: <valid key>` and no `?key=` parameter → authenticated
+- **WHEN** a request carries `?key=<valid key>` and no `x-tb-key` header → authenticated (deprecated path)
+- **WHEN** a request carries a valid `x-tb-key` header and an invalid `?key=` parameter → authenticated (the header value is the one compared)
+- **WHEN** a request carries an invalid `x-tb-key` header and a valid `?key=` parameter → HTTP 401 (the header, being present, is the value compared)
 - **WHEN** a request carries neither → HTTP 401 `{"error": "Invalid or missing access key"}`
 
 ---
@@ -83,7 +83,7 @@ WHEN CORS middleware runs
 THEN it allows:
   - Origin: `*`
   - Methods: POST, GET, OPTIONS
-  - Headers: Content-Type, x-brain-key
+  - Headers: Content-Type, x-tb-key
 
 ---
 

@@ -170,7 +170,7 @@ export class TBSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Access key")
       .setDesc(
-        "Your MCP access key. Sent as an x-brain-key request header — never as part of the URL. " +
+        "Your MCP access key. Sent as an x-tb-key request header — never as part of the URL. " +
         "Stored unencrypted in this vault's plugin data. Required for syncing."
       )
       .addText((text) => {

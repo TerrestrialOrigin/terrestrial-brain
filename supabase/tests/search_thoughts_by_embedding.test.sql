@@ -33,23 +33,23 @@ VALUES (
   '{"type": "observation", "topics": ["unrelated"]}'
 );
 
--- ─── match_thoughts returns results above threshold ──────────────────────────
+-- ─── search_thoughts_by_embedding returns results above threshold ──────────────────────────
 
 -- Query with the same direction as thoughts 1 and 2, threshold 0.5
 SELECT is(
-  (SELECT count(*)::int FROM match_thoughts(
+  (SELECT count(*)::int FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     10
   ) WHERE id IN ('dddddddd-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000002', 'dddddddd-0000-0000-0000-000000000003')),
   2,
-  'match_thoughts with threshold 0.5 returns only thoughts above threshold (2 similar, not the orthogonal one)'
+  'search_thoughts_by_embedding with threshold 0.5 returns only thoughts above threshold (2 similar, not the orthogonal one)'
 );
 
 -- The orthogonal thought should NOT appear with threshold > 0
 SELECT ok(
   NOT EXISTS(
-    SELECT 1 FROM match_thoughts(
+    SELECT 1 FROM search_thoughts_by_embedding(
       ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
       0.1,
       10
@@ -58,23 +58,23 @@ SELECT ok(
   'Orthogonal thought (similarity ~0) does not appear with threshold 0.1'
 );
 
--- ─── match_thoughts respects match_count ─────────────────────────────────────
+-- ─── search_thoughts_by_embedding respects match_count ─────────────────────────────────────
 
 SELECT is(
-  (SELECT count(*)::int FROM match_thoughts(
+  (SELECT count(*)::int FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     1
   ) WHERE id IN ('dddddddd-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000002')),
   1,
-  'match_thoughts with match_count=1 returns at most 1 result even when 2 match'
+  'search_thoughts_by_embedding with match_count=1 returns at most 1 result even when 2 match'
 );
 
 -- ─── Similarity values are correct ──────────────────────────────────────────
 
 -- Identical vectors should have similarity ~1.0
 SELECT ok(
-  (SELECT similarity FROM match_thoughts(
+  (SELECT similarity FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     10
@@ -84,7 +84,7 @@ SELECT ok(
 
 -- With threshold 0.99, only exact matches should return
 SELECT is(
-  (SELECT count(*)::int FROM match_thoughts(
+  (SELECT count(*)::int FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.99,
     10
@@ -93,7 +93,7 @@ SELECT is(
   'Threshold 0.99 returns only exact-match vectors (similarity ~1.0)'
 );
 
--- ─── match_thoughts respects filter_author ──────────────────────────────────
+-- ─── search_thoughts_by_embedding respects filter_author ──────────────────────────────────
 
 -- Tag thoughts 1 and 2 with different authors
 UPDATE public.thoughts SET author = 'model-a', reliability = 'reliable'
@@ -102,7 +102,7 @@ UPDATE public.thoughts SET author = 'model-b', reliability = 'less reliable'
   WHERE id = 'dddddddd-0000-0000-0000-000000000002';
 
 SELECT is(
-  (SELECT count(*)::int FROM match_thoughts(
+  (SELECT count(*)::int FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     10,
@@ -115,7 +115,7 @@ SELECT is(
 );
 
 SELECT is(
-  (SELECT author FROM match_thoughts(
+  (SELECT author FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     10,
@@ -127,10 +127,10 @@ SELECT is(
   'filter_author=model-a returns the correct author value'
 );
 
--- ─── match_thoughts respects filter_reliability ─────────────────────────────
+-- ─── search_thoughts_by_embedding respects filter_reliability ─────────────────────────────
 
 SELECT is(
-  (SELECT count(*)::int FROM match_thoughts(
+  (SELECT count(*)::int FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     10,
@@ -142,10 +142,10 @@ SELECT is(
   'filter_reliability=less reliable returns only the less-reliable thought'
 );
 
--- ─── match_thoughts with both filters ───────────────────────────────────────
+-- ─── search_thoughts_by_embedding with both filters ───────────────────────────────────────
 
 SELECT is(
-  (SELECT count(*)::int FROM match_thoughts(
+  (SELECT count(*)::int FROM search_thoughts_by_embedding(
     ('[' || array_to_string(ARRAY[1.0] || array_fill(0.0::float, ARRAY[1535]), ',') || ']')::vector(1536),
     0.5,
     10,

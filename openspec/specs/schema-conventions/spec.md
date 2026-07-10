@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Codifies the go-forward database schema conventions the repository follows: mandatory timestamps on core tables, a single canonical format for thought→project references, a discoverable canonical `match_thoughts` definition, and a documented index-naming convention. These invariants keep the schema consistent and the cleanup migrations safe against legacy data.
+Codifies the go-forward database schema conventions the repository follows: mandatory timestamps on core tables, a single canonical format for thought→project references, a discoverable canonical `search_thoughts_by_embedding` definition, and a documented index-naming convention. These invariants keep the schema consistent and the cleanup migrations safe against legacy data.
 
 ## Requirements
 
@@ -39,18 +39,18 @@ Thought→project references SHALL be stored as `metadata.references.projects` (
 - **WHEN** `getProjectRefs` is given metadata containing only `references.project_id = "<uuid>"`
 - **THEN** it SHALL return `["<uuid>"]` rather than an empty array
 
-### Requirement: The canonical match_thoughts definition is discoverable from one file
+### Requirement: The canonical search_thoughts_by_embedding definition is discoverable from one file
 
-The current full definition of the `match_thoughts` function SHALL be mirrored in a single canonical reference file (`supabase/schemas/match_thoughts.sql`) that always reflects the latest migration. The migrations remain the executable, append-only source of truth; the canonical file is a human-readable mirror kept in sync by convention documented in `docs/upgrade.md`.
+The current full definition of the `search_thoughts_by_embedding` function SHALL be mirrored in a single canonical reference file (`supabase/schemas/search_thoughts_by_embedding.sql`) that always reflects the latest migration. The migrations remain the executable, append-only source of truth; the canonical file is a human-readable mirror kept in sync by convention documented in `docs/upgrade.md`.
 
 #### Scenario: Canonical file matches the latest migration
 
-- **WHEN** a developer reads `supabase/schemas/match_thoughts.sql`
-- **THEN** it SHALL contain the same `create or replace function match_thoughts(...)` body as the latest-sorting migration that (re)defines the function
+- **WHEN** a developer reads `supabase/schemas/search_thoughts_by_embedding.sql`
+- **THEN** it SHALL contain the same `create or replace function search_thoughts_by_embedding(...)` body as the latest-sorting migration that (re)defines the function
 
 #### Scenario: Convention documented for future changes
 
-- **WHEN** a developer needs to change `match_thoughts`
+- **WHEN** a developer needs to change `search_thoughts_by_embedding`
 - **THEN** `docs/upgrade.md` SHALL instruct them to add a new migration re-creating the function in full AND update the canonical reference file to match
 
 ### Requirement: Index-naming convention is documented without renaming existing indexes

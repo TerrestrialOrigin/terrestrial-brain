@@ -382,7 +382,7 @@ app.use(
   cors({
     origin: "*",
     allowMethods: ["POST", "GET", "OPTIONS"],
-    allowHeaders: ["Content-Type", "x-brain-key"],
+    allowHeaders: ["Content-Type", "x-tb-key"],
   }),
 );
 
@@ -392,9 +392,9 @@ app.use(
 
 app.all("*", async (context) => {
   const url = new URL(context.req.url);
-  // x-brain-key header is the primary mechanism; ?key= is a deprecated
+  // x-tb-key header is the primary mechanism; ?key= is a deprecated
   // fallback kept for MCP clients that cannot set custom headers.
-  const providedKey = context.req.header("x-brain-key") ||
+  const providedKey = context.req.header("x-tb-key") ||
     url.searchParams.get("key");
   if (!providedKey || !(await accessKeyMatches(providedKey, MCP_ACCESS_KEY))) {
     return context.json({ error: "Invalid or missing access key" }, 401);

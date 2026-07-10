@@ -40,18 +40,21 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
   async matchByEmbedding(
     params: ThoughtMatchParams,
   ): Promise<RepoResult<ThoughtMatchRow[]>> {
-    const { data, error } = await this.supabase.rpc("match_thoughts", {
-      // supabase's typegen maps the pgvector column to `string`, but the RPC
-      // accepts the JSON number[] at runtime (covered by the vector-search
-      // integration tests). This is a documented typegen limitation for
-      // pgvector, not an untyped external value.
-      query_embedding: params.embedding as unknown as string,
-      match_threshold: params.threshold,
-      match_count: params.count,
-      filter: {},
-      filter_author: params.author ?? undefined,
-      filter_reliability: params.reliability ?? undefined,
-    });
+    const { data, error } = await this.supabase.rpc(
+      "search_thoughts_by_embedding",
+      {
+        // supabase's typegen maps the pgvector column to `string`, but the RPC
+        // accepts the JSON number[] at runtime (covered by the vector-search
+        // integration tests). This is a documented typegen limitation for
+        // pgvector, not an untyped external value.
+        query_embedding: params.embedding as unknown as string,
+        match_threshold: params.threshold,
+        match_count: params.count,
+        filter: {},
+        filter_author: params.author ?? undefined,
+        filter_reliability: params.reliability ?? undefined,
+      },
+    );
     return { data, error: toRepoError(error) };
   }
 

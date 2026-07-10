@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 
 // Auth accept/deny matrix for the header-based-auth change.
-// x-brain-key header is the primary mechanism; ?key= is a deprecated fallback.
+// x-tb-key header is the primary mechanism; ?key= is a deprecated fallback.
 // These are real HTTP requests against the running local stack — no mocks.
 
 const MCP_BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp";
@@ -26,7 +26,7 @@ function buildHeaders(options: AuthCallOptions): Record<string, string> {
     "Accept": "application/json, text/event-stream",
   };
   if (options.headerKey !== undefined) {
-    headers["x-brain-key"] = options.headerKey;
+    headers["x-tb-key"] = options.headerKey;
   }
   return headers;
 }
@@ -79,12 +79,12 @@ async function assertUnauthorized(options: AuthCallOptions): Promise<void> {
 
 // ─── Accept cases ─────────────────────────────────────────────────────────────
 
-Deno.test("auth: valid x-brain-key header is accepted at MCP root", async () => {
+Deno.test("auth: valid x-tb-key header is accepted at MCP root", async () => {
   const status = await callMcpRoot({ headerKey: VALID_KEY });
   assertEquals(status, 200);
 });
 
-Deno.test("auth: valid x-brain-key header is accepted on a direct route", async () => {
+Deno.test("auth: valid x-tb-key header is accepted on a direct route", async () => {
   const status = await callDirectRoute({ headerKey: VALID_KEY });
   assertEquals(status, 200);
 });

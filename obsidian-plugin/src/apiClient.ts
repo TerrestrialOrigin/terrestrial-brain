@@ -85,12 +85,12 @@ export interface TerrestrialBrainApiClient {
 export class HttpTerrestrialBrainClient implements TerrestrialBrainApiClient {
   constructor(private readonly settings: ApiClientSettings) {}
 
-  /** Request headers — sends the access key via x-brain-key, never in the URL. */
+  /** Request headers — sends the access key via x-tb-key, never in the URL. */
   private buildRequestHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const accessKey = this.settings.getAccessKey();
     if (accessKey) {
-      headers["x-brain-key"] = accessKey;
+      headers["x-tb-key"] = accessKey;
     }
     return headers;
   }

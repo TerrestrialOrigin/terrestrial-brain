@@ -44,13 +44,13 @@ export async function extractMetadata(
     return await aiProvider.completeJson(
       {
         systemPrompt:
-          `Extract metadata from the user's captured thought. Return JSON with:
-- "people": array of people mentioned (empty if none)
-- "action_items": array of implied to-dos (empty if none)
-- "dates_mentioned": array of dates YYYY-MM-DD (empty if none)
-- "topics": array of 1-3 short topic tags (always at least one)
-- "type": one of "observation", "task", "idea", "reference", "person_note"
-Only extract what's explicitly there.`,
+          `You are given a single captured thought. Produce a JSON object that summarizes it using exactly these fields:
+- "people": names of any individuals the text refers to; use [] when nobody is named.
+- "action_items": concrete to-dos the text implies; use [] when there are none.
+- "dates_mentioned": any calendar dates the text refers to, each formatted as YYYY-MM-DD; use [] when there are none.
+- "topics": one to three concise topic tags; always include at least one.
+- "type": the single best-fit category, chosen from "observation", "task", "idea", "reference", "person_note".
+Base every field on what the text actually supports — do not invent details it does not contain.`,
         userContent: text,
       },
       (raw) => raw as Record<string, unknown>,

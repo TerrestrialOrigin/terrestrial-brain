@@ -371,7 +371,11 @@ export type Database = {
         Args: { thought_ids: string[] };
         Returns: number;
       };
-      match_thoughts: {
+      purge_function_call_logs: {
+        Args: { retention_days?: number };
+        Returns: number;
+      };
+      search_thoughts_by_embedding: {
         Args: {
           filter?: Json;
           filter_author?: string;
@@ -390,10 +394,6 @@ export type Database = {
           similarity: number;
           updated_at: string;
         }[];
-      };
-      purge_function_call_logs: {
-        Args: { retention_days?: number };
-        Returns: number;
       };
       thought_stats: { Args: { p_project_id?: string }; Returns: Json };
     };

@@ -1,6 +1,6 @@
 /**
  * ThoughtRepository — the single seam over the `thoughts` table and its two
- * RPCs (`match_thoughts`, `increment_usefulness`) (fix-plan Step 16, finding X2).
+ * RPCs (`search_thoughts_by_embedding`, `increment_usefulness`) (fix-plan Step 16, finding X2).
  *
  * Only operations with a current caller appear here (no speculative CRUD). Each
  * method returns a `RepoResult` so handlers keep their existing `{ data, error }`
@@ -17,9 +17,11 @@ import type { Row } from "../supabase-client.ts";
 // types (Step 24), so they can no longer drift from the database.
 // ---------------------------------------------------------------------------
 
-/** A row from the `match_thoughts` vector-search RPC. */
+/** A row from the `search_thoughts_by_embedding` vector-search RPC. */
 export type ThoughtMatchRow =
-  Database["public"]["Functions"]["match_thoughts"]["Returns"][number];
+  Database["public"]["Functions"]["search_thoughts_by_embedding"]["Returns"][
+    number
+  ];
 
 /** A row shape used by `list_thoughts`. */
 export type ThoughtListRow = Pick<
@@ -107,7 +109,7 @@ export interface NewThought {
 }
 
 export interface ThoughtRepository {
-  /** Vector search via the `match_thoughts` RPC. */
+  /** Vector search via the `search_thoughts_by_embedding` RPC. */
   matchByEmbedding(
     params: ThoughtMatchParams,
   ): Promise<RepoResult<ThoughtMatchRow[]>>;
