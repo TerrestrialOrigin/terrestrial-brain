@@ -39,6 +39,15 @@ Living document. Each OpenSpec change with security impact records its analysis 
 | T12 | Destructive erasure abuse via `forget_note` / `/forget-note` (permanent hard-delete of a note's snapshot + thoughts) | **Mitigated** (gdpr-data-lifecycle) | Same `x-tb-key` gate as every other route (401 without it); scoped to a single `reference_id` — no bulk/wildcard delete; idempotent, so a replay does no extra damage; never reachable from an LLM path (contrast the LLM reconciliation path, which can only soft-archive per fix-plan Step 4) |
 | T13 | Indefinite retention of personal note content + caller IPs in `function_call_logs` (GDPR data minimization) | **Mitigated** (gdpr-data-lifecycle) | Rows purged after a retention window via `purge_function_call_logs` (default 90 days, scheduled where `pg_cron` is available; EXECUTE service-role-only); serialized log input capped at 10,000 chars so a single row cannot accumulate unbounded content |
 
+## Compliance notes (non-STRIDE)
+
+- **Licensing & third-party attribution.** The public repository ships an
+  explicit license (`LICENSE.md`, FSL-1.1-MIT) and a third-party attribution
+  notice (`NOTICE.md`) for MIT-era Open Brain material. This closes a
+  compliance gap (a public repo carrying third-party MIT material with no
+  license file and no attribution) rather than a runtime attack surface — no
+  code, input, or auth path is affected.
+
 ## Out of scope (accepted for a single-tenant personal system)
 
 - Multi-user authentication / authorization, per-client keys, key rotation schedules.

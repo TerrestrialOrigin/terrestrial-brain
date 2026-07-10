@@ -37,8 +37,8 @@ What the fix-plan already delivered toward Phase 0/2, and what it did NOT:
 | **Metadata-extraction prompt rewrite** | ✅ Done (Step 1) — prose re-expressed, sentence removed, enum values kept | `helpers.ts` |
 | **`thoughts` DDL / `match_thoughts` re-expression** | ✅ Done (Step 1) — RPC now `search_thoughts_by_embedding`; `thoughts` columns intentionally unchanged | migration `20260710000001`, canonical schema file, repositories |
 | **Fingerprint re-grep saved to evidence bundle** | ✅ Done (Step 1) | `PassiveIncomeChat/evidence/fingerprint-grep-2026-07-10-ob1-fragment-rewrite.txt` |
-| **LICENSE file (FSL-1.1-MIT)** | ❌ Repo has NO license file at all — public repo currently "all rights reserved" by default | repo root |
-| **NOTICE.md (MIT attribution)** | ❌ Not done — live compliance gap (public repo contains MIT-era fragments with no notice) | repo root |
+| **LICENSE file (FSL-1.1-MIT)** | ✅ Done (Step 2, `license-and-notice`) — `LICENSE.md` at repo root, FSL-1.1-MIT, Terrestrial Origin 2026 | repo root |
+| **NOTICE.md (MIT attribution)** | ✅ Done (Step 2, `license-and-notice`) — `NOTICE.md` attributes Open Brain / Nate B. Jones (MIT through `f3e45e1`), MIT text reproduced | repo root |
 | **GitHub repo description** | ❌ Still says "An extended version of Nate B Jones' 'open brain'…" | GitHub API, verified 2026-07-10 |
 | **README branding** | ❌ `README.md:3` still markets via "Open Brain" / Nate reference | |
 | **CORS lockdown** | ❌ Not done — `origin: "*"` | `index.ts:383` |
@@ -224,7 +224,7 @@ Before the paid listing goes live (end of Phase 3 at the latest). Hand over: leg
 
 **Phase 0 — Legal & licensing**
 - [x] 1. OB1 fragment rewrite (`feature/Ob1FragmentRewrite`) — done 2026-07-10 (opsx `ob1-fragment-rewrite`): `x-brain-key`→`x-tb-key` (hard cut), metadata prompt re-expressed, `match_thoughts`→`search_thoughts_by_embedding`; fingerprint grep saved to evidence bundle; full suite green.
-- [ ] 2. LICENSE + NOTICE (`feature/LicenseAndNotice`)
+- [x] 2. LICENSE + NOTICE (`feature/LicenseAndNotice`) — done 2026-07-10 (opsx `license-and-notice`): added `LICENSE.md` (FSL-1.1-MIT, Terrestrial Origin 2026), `NOTICE.md` (MIT attribution to Open Brain / Nate B. Jones through `f3e45e1`, MIT text reproduced), rewrote README `## License` section (bare "MIT" → FSL tier split + NOTICE reference), ThreatModel compliance note. Docs-only; full suite green (backend 594, plugin 123, plugin build OK).
 - [ ] 2b. Fix records_returned telemetry (`bug/RecordsReturnedTelemetry`)
 - [ ] 3. Branding separation (`feature/BrandingSeparation`)
 - [ ] L1. [Anastasia] Substack tutorial capture
