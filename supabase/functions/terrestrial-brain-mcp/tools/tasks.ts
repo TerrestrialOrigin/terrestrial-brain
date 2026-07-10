@@ -77,7 +77,9 @@ export async function handleListTasks(
   });
 
   if (error) return errorResult(`Error: ${error.message}`);
-  if (!data || data.length === 0) return textResult("No tasks found.");
+  if (!data || data.length === 0) {
+    return textResult("No tasks found.", { recordsReturned: 0 });
+  }
 
   const projectIds = data.flatMap((task) =>
     task.project_id ? [task.project_id] : []
@@ -93,7 +95,9 @@ export async function handleListTasks(
     ? await resolvePersons(personIds)
     : new Map<string, string>();
 
-  return textResult(buildTaskListText(data, projectNames, personNames));
+  return textResult(buildTaskListText(data, projectNames, personNames), {
+    recordsReturned: data.length,
+  });
 }
 
 export function register(
@@ -316,6 +320,7 @@ export function register(
       if (!data || data.length === 0) {
         return textResult(
           `No tasks found. Missing IDs: ${missingIds.join(", ")}`,
+          { recordsReturned: 0 },
         );
       }
 
@@ -381,7 +386,7 @@ export function register(
         }`;
       }
 
-      return textResult(result);
+      return textResult(result, { recordsReturned: data.length });
     }, logger),
   );
 }

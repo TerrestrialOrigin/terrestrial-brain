@@ -159,7 +159,9 @@ export function register(
 
       if (error || !data) {
         return error?.code === "PGRST116"
-          ? textResult(`No document found with ID "${id}".`)
+          ? textResult(`No document found with ID "${id}".`, {
+            recordsReturned: 0,
+          })
           : errorResult(`Error: ${error?.message || "unknown"}`);
       }
 
@@ -186,7 +188,7 @@ export function register(
       lines.push(`Updated: ${new Date(data.updated_at).toLocaleDateString()}`);
       lines.push(`\n---\n\n${data.content}`);
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), { recordsReturned: 1 });
     }, logger),
   );
 
@@ -233,7 +235,7 @@ export function register(
         }
 
         if (!data || data.length === 0) {
-          return textResult("No documents found.");
+          return textResult("No documents found.", { recordsReturned: 0 });
         }
 
         // Resolve project names via the shared batched resolver (raw-id fallback
@@ -272,6 +274,7 @@ export function register(
 
         return textResult(
           `${data.length} document(s):\n\n${lines.join("\n\n")}`,
+          { recordsReturned: data.length },
         );
       },
       logger,
