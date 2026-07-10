@@ -3,7 +3,7 @@
 ## Purpose
 
 Defines the `ThoughtRepository` seam — the single abstraction over the
-`thoughts` table and its `match_thoughts` / `increment_usefulness` RPCs. It
+`thoughts` table and its `search_thoughts_by_embedding` / `increment_usefulness` RPCs. It
 exists so that every thoughts query/RPC lives behind one interface with one
 Supabase implementation, injected (never a module-level singleton) so a fake
 can be substituted in tests without a database (finding X2).
@@ -13,7 +13,7 @@ can be substituted in tests without a database (finding X2).
 ### Requirement: ThoughtRepository interface abstracts all thoughts-table access
 
 The MCP edge function SHALL define a `ThoughtRepository` interface as the single
-seam over the `thoughts` table and its associated RPCs (`match_thoughts`,
+seam over the `thoughts` table and its associated RPCs (`search_thoughts_by_embedding`,
 `increment_usefulness`). The interface SHALL expose only the operations current
 callers use — vector match, list-with-filters, active-count, stats read,
 find-by-id, find-for-update, find-active-by-id, find-by-reference, insert,
@@ -29,7 +29,7 @@ query or a `thoughts`-related `supabase.rpc(...)` call directly.
 #### Scenario: Vector match delegated to the repository
 
 - **WHEN** `search_thoughts` runs a semantic search
-- **THEN** it SHALL call the repository's vector-match method (which wraps `rpc("match_thoughts", …)`) rather than calling `supabase.rpc` inline
+- **THEN** it SHALL call the repository's vector-match method (which wraps `rpc("search_thoughts_by_embedding", …)`) rather than calling `supabase.rpc` inline
 
 #### Scenario: Usefulness increment delegated to the repository
 

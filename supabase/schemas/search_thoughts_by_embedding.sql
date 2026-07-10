@@ -1,21 +1,21 @@
 -- ============================================================================
--- CANONICAL REFERENCE — match_thoughts (always-latest)
+-- CANONICAL REFERENCE — search_thoughts_by_embedding (always-latest)
 -- ============================================================================
--- This file mirrors the CURRENT definition of the match_thoughts function so
--- the live signature/body is discoverable from ONE place instead of "whichever
--- migration sorts last."
+-- This file mirrors the CURRENT definition of the search_thoughts_by_embedding
+-- function so the live signature/body is discoverable from ONE place instead of
+-- "whichever migration sorts last."
 --
 -- It is a REFERENCE copy, NOT part of the executable apply path. The
 -- append-only migrations in supabase/migrations/ remain the single executable
 -- source of truth (never edited; each change re-creates the function in full).
 --
--- CONVENTION (see docs/upgrade.md): whenever you change match_thoughts, add a
--- NEW migration that re-creates it in full, AND update this file to match, so
--- the two never drift. Last synced with:
---   supabase/migrations/20260404000004_thoughts_archived_at.sql
+-- CONVENTION (see docs/upgrade.md): whenever you change
+-- search_thoughts_by_embedding, add a NEW migration that re-creates it in full,
+-- AND update this file to match, so the two never drift. Last synced with:
+--   supabase/migrations/20260710000001_rename_match_thoughts_to_search_thoughts_by_embedding.sql
 -- ============================================================================
 
-create or replace function match_thoughts(
+create or replace function search_thoughts_by_embedding(
   query_embedding extensions.vector(1536),
   match_threshold float,
   match_count int,

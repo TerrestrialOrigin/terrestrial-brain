@@ -189,7 +189,7 @@ The `search_thoughts` MCP tool SHALL accept a required `query` string, an option
 
 When invoked, the tool SHALL:
   1. Generate an embedding for the query.
-  2. Call the `match_thoughts` RPC to perform a cosine similarity search over the `thoughts` table.
+  2. Call the `search_thoughts_by_embedding` RPC to perform a cosine similarity search over the `thoughts` table.
   3. Collect all unique project UUIDs from `metadata.references.projects` across results and resolve them to project names via a single batch query to the `projects` table.
   4. Return results sorted by similarity descending, each showing similarity percentage, capture date, type, topics, people, action items, reliability, author, project names, and content.
 
@@ -387,12 +387,12 @@ The `note_snapshot_id` column links a thought to the full source note it was ext
 
 ---
 
-### Requirement: match_thoughts RPC returns reliability and author
+### Requirement: search_thoughts_by_embedding RPC returns reliability and author
 
-The `match_thoughts` database function SHALL include `reliability` and `author` columns in its return type and SELECT clause, so that callers can access provenance information without a second query.
+The `search_thoughts_by_embedding` database function SHALL include `reliability` and `author` columns in its return type and SELECT clause, so that callers can access provenance information without a second query.
 
-#### Scenario: match_thoughts returns reliability and author
-- **WHEN** `match_thoughts` is called
+#### Scenario: search_thoughts_by_embedding returns reliability and author
+- **WHEN** `search_thoughts_by_embedding` is called
 - **THEN** each result row SHALL include `reliability` (text, nullable) and `author` (text, nullable) fields
 
 ---

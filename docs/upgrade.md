@@ -40,6 +40,15 @@ This replaces the function code. It does not affect secrets or data.
 >
 > Optionally deactivate or delete the Slack app in your Slack workspace as well.
 
+> **Breaking change (2026-07-10) — auth header renamed `x-brain-key` → `x-tb-key`:**
+> The edge function now reads the access key **only** from the `x-tb-key` request
+> header; the old `x-brain-key` header is no longer accepted (hard cut, no
+> transitional dual-acceptance). Upgrade the **edge function and the Obsidian
+> plugin together** so both send/expect the new header, and keep the same
+> `MCP_ACCESS_KEY`. Any other MCP client that set a custom `x-brain-key` header must
+> switch it to `x-tb-key`. If a client genuinely cannot set custom headers, the
+> deprecated `?key=` query-parameter fallback still works as a stop-gap.
+
 ## Step 3: Set any new secrets (if needed)
 
 If the update introduces new environment variables, add them:
@@ -74,13 +83,13 @@ When adding new migrations, follow these rules to avoid data loss:
 
 These conventions keep the append-only migration history readable as the schema grows.
 
-### `match_thoughts` canonical reference file
+### `search_thoughts_by_embedding` canonical reference file
 
-Because migrations are append-only, a function like `match_thoughts` is re-created in full by whichever migration last changed it — so its live definition is otherwise only findable by diffing migrations. To make it discoverable from one place, [`supabase/schemas/match_thoughts.sql`](../supabase/schemas/match_thoughts.sql) holds an always-latest **reference copy**.
+Because migrations are append-only, a function like `search_thoughts_by_embedding` is re-created in full by whichever migration last changed it — so its live definition is otherwise only findable by diffing migrations. To make it discoverable from one place, [`supabase/schemas/search_thoughts_by_embedding.sql`](../supabase/schemas/search_thoughts_by_embedding.sql) holds an always-latest **reference copy**.
 
 That file is **not** part of the executable apply path (the migrations remain the single source of truth). Keep it in sync by rule:
 
-> **When you change `match_thoughts`:** add a new migration that re-creates it in full (`create or replace function ...`), **and** update `supabase/schemas/match_thoughts.sql` to match, updating its "Last synced with" comment to the new migration filename.
+> **When you change `search_thoughts_by_embedding`:** add a new migration that re-creates it in full (`create or replace function ...`), **and** update `supabase/schemas/search_thoughts_by_embedding.sql` to match, updating its "Last synced with" comment to the new migration filename.
 
 Apply the same pattern to any other function that accumulates a re-paste history across migrations.
 

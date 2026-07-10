@@ -2,7 +2,7 @@
 // Drives the Obsidian plugin's REAL HttpTerrestrialBrainClient — imported
 // straight from the plugin source, not a hand-rolled fetch copy — against the
 // live local Supabase stack. This is the only test in the repo that exercises
-// the plugin's actual HTTP code (URL construction, x-brain-key header, envelope
+// the plugin's actual HTTP code (URL construction, x-tb-key header, envelope
 // parsing, and boundary validation) end to end, so a server response-shape
 // change breaks it instead of silently passing.
 //
@@ -21,7 +21,7 @@ import {
   uniqueToken,
 } from "../helpers/mcp-client.ts";
 
-// The plugin client sends the key via the x-brain-key header, never in the URL.
+// The plugin client sends the key via the x-tb-key header, never in the URL.
 const ENDPOINT_BASE = `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp`;
 
 // Created once at module scope (not per test) so its internal timer is not

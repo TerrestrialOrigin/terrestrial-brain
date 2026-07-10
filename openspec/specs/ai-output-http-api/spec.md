@@ -12,7 +12,7 @@ Define the direct HTTP endpoints for AI output operations used by the Obsidian p
 
 ### Requirement: get-pending-ai-output HTTP endpoint
 
-The edge function SHALL expose a POST endpoint at `/get-pending-ai-output` that returns all `ai_output` rows where `picked_up = false` AND `rejected = false`, as a JSON response including full content. The endpoint requires `x-brain-key` header or `?key=` query param authentication.
+The edge function SHALL expose a POST endpoint at `/get-pending-ai-output` that returns all `ai_output` rows where `picked_up = false` AND `rejected = false`, as a JSON response including full content. The endpoint requires `x-tb-key` header or `?key=` query param authentication.
 
 #### Scenario: Pending output exists
 - **WHEN** a client sends POST to `/get-pending-ai-output` with valid auth
@@ -35,7 +35,7 @@ The edge function SHALL expose a POST endpoint at `/get-pending-ai-output` that 
 
 ### Requirement: get-pending-ai-output-metadata HTTP endpoint
 
-The edge function SHALL expose a POST endpoint at `/get-pending-ai-output-metadata` that returns metadata (without content body) for all pending `ai_output` rows. The endpoint calls the `get_pending_ai_output_metadata` PostgreSQL RPC function and requires `x-brain-key` or `?key=` auth.
+The edge function SHALL expose a POST endpoint at `/get-pending-ai-output-metadata` that returns metadata (without content body) for all pending `ai_output` rows. The endpoint calls the `get_pending_ai_output_metadata` PostgreSQL RPC function and requires `x-tb-key` or `?key=` auth.
 
 #### Scenario: Pending output metadata
 - **WHEN** a client sends POST to `/get-pending-ai-output-metadata` with valid auth
@@ -103,10 +103,10 @@ The edge function SHALL expose a POST endpoint at `/reject-ai-output` that sets 
 
 ### Requirement: Direct HTTP endpoint authentication
 
-All direct HTTP endpoints SHALL use the same authentication mechanism: the `x-brain-key` header or `?key=` query parameter checked against the `MCP_ACCESS_KEY` environment variable. This is the same auth used by the MCP transport and the existing `/ingest-note` endpoint.
+All direct HTTP endpoints SHALL use the same authentication mechanism: the `x-tb-key` header or `?key=` query parameter checked against the `MCP_ACCESS_KEY` environment variable. This is the same auth used by the MCP transport and the existing `/ingest-note` endpoint.
 
 #### Scenario: Valid auth via header
-- **WHEN** a client sends a request to any direct endpoint with `x-brain-key` header matching `MCP_ACCESS_KEY`
+- **WHEN** a client sends a request to any direct endpoint with `x-tb-key` header matching `MCP_ACCESS_KEY`
 - **THEN** the request SHALL be processed
 
 #### Scenario: Valid auth via query param
