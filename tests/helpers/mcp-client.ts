@@ -19,14 +19,25 @@ export const SUPABASE_URL = "http://localhost:54321";
 export const SUPABASE_SERVICE_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
-// Deprecated `?key=` query-param access key still accepted by the edge function.
+// The MCP access key. Sent via the `x-tb-key` header — the only credential the
+// edge function accepts by default (the `?key=` query fallback is off unless
+// TB_ALLOW_KEY_IN_QUERY=1, per the edge-security-residual change).
 export const MCP_KEY = "dev-test-key-123";
 
-export const MCP_BASE =
-  `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp?key=${MCP_KEY}`;
+export const MCP_BASE = `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp`;
 
 export function httpUrl(endpoint: string): string {
-  return `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp/${endpoint}?key=${MCP_KEY}`;
+  return `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp/${endpoint}`;
+}
+
+/** Auth + content headers for MCP/HTTP calls: the `x-tb-key` header plus any extras. */
+export function mcpHeaders(
+  extra?: Record<string, string>,
+): Record<string, string> {
+  return {
+    "x-tb-key": MCP_KEY,
+    ...(extra ?? {}),
+  };
 }
 
 // ─── MCP tool callers ────────────────────────────────────────────────────────
@@ -37,10 +48,10 @@ async function postTool(
 ): Promise<{ text: string; isError: boolean }> {
   const res = await fetch(MCP_BASE, {
     method: "POST",
-    headers: {
+    headers: mcpHeaders({
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
-    },
+    }),
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
@@ -92,7 +103,7 @@ export async function callHTTP(
 ): Promise<Record<string, unknown>> {
   const response = await fetch(httpUrl(endpoint), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: mcpHeaders({ "Content-Type": "application/json" }),
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   return await response.json();
@@ -105,7 +116,7 @@ export async function callHTTPWithStatus(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(httpUrl(endpoint), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: mcpHeaders({ "Content-Type": "application/json" }),
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   return { status: response.status, body: await response.json() };
@@ -119,7 +130,7 @@ export async function callIngestNote(args: {
 }): Promise<string> {
   const res = await fetch(httpUrl("ingest-note"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: mcpHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(args),
   });
   const body = await res.json();

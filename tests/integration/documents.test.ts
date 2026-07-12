@@ -2,6 +2,7 @@ import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
 import {
   callTool,
   MCP_BASE,
+  mcpHeaders,
   SUPABASE_SERVICE_KEY,
   SUPABASE_URL,
 } from "../helpers/mcp-client.ts";
@@ -660,10 +661,10 @@ Deno.test("write_document description mentions update_document", async () => {
   // Call list tools to check the description
   const res = await fetch(MCP_BASE, {
     method: "POST",
-    headers: {
+    headers: mcpHeaders({
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
-    },
+    }),
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),

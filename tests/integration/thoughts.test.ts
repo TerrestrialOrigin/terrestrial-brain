@@ -2,6 +2,7 @@ import { assertEquals, assertExists } from "@std/assert";
 import {
   callTool,
   callToolRaw,
+  mcpHeaders,
   SUPABASE_SERVICE_KEY,
   SUPABASE_URL,
 } from "../helpers/mcp-client.ts";
@@ -650,7 +651,7 @@ Deno.test("list_thoughts displays raw UUID for orphaned project references", asy
 
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 const INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
+  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note";
 
 const TEST_NOTE_ID = `test-ingest-test-proj-${Date.now()}`;
 
@@ -664,7 +665,7 @@ Test Proj Backend API should expose a cache-invalidation webhook so the record d
 
   const ingestResponse = await fetch(INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: mcpHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       content: noteContent,
       title: "Test Proj Record Lookup Performance",
@@ -1625,7 +1626,7 @@ Deno.test("cleanup usefulness feedback loop test data", async () => {
 // to delete, the row vanishes entirely and this invariant fails.)
 
 const RECONCILE_INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
+  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note";
 
 async function fetchThoughtsForNote(
   noteId: string,
@@ -1653,7 +1654,7 @@ async function ingestNote(
 ): Promise<void> {
   const ingestResponse = await fetch(RECONCILE_INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: mcpHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ content, title, note_id: noteId }),
   });
   assertEquals(ingestResponse.ok, true, "Ingest request should succeed");

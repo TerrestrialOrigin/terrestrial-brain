@@ -3,6 +3,7 @@ import {
   callHTTPWithStatus as callHTTP,
   callTool,
   MCP_BASE,
+  mcpHeaders,
 } from "../helpers/mcp-client.ts";
 
 // ---------------------------------------------------------------------------
@@ -198,10 +199,10 @@ Deno.test("HTTP: endpoints return 401 without valid key", async () => {
 Deno.test("HTTP: migrated tools are NOT in MCP tool list", async () => {
   const response = await fetch(MCP_BASE, {
     method: "POST",
-    headers: {
+    headers: mcpHeaders({
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
-    },
+    }),
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),

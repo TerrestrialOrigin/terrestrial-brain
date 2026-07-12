@@ -119,9 +119,8 @@ Deno.test("/forget-note rejects a missing note_id with 400", async () => {
 });
 
 Deno.test("/forget-note requires a valid access key", async () => {
-  // No ?key= and no x-tb-key header → 401, nothing deleted.
-  const url = httpUrl("forget-note").replace(/\?key=[^&]*/, "");
-  const response = await fetch(url, {
+  // No x-tb-key header and no ?key= → 401, nothing deleted.
+  const response = await fetch(httpUrl("forget-note"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ note_id: "whatever.md" }),

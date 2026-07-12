@@ -66,13 +66,14 @@ The server SHALL verify the provided access key against `MCP_ACCESS_KEY` using a
 
 #### Requirement: Header-primary authentication with deprecated query-param fallback
 
-The server SHALL read the access key from the `x-tb-key` request header as the primary mechanism. When the header is absent, the server SHALL fall back to the `?key=` query parameter. The query-param mechanism is deprecated (retained only for MCP clients that cannot set custom headers). When both are present, the header takes precedence.
+The server SHALL read the access key from the `x-tb-key` request header as the primary and default mechanism. The `?key=` query-parameter fallback is **disabled by default** and rejected unless the operator sets `TB_ALLOW_KEY_IN_QUERY=1` (the exact string `1`); any other value, including unset, means disabled. When the fallback is enabled and the header is absent, the server SHALL fall back to the `?key=` query parameter. When both are present, the header takes precedence regardless of the flag. The query-param mechanism is deprecated (keys in URLs leak through proxy/CDN/edge logs; retained only for MCP clients that cannot set custom headers).
 
-- **WHEN** a request carries `x-tb-key: <valid key>` and no `?key=` parameter → authenticated
-- **WHEN** a request carries `?key=<valid key>` and no `x-tb-key` header → authenticated (deprecated path)
-- **WHEN** a request carries a valid `x-tb-key` header and an invalid `?key=` parameter → authenticated (the header value is the one compared)
+- **WHEN** a request carries `x-tb-key: <valid key>` (flag off, the default) → authenticated
+- **WHEN** a request carries `?key=<valid key>` and no header, flag off → HTTP 401 (the query key is not consulted)
+- **WHEN** a request carries `?key=<valid key>` and no header, `TB_ALLOW_KEY_IN_QUERY=1` → authenticated (the deprecated path)
+- **WHEN** a request carries a valid `x-tb-key` header and an invalid `?key=` parameter → authenticated (the header value is the one compared), regardless of the flag
 - **WHEN** a request carries an invalid `x-tb-key` header and a valid `?key=` parameter → HTTP 401 (the header, being present, is the value compared)
-- **WHEN** a request carries neither → HTTP 401 `{"error": "Invalid or missing access key"}`
+- **WHEN** a request carries neither a header nor (when permitted) a consulted `?key=` → HTTP 401 `{"error": "Invalid or missing access key"}`
 
 ---
 
@@ -81,7 +82,7 @@ The server SHALL read the access key from the `x-tb-key` request header as the p
 GIVEN any request arrives
 WHEN CORS middleware runs
 THEN it allows:
-  - Origin: `*`
+  - Origin: only origins in the `TB_ALLOWED_ORIGINS` allowlist are reflected in `Access-Control-Allow-Origin`; an unset/empty allowlist denies every cross-origin request. The wildcard `*` is never emitted. (CORS is a browser-side control only; the access-key check is the authoritative gate for all clients.)
   - Methods: POST, GET, OPTIONS
   - Headers: Content-Type, x-tb-key
 

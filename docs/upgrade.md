@@ -47,7 +47,26 @@ This replaces the function code. It does not affect secrets or data.
 > plugin together** so both send/expect the new header, and keep the same
 > `MCP_ACCESS_KEY`. Any other MCP client that set a custom `x-brain-key` header must
 > switch it to `x-tb-key`. If a client genuinely cannot set custom headers, the
-> deprecated `?key=` query-parameter fallback still works as a stop-gap.
+> `?key=` query-parameter fallback can be re-enabled — but see the next note: as
+> of the edge-security-residual change it is **off by default**.
+
+> **Breaking change (edge-security-residual) — `?key=` off by default + CORS locked down:**
+> Two new **optional** environment variables harden the edge boundary. Set them
+> with `npx supabase secrets set <VAR>=<value> --project-ref <ref>` if needed:
+>
+> - **`TB_ALLOW_KEY_IN_QUERY`** — the deprecated `?key=` query-parameter auth
+>   fallback is now **rejected by default**; the `x-tb-key` header is the only
+>   accepted credential. If a client truly cannot send custom headers, set
+>   `TB_ALLOW_KEY_IN_QUERY=1` to re-enable `?key=` (keys in URLs leak into
+>   proxy/CDN/edge logs — prefer moving the key to the header instead). **Action:**
+>   if any of your MCP clients authenticate via `?key=`, either move the key to an
+>   `x-tb-key` header (recommended) or set this flag before upgrading, or they will
+>   start getting 401s.
+> - **`TB_ALLOWED_ORIGINS`** — CORS now **defaults to deny** (no cross-origin
+>   access). The Obsidian plugin and MCP clients are not browsers and need no CORS,
+>   so most installs set nothing. Only set this (comma-separated exact origins,
+>   e.g. `https://console.example`) if a browser app must call the endpoint. The
+>   server never responds with wildcard `*`.
 
 ## Step 3: Set any new secrets (if needed)
 
