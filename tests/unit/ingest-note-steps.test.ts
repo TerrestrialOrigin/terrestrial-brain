@@ -58,7 +58,13 @@ function fakeThoughtRepository(
     archive: notImpl,
     archiveByDocumentReference: notImpl,
     incrementUsefulness: notImpl,
+    incrementUsefulnessWeighted: notImpl,
     deleteByNoteSnapshot: notImpl,
+    findByContentHash: notImpl,
+    findStale: notImpl,
+    findArchivalCandidates: notImpl,
+    setSupersededBy: notImpl,
+    touchRetrieved: notImpl,
     ...overrides,
   };
 }

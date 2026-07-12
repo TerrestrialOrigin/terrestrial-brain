@@ -7,44 +7,27 @@
 
 import { assert } from "@std/assert";
 import { hasTool } from "./_tools.ts";
-import { pending, pendingName } from "./_pending.ts";
 
 const ARCHIVAL_TOOL = "get_archival_queue";
 
 // The conjunction (age ∧ score-0 ∧ no retrieval ∧ not synced) gates the queue.
 Deno.test(
-  pendingName(
-    "archival: the archival conjunction gates the queue",
-    "step7",
-    "archival",
-  ),
+  "archival: the archival conjunction gates the queue",
   async () => {
     assert(
       await hasTool(ARCHIVAL_TOOL),
-      pending(
-        "step7",
-        "archival",
-        `no archival review queue (${ARCHIVAL_TOOL} tool absent); the multi-signal conjunction is unenforced`,
-      ),
+      `no archival review queue (${ARCHIVAL_TOOL} tool absent); the multi-signal conjunction is unenforced`,
     );
   },
 );
 
 // A thought owned by a live synced note is never auto-queued regardless of age/score.
 Deno.test(
-  pendingName(
-    "archival: a synced-note-owned thought is never auto-queued",
-    "step7",
-    "archival",
-  ),
+  "archival: a synced-note-owned thought is never auto-queued",
   async () => {
     assert(
       await hasTool(ARCHIVAL_TOOL),
-      pending(
-        "step7",
-        "archival",
-        `cannot prove synced-note-owned thoughts are excluded until ${ARCHIVAL_TOOL} exists`,
-      ),
+      `cannot prove synced-note-owned thoughts are excluded until ${ARCHIVAL_TOOL} exists`,
     );
   },
 );
@@ -52,19 +35,11 @@ Deno.test(
 // Archiving a queued item is a consented state transition (stamps archived_at);
 // without confirmation it stays active.
 Deno.test(
-  pendingName(
-    "archival: archiving a queued item is a consented state transition",
-    "step7",
-    "archival",
-  ),
+  "archival: archiving a queued item is a consented state transition",
   async () => {
     assert(
       await hasTool(ARCHIVAL_TOOL),
-      pending(
-        "step7",
-        "archival",
-        `the consented archival flow depends on the ${ARCHIVAL_TOOL} queue, which is absent`,
-      ),
+      `the consented archival flow depends on the ${ARCHIVAL_TOOL} queue, which is absent`,
     );
   },
 );

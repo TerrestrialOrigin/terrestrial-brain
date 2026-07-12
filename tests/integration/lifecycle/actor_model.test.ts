@@ -1,72 +1,91 @@
 // memory-lifecycle-rules → "Single mutation ruleset parameterized by actor".
 //
-// Red-by-design: the `actor` dimension (LLM | user | sync) is not yet a
-// first-class part of the mutation path. The proposed surface (mutations record
-// their actor, e.g. via `thoughts.last_actor`, and every actor routes through
-// the ONE server-side update path) is finalized by Step 7; each test anchors its
-// red on that absence and documents the invariant it guards.
+// Step 7 implements the actor dimension: mutations record `last_actor`
+// (LLM | user | sync) through the ONE update path. The console (user) and
+// connectors (sync) pass their actor through the SAME path/side-effects as an
+// LLM edit — no parallel, more-permissive ruleset (Invariant 2).
 
-import { assert } from "@std/assert";
-import { columnExists } from "./_tools.ts";
-import { pending, pendingName } from "./_pending.ts";
+import { assert, assertEquals } from "@std/assert";
+import { callTool, restUrl, serviceHeaders } from "../../helpers/mcp-client.ts";
+import {
+  captureThought,
+  deleteThoughtsByMarker,
+  lifecycleMarker,
+} from "./_thoughts.ts";
 
-const ACTOR_SLUG = "actor-model";
+async function actorAndHash(
+  id: string,
+): Promise<{ last_actor: string | null; content_hash: string | null }> {
+  const response = await fetch(
+    restUrl(`thoughts?id=eq.${id}&select=last_actor,content_hash`),
+    { headers: serviceHeaders() },
+  );
+  const rows = await response.json() as {
+    last_actor: string | null;
+    content_hash: string | null;
+  }[];
+  return rows[0] ?? { last_actor: null, content_hash: null };
+}
 
-// Invariant 2: a console (user) edit passes through the SAME rules/side effects
-// as an LLM edit, with only the actor recorded differently.
-Deno.test(
-  pendingName(
-    "actor: a console edit flows through the same rules as an LLM edit",
-    "step7",
-    ACTOR_SLUG,
-  ),
-  async () => {
-    assert(
-      await columnExists("thoughts", "last_actor"),
-      pending(
-        "step7",
-        ACTOR_SLUG,
-        "no actor dimension on the mutation path (thoughts.last_actor absent); cannot prove user and LLM edits share one ruleset",
-      ),
+// A console (user) edit flows through the same update path — same side effects
+// (re-hash), only the recorded actor differs from an LLM edit.
+Deno.test("actor: a console (user) edit flows through the same rules as an LLM edit", async () => {
+  const marker = lifecycleMarker("actor-user");
+  try {
+    const thought = await captureThought(marker, `${marker} captured by llm`);
+    const asCaptured = await actorAndHash(thought.id);
+    assertEquals(asCaptured.last_actor, "LLM", "capture records the LLM actor");
+
+    await callTool("update_thought", {
+      id: thought.id,
+      content: `${marker} edited in the console`,
+      actor: "user",
+    });
+    const asEdited = await actorAndHash(thought.id);
+    assertEquals(
+      asEdited.last_actor,
+      "user",
+      "a console edit records the user actor",
     );
-  },
-);
-
-// A consent-gated outcome renders per actor (UI prompt vs tool-call question)
-// but is the SAME rule with an identical underlying state transition.
-Deno.test(
-  pendingName(
-    "actor: a consent-gated outcome renders per actor but is the same rule",
-    "step7",
-    ACTOR_SLUG,
-  ),
-  async () => {
     assert(
-      await columnExists("thoughts", "last_actor"),
-      pending(
-        "step7",
-        ACTOR_SLUG,
-        "the actor-conditioned consent rule has no structural home yet (thoughts.last_actor absent)",
-      ),
+      asEdited.content_hash !== null &&
+        asEdited.content_hash !== asCaptured.content_hash,
+      "the user edit re-hashed via the same path (same side effects as an LLM edit)",
     );
-  },
-);
+  } finally {
+    await deleteThoughtsByMarker(marker);
+  }
+});
 
-// No console-only or connector-only write may bypass the ruleset's validations.
-Deno.test(
-  pendingName(
-    "actor: no unauthorized direct-write surface exists",
-    "step7",
-    ACTOR_SLUG,
-  ),
-  async () => {
-    assert(
-      await columnExists("thoughts", "last_actor"),
-      pending(
-        "step7",
-        ACTOR_SLUG,
-        "cannot assert every write routes through the one actor-tagged path until the actor dimension exists",
-      ),
-    );
-  },
-);
+// The same rule fires for a sync actor — no connector-only write surface.
+Deno.test("actor: a sync edit is recorded through the same path", async () => {
+  const marker = lifecycleMarker("actor-sync");
+  try {
+    const thought = await captureThought(marker, `${marker} original`);
+    await callTool("update_thought", {
+      id: thought.id,
+      content: `${marker} synced`,
+      actor: "sync",
+    });
+    assertEquals((await actorAndHash(thought.id)).last_actor, "sync");
+  } finally {
+    await deleteThoughtsByMarker(marker);
+  }
+});
+
+// Every mutation records an actor — there is no unauthorized write that leaves
+// the actor unset (defaults to LLM through the one path).
+Deno.test("actor: every mutation records an actor (no unauthorized direct-write)", async () => {
+  const marker = lifecycleMarker("actor-default");
+  try {
+    const thought = await captureThought(marker, `${marker} probe`);
+    // An update with no explicit actor still records one (default LLM).
+    await callTool("update_thought", {
+      id: thought.id,
+      reliability: "reliable",
+    });
+    assertEquals((await actorAndHash(thought.id)).last_actor, "LLM");
+  } finally {
+    await deleteThoughtsByMarker(marker);
+  }
+});

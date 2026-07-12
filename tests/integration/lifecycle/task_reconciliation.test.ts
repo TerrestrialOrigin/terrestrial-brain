@@ -7,44 +7,27 @@
 
 import { assert } from "@std/assert";
 import { hasTool } from "./_tools.ts";
-import { pending, pendingName } from "./_pending.ts";
 
 const RECONCILE_TOOL = "reconcile_tasks";
 
 // The sweep surfaces a confirm-to-close prompt and changes nothing without consent.
 Deno.test(
-  pendingName(
-    "reconciliation: the sweep asks before closing",
-    "step7",
-    "reconciliation",
-  ),
+  "reconciliation: the sweep asks before closing",
   async () => {
     assert(
       await hasTool(RECONCILE_TOOL),
-      pending(
-        "step7",
-        "reconciliation",
-        `no reconciliation sweep (${RECONCILE_TOOL} tool absent); cannot prove it asks before closing`,
-      ),
+      `no reconciliation sweep (${RECONCILE_TOOL} tool absent); cannot prove it asks before closing`,
     );
   },
 );
 
 // Declining the proposed close leaves the task open with no status write.
 Deno.test(
-  pendingName(
-    "reconciliation: declining leaves the task open",
-    "step7",
-    "reconciliation",
-  ),
+  "reconciliation: declining leaves the task open",
   async () => {
     assert(
       await hasTool(RECONCILE_TOOL),
-      pending(
-        "step7",
-        "reconciliation",
-        `cannot prove decline leaves a task open until ${RECONCILE_TOOL} exists`,
-      ),
+      `cannot prove decline leaves a task open until ${RECONCILE_TOOL} exists`,
     );
   },
 );

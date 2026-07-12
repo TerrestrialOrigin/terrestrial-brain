@@ -12,7 +12,7 @@
 -- CONVENTION (see docs/upgrade.md): whenever you change
 -- search_thoughts_by_embedding, add a NEW migration that re-creates it in full,
 -- AND update this file to match, so the two never drift. Last synced with:
---   supabase/migrations/20260710000001_rename_match_thoughts_to_search_thoughts_by_embedding.sql
+--   supabase/migrations/20260712000001_memory_hygiene.sql
 -- ============================================================================
 
 create or replace function search_thoughts_by_embedding(
@@ -44,6 +44,7 @@ as $$
   from thoughts
   where 1 - (embedding <=> query_embedding) > match_threshold
     and archived_at is null
+    and superseded_by is null
     and (filter_author is null or thoughts.author = filter_author)
     and (filter_reliability is null or thoughts.reliability = filter_reliability)
   order by embedding <=> query_embedding

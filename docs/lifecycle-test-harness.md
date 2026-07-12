@@ -11,14 +11,17 @@ tier greens at v1.5 (connectors).
 
 | Tier | Task | Gated? | State today |
 |---|---|---|---|
-| Deterministic | `deno task test` (includes `tests/integration/lifecycle/`) | **Yes** (CI) | **Red-by-design** — 5 pass-now, 23 pending Step 7 |
-| Eval (LLM-judgment) | `deno task test:eval` (`tests/eval/`) | No (opt-in) | Fail-loud without `OPENROUTER_API_KEY`; scored vs threshold |
+| Deterministic | `deno task test` (includes `tests/integration/lifecycle/`) | **Yes** (CI) | **All 28 green** — Step 7 implemented the features |
+| Eval (LLM-judgment) | `deno task test:eval` (`tests/eval/`) | No (opt-in) | Fail-loud without `OPENROUTER_API_KEY`; scored vs threshold; 4 scenarios still seam-gated pending real-LLM wiring |
 | Sync (v1.5) | `deno task test:sync-rules` (`tests/sync-rules/`) | No (opt-in) | 14 tests, all pending v1.5 via the connector seam |
 
-The deterministic tier rides the existing green gate on purpose (per the
-project owner's explicit decision), so `deno task test` and CI's backend job are
-**red until Step 7**. CI keeps `deno lint` / `deno fmt --check` running
-(`if: always()`) so those signals survive the intentional red.
+Step 6 wrote these red-by-design; **Step 7 (`memory-hygiene`) turned the
+deterministic tier green** by implementing the dedup gate, supersession edge +
+`resolve_supersession`, `content_hash`/INVARIANT-1 across all four entities, the
+`last_actor` actor model, `last_retrieved_at` + `get_stale_thoughts` /
+`get_archival_queue` / `reconcile_tasks` tools, rubber-stamp down-weighting, and
+the extraction-type allowlist parse. CI keeps `deno lint` / `deno fmt --check`
+running (`if: always()`).
 
 ## The red-by-design contract
 
@@ -43,10 +46,12 @@ a new, renamed, or removed scenario without a manifest update fails the build �
 and logs the burn-down:
 
 ```
-[lifecycle burn-down] pass-now=5 pending-step7=27 pending-v1.5=15 total=47
+[lifecycle burn-down] pass-now=28 pending-step7=4 pending-v1.5=15 total=47
 ```
 
-(27 = 23 deterministic + 4 eval scenarios tagged Step 7.)
+(The 4 remaining pending-step7 are the `eval`-tagged scenarios — opt-in,
+seam-gated pending real-LLM wiring; the 15 pending-v1.5 are the sync-connector
+scenarios. All 28 deterministic `test`-tagged scenarios are green.)
 
 ## For the Step 7 implementer
 

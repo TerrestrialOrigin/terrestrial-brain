@@ -7,6 +7,8 @@ import {
   freshIngest,
   getEmbedding,
   getProjectRefs,
+  hashContent,
+  resolveDedup,
 } from "../helpers.ts";
 import { parseNote } from "../parser.ts";
 import {
@@ -36,12 +38,32 @@ import type { NoteSnapshotRepository } from "../repositories/note-snapshot-repos
 /** Max characters of a thought's content shown in the archive-list preview. */
 const ARCHIVE_PREVIEW_LENGTH = 80;
 
+/** Review-queue thresholds (days). Staleness/archival are multi-signal and
+ * conservative — a thought must be genuinely old AND unretrieved before it is
+ * even surfaced for human review (never auto-applied, never score-alone). */
+const STALE_AGE_DAYS = 30;
+const STALE_UNRETRIEVED_DAYS = 30;
+const ARCHIVAL_AGE_DAYS = 90;
+const REVIEW_QUEUE_LIMIT = 50;
+
+/** Selecting more than this fraction of a result set is a rubber-stamp (each id
+ * gets less weight than a selective pick). Relative ordering is fixed; the exact
+ * threshold/curve is a tunable constant. */
+const RUBBER_STAMP_RATIO = 0.75;
+
+/** ISO timestamp `days` before now. */
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 interface ThoughtUpdateFields {
   content?: string;
   reliability?: string;
   author?: string;
   project_ids?: string[];
   document_ids?: string[];
+  /** Actor of this edit: LLM | user | sync. Recorded on every mutation. */
+  actor?: string;
 }
 
 /**
@@ -59,13 +81,16 @@ export async function buildThoughtUpdate(
 ): Promise<
   { updatePayload: Record<string, unknown>; updatedFields: string[] }
 > {
-  const { content, reliability, author, project_ids, document_ids } = fields;
+  const { content, reliability, author, project_ids, document_ids, actor } =
+    fields;
   const existingReferences = (existingMetadata.references || {}) as Record<
     string,
     string[]
   >;
 
   const updatePayload: Record<string, unknown> = {};
+  // Every mutation records its actor through the one update path (Invariant 2).
+  updatePayload.last_actor = actor ?? "LLM";
   const updatedReferences = { ...existingReferences };
   let referencesChanged = false;
   const referenceFields: string[] = [];
@@ -99,6 +124,9 @@ export async function buildThoughtUpdate(
     ]);
     updatePayload.content = content;
     updatePayload.embedding = embedding;
+    // INVARIANT 1: re-hash in the one update path so the stored hash tracks the
+    // current text. Emptying content is a valid edit — hash of "" is stored.
+    updatePayload.content_hash = await hashContent(content);
     updatePayload.metadata = {
       ...existingMetadata,
       ...(newMetadata as Record<string, unknown>),
@@ -268,6 +296,10 @@ export function register(
         // footer: a long results block pushes the header far up the context
         // window, so repeating the required-action reminder at the end keeps it
         // adjacent to where the model resumes generating.
+        // Advance the retrieval-recency signal (best-effort; a touch failure
+        // never breaks the read). Independent of usefulness recording.
+        await thoughtRepository.touchRetrieved(thoughtIds);
+
         const header = buildUsefulnessHeader(thoughtIds, "hard");
         const footer = buildUsefulnessReminder(thoughtIds, "hard");
 
@@ -419,6 +451,8 @@ export function register(
         );
 
         const thoughtIds = data.map((thought: { id: string }) => thought.id);
+        // Advance retrieval recency (best-effort, non-fatal).
+        await thoughtRepository.touchRetrieved(thoughtIds);
         const header = buildUsefulnessHeader(thoughtIds, "soft");
         const footer = buildUsefulnessReminder(thoughtIds, "soft");
 
@@ -516,6 +550,10 @@ export function register(
           recordsReturned: 0,
         });
       }
+
+      // Advance retrieval recency (best-effort, non-fatal) — independent of the
+      // usefulness auto-record below.
+      await thoughtRepository.touchRetrieved([data.id]);
 
       // A fetch by ID implies the caller found the thought useful — auto-record
       // so the model doesn't need to make a separate record_useful_thoughts call.
@@ -653,12 +691,29 @@ export function register(
           getEmbedding(aiProvider, content),
           extractMetadata(aiProvider, content),
         ]);
+        const contentHash = await hashContent(content);
+
+        // Write-time dedup gate (server-side, not prompt-nudge): a byte-identical
+        // or within-band restatement is dropped in favor of the existing thought;
+        // a cross-context near-duplicate is kept and routed to supersession.
+        const dedup = await resolveDedup(
+          thoughtRepository,
+          contentHash,
+          embedding,
+        );
+        if (dedup.duplicateOf) {
+          return textResult(
+            `Already captured — kept the existing thought (no duplicate created).`,
+          );
+        }
 
         const { error } = await thoughtRepository.insert({
           content,
           embedding,
           reliability: "reliable",
           author: author || null,
+          content_hash: contentHash,
+          last_actor: "LLM",
           metadata: { ...metadata, source: "mcp", references },
         });
 
@@ -733,12 +788,15 @@ export function register(
         document_ids: uuidField().array().optional().describe(
           "Replace document associations — these UUIDs become the new metadata.references.documents array",
         ),
+        actor: z.enum(["LLM", "user", "sync"]).optional().describe(
+          "Who is making this edit (default LLM). The console passes 'user'; connectors pass 'sync' — all through this same update path.",
+        ),
       },
     },
     withMcpLogging(
       "update_thought",
       async (
-        { id, content, reliability, author, project_ids, document_ids },
+        { id, content, reliability, author, project_ids, document_ids, actor },
       ) => {
         // Validate at least one optional field is provided
         if (
@@ -769,7 +827,7 @@ export function register(
         const { updatePayload, updatedFields } = await buildThoughtUpdate(
           aiProvider,
           existingMetadata,
-          { content, reliability, author, project_ids, document_ids },
+          { content, reliability, author, project_ids, document_ids, actor },
         );
 
         const { error: updateError } = await thoughtRepository.update(
@@ -798,27 +856,50 @@ export function register(
         "Pass the IDs of thoughts that contributed to your answer. " +
         "If none of the returned thoughts contributed, pass an empty array to acknowledge the scan — an empty array is the correct input in that case, not a reason to skip the call. " +
         "This feedback loop helps surface the most valuable thoughts in future queries. " +
-        "Each call increments the score by 1 for every thought ID provided.",
+        "Pass returned_ids (the full set of IDs a preceding search/list returned) so a " +
+        "SELECTIVE pick counts for more per thought than a rubber-stamp that marks nearly everything useful.",
       inputSchema: {
         thought_ids: uuidField()
           .array()
           .describe(
             "Array of thought UUIDs that were useful in this interaction. Pass [] if no returned thought contributed — that is the correct value, not a reason to skip the call.",
           ),
+        returned_ids: uuidField()
+          .array()
+          .optional()
+          .describe(
+            "The full result set (all IDs the preceding search/list returned) the selection was drawn from. Enables rubber-stamp down-weighting; defaults to the selection itself when omitted.",
+          ),
       },
     },
-    withMcpLogging("record_useful_thoughts", async ({ thought_ids }) => {
-      const { data: affectedCount, error } = await thoughtRepository
-        .incrementUsefulness(thought_ids);
+    withMcpLogging(
+      "record_useful_thoughts",
+      async ({ thought_ids, returned_ids }) => {
+        // Rubber-stamp down-weighting: a selection covering nearly all of the
+        // result set carries little information, so each id gets less. The
+        // observable rule (selective out-weights all-selecting per id) is fixed;
+        // the exact curve is a tunable constant.
+        const resultSetSize = returned_ids && returned_ids.length > 0
+          ? returned_ids.length
+          : thought_ids.length;
+        const ratio = resultSetSize > 0
+          ? thought_ids.length / resultSetSize
+          : 1;
+        const weight = ratio > RUBBER_STAMP_RATIO ? 1 : 2;
 
-      if (error) {
-        return errorResult(`Failed to record usefulness: ${error.message}`);
-      }
+        const { data: affectedCount, error } = await thoughtRepository
+          .incrementUsefulnessWeighted(thought_ids, weight);
 
-      return textResult(
-        `Recorded usefulness for ${affectedCount} thought(s) out of ${thought_ids.length} provided.`,
-      );
-    }, logger),
+        if (error) {
+          return errorResult(`Failed to record usefulness: ${error.message}`);
+        }
+
+        return textResult(
+          `Recorded usefulness for ${affectedCount} thought(s) out of ${thought_ids.length} provided.`,
+        );
+      },
+      logger,
+    ),
   );
 
   // Tool 8: Archive Thought
@@ -857,6 +938,114 @@ export function register(
       return textResult(`Archived thought: "${preview}"`);
     }, logger),
   );
+
+  // Tool: Resolve Supersession — set or clear the supersedes edge (reversible).
+  server.registerTool(
+    "resolve_supersession",
+    {
+      title: "Resolve Supersession",
+      description:
+        "Mark one thought as superseded by another (contradiction handling by " +
+        "supersession, not deletion), or clear an existing supersedes edge. A " +
+        "superseded thought is excluded from default search but kept and " +
+        "retrievable by id, so the edge is fully reversible.",
+      inputSchema: {
+        id: uuidField().describe("UUID of the thought being superseded"),
+        superseded_by: uuidField().optional().describe(
+          "UUID of the replacing thought; omit to CLEAR the edge (un-supersede)",
+        ),
+      },
+    },
+    withMcpLogging("resolve_supersession", async ({ id, superseded_by }) => {
+      const { error } = await thoughtRepository.setSupersededBy(
+        id,
+        superseded_by ?? null,
+      );
+      if (error) return errorResult(`Resolve failed: ${error.message}`);
+      return textResult(
+        superseded_by
+          ? `Thought ${id} marked superseded by ${superseded_by}.`
+          : `Cleared the supersedes edge on thought ${id}.`,
+      );
+    }, logger),
+  );
+
+  // Tool: Get Stale Thoughts — a review queue (multi-signal, never score alone).
+  server.registerTool(
+    "get_stale_thoughts",
+    {
+      title: "Get Stale Thoughts",
+      description:
+        "Return a review queue of thoughts that look stale: old AND not " +
+        "retrieved recently. This is a REVIEW surface only — nothing is " +
+        "archived automatically. A score-0 thought that was retrieved recently " +
+        "is NOT stale (score 0 means 'no data', not 'not useful').",
+      inputSchema: {},
+    },
+    withMcpLogging("get_stale_thoughts", async () => {
+      const { data, error } = await thoughtRepository.findStale(
+        isoDaysAgo(STALE_AGE_DAYS),
+        isoDaysAgo(STALE_UNRETRIEVED_DAYS),
+        REVIEW_QUEUE_LIMIT,
+      );
+      if (error) return errorResult(`Stale query failed: ${error.message}`);
+      const rows = data ?? [];
+      return textResult(
+        formatReviewQueue("stale", rows),
+        {
+          recordsReturned: rows.length,
+          returnedIds: rows.map((row) => row.id),
+        },
+      );
+    }, logger),
+  );
+
+  // Tool: Get Archival Queue — the full conjunction, surfaced for consent.
+  server.registerTool(
+    "get_archival_queue",
+    {
+      title: "Get Archival Queue",
+      description:
+        "Return the archival review queue: thoughts that are old AND score 0 AND " +
+        "never retrieved AND not owned by a synced note. Surfaced for a " +
+        "consented archive decision — never auto-applied. Confirm with the user " +
+        "before archiving any item (use archive_thought).",
+      inputSchema: {},
+    },
+    withMcpLogging("get_archival_queue", async () => {
+      const { data, error } = await thoughtRepository.findArchivalCandidates(
+        isoDaysAgo(ARCHIVAL_AGE_DAYS),
+        REVIEW_QUEUE_LIMIT,
+      );
+      if (error) return errorResult(`Archival query failed: ${error.message}`);
+      const rows = data ?? [];
+      return textResult(
+        formatReviewQueue("archival", rows),
+        {
+          recordsReturned: rows.length,
+          returnedIds: rows.map((row) => row.id),
+        },
+      );
+    }, logger),
+  );
+}
+
+/** Render a review queue as a compact, id-first text block. */
+function formatReviewQueue(
+  label: string,
+  rows: { id: string; content: string; created_at: string | null }[],
+): string {
+  if (rows.length === 0) {
+    return `No thoughts in the ${label} review queue.`;
+  }
+  const lines = rows.map((row) => {
+    const preview = row.content.length > ARCHIVE_PREVIEW_LENGTH
+      ? row.content.slice(0, ARCHIVE_PREVIEW_LENGTH) + "…"
+      : row.content;
+    return `- ${row.id}: "${preview}"`;
+  });
+  return `${rows.length} thought(s) in the ${label} review queue ` +
+    `(review only — not auto-applied):\n${lines.join("\n")}`;
 }
 
 // ─── Standalone ingest_note handler (called via direct HTTP route, not MCP) ──
@@ -1055,6 +1244,8 @@ export async function executeReconciliationPlan(
       const { error } = await thoughtRepository.update(updateItem.id, {
         content: updateItem.content,
         embedding,
+        content_hash: await hashContent(updateItem.content),
+        last_actor: "sync",
         note_snapshot_id: noteSnapshotId,
         reliability: INGEST_PROVENANCE.reliability,
         author: INGEST_PROVENANCE.author,
@@ -1087,6 +1278,8 @@ export async function executeReconciliationPlan(
         embedding,
         reference_id: noteId || null,
         note_snapshot_id: noteSnapshotId,
+        content_hash: await hashContent(thoughtContent as string),
+        last_actor: "sync",
         reliability: INGEST_PROVENANCE.reliability,
         author: INGEST_PROVENANCE.author,
         metadata: {

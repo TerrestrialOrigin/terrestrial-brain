@@ -12,7 +12,6 @@ import {
   lifecycleMarker,
   thoughtById,
 } from "./_thoughts.ts";
-import { pending, pendingName } from "./_pending.ts";
 
 async function score(id: string): Promise<number> {
   const row = await thoughtById(id);
@@ -59,15 +58,10 @@ Deno.test("usefulness: a user content edit does not reinforce usefulness", async
   }
 });
 
-// Red-by-design: an all-selecting (rubber-stamp) record must contribute LESS
-// per id than a selective record over an equally-sized result set. Today the
-// RPC adds +1 per id regardless, so the two are equal.
+// An all-selecting (rubber-stamp) record contributes LESS per id than a
+// selective record over an equally-sized result set (rubber-stamp down-weighting).
 Deno.test(
-  pendingName(
-    "usefulness: a selective record increments more per id than a rubber-stamp",
-    "step7",
-    "rubber-stamp",
-  ),
+  "usefulness: a selective record increments more per id than a rubber-stamp",
   async () => {
     const markerRubber = lifecycleMarker("useful-rubber");
     const markerSelective = lifecycleMarker("useful-selective");
@@ -89,24 +83,23 @@ Deno.test(
         selectiveIds.push(thought.id);
       }
 
-      // Rubber-stamp: select ALL returned ids.
-      await callTool("record_useful_thoughts", { thought_ids: rubberIds });
-      // Selective: select ONE of an equally-sized result set.
+      // Rubber-stamp: select ALL of the returned set.
+      await callTool("record_useful_thoughts", {
+        thought_ids: rubberIds,
+        returned_ids: rubberIds,
+      });
+      // Selective: select ONE of an equally-sized returned set.
       await callTool("record_useful_thoughts", {
         thought_ids: [selectiveIds[0]],
+        returned_ids: selectiveIds,
       });
 
       const rubberWeight = await score(rubberIds[0]);
       const selectiveWeight = await score(selectiveIds[0]);
       assert(
         selectiveWeight > rubberWeight,
-        pending(
-          "step7",
-          "rubber-stamp",
-          `a selective pick must out-weight a rubber-stamp per id ` +
-            `(selective=${selectiveWeight}, rubber=${rubberWeight}); ` +
-            `increment_usefulness currently adds +1 flat`,
-        ),
+        `a selective pick must out-weight a rubber-stamp per id ` +
+          `(selective=${selectiveWeight}, rubber=${rubberWeight})`,
       );
     } finally {
       await deleteThoughtsByMarker(markerRubber);
