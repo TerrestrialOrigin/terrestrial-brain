@@ -1,6 +1,6 @@
 # Terrestrial Brain
 
-The project is inspired by and is an extension of "Open Brain" by Nate B Johnes (Seriously, subscribe to his youtube channel. He makes AWESOME content!)
+Long-term, searchable memory for your AI: an AI-powered second brain that connects your [Obsidian](https://obsidian.md) vault to a cloud knowledge base and exposes it to AI agents over [MCP](https://modelcontextprotocol.io/).
 
 >[!DANGER]
 > The supabase connection string with the key gets stored in your plugin data uncencrypted!!! This means that if you install a malicous plugin and it scans your obsidian folder to steal data it will be able to connect to the supabase database and read all data. There will be an enhancement later to take care of this, but for now that's a known vulnerability.
