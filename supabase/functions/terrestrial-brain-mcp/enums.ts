@@ -33,6 +33,8 @@ export const THOUGHT_TYPES = [
   "idea",
   "reference",
   "person_note",
+  "instruction",
+  "decision",
 ] as const;
 
 export const PROJECT_TYPES = [

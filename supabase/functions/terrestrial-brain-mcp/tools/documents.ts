@@ -9,6 +9,7 @@ import {
 } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { hashContent } from "../helpers.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
@@ -328,7 +329,11 @@ export function register(
         // Build update payload
         const updates: Record<string, unknown> = {};
         if (title !== undefined) updates.title = title;
-        if (content !== undefined) updates.content = content;
+        if (content !== undefined) {
+          updates.content = content;
+          // INVARIANT 1: re-hash on every content edit (one update path).
+          updates.content_hash = await hashContent(content);
+        }
         if (project_id !== undefined) updates.project_id = project_id;
 
         // If content changed, re-extract references from the new content BEFORE

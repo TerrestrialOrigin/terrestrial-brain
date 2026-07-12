@@ -1,6 +1,35 @@
 import type { AiProvider } from "./ai/ai-provider.ts";
 import { AiProviderParseError } from "./ai/ai-provider.ts";
 import type { ThoughtRepository } from "./repositories/thought-repository.ts";
+import { THOUGHT_TYPES } from "./enums.ts";
+
+/**
+ * Parse the extracted `type` against the THOUGHT_TYPES allowlist (parse, don't
+ * cast). A hallucinated or missing value is coerced to the documented fallback
+ * `observation` and logged, so a bad LLM `type` never reaches `metadata.type`.
+ */
+export function coerceThoughtType(
+  raw: unknown,
+): Record<string, unknown> {
+  const metadata = (raw && typeof raw === "object")
+    ? { ...(raw as Record<string, unknown>) }
+    : {};
+  const candidate = metadata.type;
+  if (
+    typeof candidate === "string" &&
+    (THOUGHT_TYPES as readonly string[]).includes(candidate)
+  ) {
+    return metadata;
+  }
+  if (candidate !== undefined) {
+    console.warn(
+      `extractMetadata: coercing out-of-allowlist type "${
+        String(candidate)
+      }" to "observation".`,
+    );
+  }
+  return { ...metadata, type: "observation" };
+}
 
 // ---------------------------------------------------------------------------
 // Backwards-compatible references reader
@@ -27,10 +56,64 @@ export function getEmbedding(
   return aiProvider.getEmbedding(text);
 }
 
+/**
+ * SHA-256 hex of the content — the stored `content_hash` (INVARIANT 1). Stamped
+ * wherever content is written so the hash tracks the current text and the sync
+ * dedup gate operates on it. Emptying content is a valid edit: hash of "" is a
+ * real value, never swallowed.
+ */
+export async function hashContent(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 const UNCATEGORIZED_METADATA = {
   topics: ["uncategorized"],
   type: "observation",
 };
+
+/**
+ * Cosine-similarity floor for the write-time dedup gate — a tight band
+ * (similarity ≥ 0.90 ⇔ cosine distance ≤ 0.10), distinct from the 0.5 read-side
+ * retrieval threshold (Step 5 design D2). A hit at this floor is effectively the
+ * same thought, not merely a relevant one.
+ */
+export const DEDUP_MIN_SIMILARITY = 0.90;
+
+/**
+ * Write-time deduplication decision. Returns the id of an existing active thought
+ * this content duplicates (byte-identical via content_hash, or within the tight
+ * embedding band), or null when the content is genuinely new. Server-side — never
+ * prompt-nudge.
+ */
+export async function resolveDedup(
+  thoughtRepository: ThoughtRepository,
+  contentHash: string,
+  embedding: number[],
+): Promise<{ duplicateOf: string | null }> {
+  const { data: exact } = await thoughtRepository.findByContentHash(
+    contentHash,
+  );
+  if (exact && exact.length > 0) {
+    return { duplicateOf: exact[0].id };
+  }
+  const { data: near } = await thoughtRepository.matchByEmbedding({
+    embedding,
+    threshold: DEDUP_MIN_SIMILARITY,
+    count: 1,
+    author: null,
+    reliability: null,
+  });
+  if (near && near.length > 0) {
+    return { duplicateOf: near[0].id };
+  }
+  return { duplicateOf: null };
+}
 
 export async function extractMetadata(
   aiProvider: AiProvider,
@@ -49,11 +132,11 @@ export async function extractMetadata(
 - "action_items": concrete to-dos the text implies; use [] when there are none.
 - "dates_mentioned": any calendar dates the text refers to, each formatted as YYYY-MM-DD; use [] when there are none.
 - "topics": one to three concise topic tags; always include at least one.
-- "type": the single best-fit category, chosen from "observation", "task", "idea", "reference", "person_note".
+- "type": the single best-fit category, chosen from "observation", "task", "idea", "reference", "person_note", "instruction", "decision".
 Base every field on what the text actually supports — do not invent details it does not contain.`,
         userContent: text,
       },
-      (raw) => raw as Record<string, unknown>,
+      (raw) => coerceThoughtType(raw),
     );
   } catch (error) {
     console.warn(
@@ -143,11 +226,14 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
         getEmbedding(aiProvider, thoughtContent),
         extractMetadata(aiProvider, thoughtContent),
       ]);
+      const contentHash = await hashContent(thoughtContent);
       const { error } = await thoughtRepository.insert({
         content: thoughtContent,
         embedding,
         reference_id: note_id || null,
         note_snapshot_id: noteSnapshotId || null,
+        content_hash: contentHash,
+        last_actor: "sync",
         metadata: {
           ...metadata,
           source: "obsidian",

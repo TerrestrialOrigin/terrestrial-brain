@@ -1,20 +1,56 @@
 // memory-lifecycle-rules → "Every content edit re-embeds and re-hashes (INVARIANT 1)".
 //
-// The re-embed guarantee ships today for thoughts (`update_thought`); the
-// content-hash half and the extension to projects/tasks/documents are Step 7.
+// Step 7 implements this: `update_thought` re-embeds (shipped) AND re-hashes, and
+// the content_hash guarantee extends to projects/tasks/documents. These tests
+// assert the REAL stored hash equals the hash of the new content (not just that
+// the column exists), through the one server-side update path.
 
 import { assert, assertEquals } from "@std/assert";
-import { callTool } from "../../helpers/mcp-client.ts";
+import {
+  callTool,
+  restUrl,
+  serviceHeaders,
+  uniqueName,
+} from "../../helpers/mcp-client.ts";
 import {
   captureThought,
   deleteThoughtsByMarker,
   lifecycleMarker,
 } from "./_thoughts.ts";
-import { columnExists } from "./_tools.ts";
-import { pending, pendingName } from "./_pending.ts";
 
-// Pass-now: editing a thought's content re-embeds, so it is found by its NEW
-// wording (the old embedding no longer governs retrieval).
+/** SHA-256 hex — must match the server's `hashContent` (helpers.ts). */
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function firstRow(
+  table: string,
+  filter: string,
+  columns: string,
+): Promise<Record<string, unknown> | null> {
+  const response = await fetch(
+    restUrl(`${table}?${filter}&select=${columns}`),
+    { headers: serviceHeaders() },
+  );
+  const rows = (await response.json()) as Record<string, unknown>[];
+  return rows[0] ?? null;
+}
+
+async function del(table: string, filter: string): Promise<void> {
+  const response = await fetch(restUrl(`${table}?${filter}`), {
+    method: "DELETE",
+    headers: serviceHeaders(),
+  });
+  await response.body?.cancel();
+}
+
+// Pass-now: editing a thought re-embeds, so it is found by its NEW wording.
 Deno.test("invariant1: edited thought is found by its new wording", async () => {
   const marker = lifecycleMarker("inv1-search");
   try {
@@ -33,74 +69,146 @@ Deno.test("invariant1: edited thought is found by its new wording", async () => 
     });
     assert(
       results.includes(marker),
-      `expected the re-embedded thought (${marker}) to match its new wording; ` +
-        `search returned: ${results.slice(0, 200)}`,
+      `expected the re-embedded thought (${marker}) to match its new wording`,
     );
   } finally {
     await deleteThoughtsByMarker(marker);
   }
 });
 
-// Red-by-design: there is no `content_hash` column yet, so the stored hash
-// cannot equal the hash of the new content.
-Deno.test(
-  pendingName(
-    "invariant1: stored hash equals the hash of the new content",
-    "step7",
-    "content-hash",
-  ),
-  async () => {
-    assert(
-      await columnExists("thoughts", "content_hash"),
-      pending(
-        "step7",
-        "content-hash",
-        "thoughts.content_hash column is absent; the sync dedup gate cannot operate on current text",
-      ),
+// A thought content edit stamps content_hash = sha256(new content).
+Deno.test("invariant1: a thought content edit stores the hash of the new content", async () => {
+  const marker = lifecycleMarker("inv1-hash");
+  try {
+    const thought = await captureThought(marker, `${marker} first wording`);
+    const newContent = `${marker} entirely rewritten wording`;
+    await callTool("update_thought", { id: thought.id, content: newContent });
+    const row = await firstRow(
+      "thoughts",
+      `id=eq.${thought.id}`,
+      "content_hash",
     );
-  },
-);
-
-// Red-by-design: the re-embed + re-hash guarantee must extend to projects,
-// tasks, and documents, not only thoughts.
-Deno.test(
-  pendingName(
-    "invariant1: the guarantee holds for projects, tasks, and documents",
-    "step7",
-    "invariant1-entities",
-  ),
-  async () => {
-    const projectsHashed = await columnExists("projects", "content_hash");
-    const tasksHashed = await columnExists("tasks", "content_hash");
-    const documentsHashed = await columnExists("documents", "content_hash");
-    assert(
-      projectsHashed && tasksHashed && documentsHashed,
-      pending(
-        "step7",
-        "invariant1-entities",
-        `content_hash missing on some entity (projects=${projectsHashed}, tasks=${tasksHashed}, documents=${documentsHashed}); INVARIANT 1 not yet extended beyond thoughts`,
-      ),
-    );
-  },
-);
-
-// Red-by-design: emptying content is a valid "loaded but empty" edit that must
-// still re-hash — verifiable only once content_hash exists.
-Deno.test(
-  pendingName(
-    "invariant1: emptying content is a valid edit, still re-hashed",
-    "step7",
-    "content-hash",
-  ),
-  async () => {
     assertEquals(
-      await columnExists("thoughts", "content_hash"),
-      true,
-      pending(
-        "step7",
-        "content-hash",
-        "cannot verify an empty edit is re-hashed as a valid state until thoughts.content_hash exists",
-      ),
+      row?.content_hash,
+      await sha256Hex(newContent),
+      "stored thought content_hash must equal sha256 of the new content",
     );
-  },
-);
+  } finally {
+    await deleteThoughtsByMarker(marker);
+  }
+});
+
+// The guarantee holds for projects, tasks, and documents, not only thoughts.
+Deno.test("invariant1: content_hash re-hashes on project, task, and document edits", async () => {
+  const projectName = uniqueName("inv1proj");
+  const taskMarker = lifecycleMarker("inv1-task");
+  let projectId = "";
+  try {
+    // Project: create, edit its description, assert the hash.
+    await callTool("create_project", {
+      name: projectName,
+      description: "initial",
+    });
+    const projectRow = await firstRow(
+      "projects",
+      `name=eq.${encodeURIComponent(projectName)}`,
+      "id",
+    );
+    projectId = String(projectRow?.id);
+    const newDescription = `${projectName} revised description prose`;
+    await callTool("update_project", {
+      id: projectId,
+      description: newDescription,
+    });
+    const projectAfter = await firstRow(
+      "projects",
+      `id=eq.${projectId}`,
+      "content_hash",
+    );
+    assertEquals(
+      projectAfter?.content_hash,
+      await sha256Hex(newDescription),
+      "project content_hash must equal sha256 of the new description",
+    );
+
+    // Task: create under the project, edit its content, assert the hash.
+    await callTool("create_task", {
+      content: `${taskMarker} initial task`,
+      project_id: projectId,
+    });
+    const taskRow = await firstRow(
+      "tasks",
+      `content=ilike.*${encodeURIComponent(taskMarker)}*`,
+      "id",
+    );
+    const taskId = String(taskRow?.id);
+    const newTaskContent = `${taskMarker} rewritten task content`;
+    await callTool("update_task", { id: taskId, content: newTaskContent });
+    const taskAfter = await firstRow(
+      "tasks",
+      `id=eq.${taskId}`,
+      "content_hash",
+    );
+    assertEquals(
+      taskAfter?.content_hash,
+      await sha256Hex(newTaskContent),
+      "task content_hash must equal sha256 of the new content",
+    );
+
+    // Document: create under the project, edit its content, assert the hash.
+    await callTool("write_document", {
+      title: `${projectName} doc`,
+      content: "initial document body",
+      project_id: projectId,
+    });
+    const docRow = await firstRow(
+      "documents",
+      `title=eq.${encodeURIComponent(projectName + " doc")}`,
+      "id",
+    );
+    const docId = String(docRow?.id);
+    const newDocContent = `${projectName} rewritten document body`;
+    await callTool("update_document", { id: docId, content: newDocContent });
+    const docAfter = await firstRow(
+      "documents",
+      `id=eq.${docId}`,
+      "content_hash",
+    );
+    assertEquals(
+      docAfter?.content_hash,
+      await sha256Hex(newDocContent),
+      "document content_hash must equal sha256 of the new content",
+    );
+  } finally {
+    if (projectId) {
+      await del("documents", `project_id=eq.${projectId}`);
+      await del("tasks", `project_id=eq.${projectId}`);
+      await del("projects", `id=eq.${projectId}`);
+    }
+  }
+});
+
+// Emptying content is a valid edit, still re-hashed (never swallowed).
+Deno.test("invariant1: emptying a thought's content is a valid, re-hashed edit", async () => {
+  const marker = lifecycleMarker("inv1-empty");
+  let thoughtId = "";
+  try {
+    const thought = await captureThought(marker, `${marker} some content`);
+    thoughtId = thought.id;
+    await callTool("update_thought", { id: thought.id, content: "" });
+    const row = await firstRow(
+      "thoughts",
+      `id=eq.${thought.id}`,
+      "id,content_hash",
+    );
+    assert(row !== null, "thought must still exist after emptying its content");
+    assertEquals(
+      row?.content_hash,
+      await sha256Hex(""),
+      "emptied content must be re-hashed as sha256 of the empty string",
+    );
+  } finally {
+    // Content is now empty, so delete by id (marker no longer in content).
+    if (thoughtId) await del("thoughts", `id=eq.${thoughtId}`);
+  }
+});

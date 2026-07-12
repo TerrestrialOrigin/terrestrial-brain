@@ -9,6 +9,7 @@ import { z } from "zod";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NewThought,
+  ReviewQueueRow,
   ThoughtActiveRow,
   ThoughtByReferenceRow,
   ThoughtDetailRow,
@@ -155,6 +156,73 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
     return { data, error: toRepoError(error) };
   }
 
+  async findByContentHash(
+    hash: string,
+  ): Promise<RepoResult<{ id: string }[]>> {
+    const { data, error } = await this.supabase
+      .from("thoughts")
+      .select("id")
+      .eq("content_hash", hash)
+      .is("archived_at", null)
+      .is("superseded_by", null);
+    return { data, error: toRepoError(error) };
+  }
+
+  async findStale(
+    olderThanIso: string,
+    staleBeforeIso: string,
+    limit: number,
+  ): Promise<RepoResult<ReviewQueueRow[]>> {
+    const { data, error } = await this.supabase
+      .from("thoughts")
+      .select("id, content, created_at, usefulness_score, last_retrieved_at")
+      .is("archived_at", null)
+      .is("superseded_by", null)
+      .lt("created_at", olderThanIso)
+      .or(`last_retrieved_at.is.null,last_retrieved_at.lt.${staleBeforeIso}`)
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    return { data, error: toRepoError(error) };
+  }
+
+  async findArchivalCandidates(
+    olderThanIso: string,
+    limit: number,
+  ): Promise<RepoResult<ReviewQueueRow[]>> {
+    const { data, error } = await this.supabase
+      .from("thoughts")
+      .select("id, content, created_at, usefulness_score, last_retrieved_at")
+      .is("archived_at", null)
+      .is("superseded_by", null)
+      .is("last_retrieved_at", null)
+      .is("note_snapshot_id", null)
+      .eq("usefulness_score", 0)
+      .lt("created_at", olderThanIso)
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    return { data, error: toRepoError(error) };
+  }
+
+  async setSupersededBy(
+    id: string,
+    supersededBy: string | null,
+  ): Promise<RepoResult<void>> {
+    const { error } = await this.supabase
+      .from("thoughts")
+      .update({ superseded_by: supersededBy })
+      .eq("id", id);
+    return { data: null, error: toRepoError(error) };
+  }
+
+  async touchRetrieved(ids: string[]): Promise<RepoResult<void>> {
+    if (ids.length === 0) return { data: null, error: null };
+    const { error } = await this.supabase
+      .from("thoughts")
+      .update({ last_retrieved_at: new Date().toISOString() })
+      .in("id", ids);
+    return { data: null, error: toRepoError(error) };
+  }
+
   async insert(thought: NewThought): Promise<RepoResult<void>> {
     // supabase's typegen types the pgvector `embedding` column as `string` and
     // the jsonb `metadata` as `Json`; the runtime accepts the number[] embedding
@@ -198,6 +266,17 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
     const { data, error } = await this.supabase.rpc("increment_usefulness", {
       thought_ids: ids,
     });
+    return { data, error: toRepoError(error) };
+  }
+
+  async incrementUsefulnessWeighted(
+    ids: string[],
+    weight: number,
+  ): Promise<RepoResult<number>> {
+    const { data, error } = await this.supabase.rpc(
+      "increment_usefulness_weighted",
+      { thought_ids: ids, weight },
+    );
     return { data, error: toRepoError(error) };
   }
 

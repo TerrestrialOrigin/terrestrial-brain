@@ -35,6 +35,16 @@ export type ThoughtListRow = Pick<
   | "author"
 >;
 
+/** A row shape for the staleness / archival review queues. */
+export type ReviewQueueRow = Pick<
+  Row<"thoughts">,
+  | "id"
+  | "content"
+  | "created_at"
+  | "usefulness_score"
+  | "last_retrieved_at"
+>;
+
 /** A single `{ key, count }` bucket in the aggregated thought statistics. */
 export interface ThoughtStatCount {
   key: string;
@@ -106,6 +116,10 @@ export interface NewThought {
   note_snapshot_id?: string | null;
   reliability?: string;
   author?: string | null;
+  /** SHA-256 of content (INVARIANT 1); stamped on every write path. */
+  content_hash?: string;
+  /** Actor of the mutation: LLM | user | sync (Invariant 2). */
+  last_actor?: string;
 }
 
 export interface ThoughtRepository {
@@ -138,6 +152,39 @@ export interface ThoughtRepository {
     referenceId: string,
   ): Promise<RepoResult<ThoughtByReferenceRow[]>>;
 
+  /** Active, non-superseded thoughts with an exact content-hash (write dedup). */
+  findByContentHash(hash: string): Promise<RepoResult<{ id: string }[]>>;
+
+  /**
+   * Stale-review queue: active thoughts older than `olderThanIso` that have not
+   * been retrieved since `staleBeforeIso` (retrieval-recency, NOT score alone —
+   * a recently-retrieved score-0 thought is excluded). Bounded by `limit`.
+   */
+  findStale(
+    olderThanIso: string,
+    staleBeforeIso: string,
+    limit: number,
+  ): Promise<RepoResult<ReviewQueueRow[]>>;
+
+  /**
+   * Archival-review queue: the full conjunction — older than `olderThanIso` AND
+   * `usefulness_score = 0` AND never retrieved (`last_retrieved_at` null) AND not
+   * owned by a synced note (`note_snapshot_id` null). Bounded by `limit`.
+   */
+  findArchivalCandidates(
+    olderThanIso: string,
+    limit: number,
+  ): Promise<RepoResult<ReviewQueueRow[]>>;
+
+  /** Set (or clear) the supersedes edge from a thought to its replacement. */
+  setSupersededBy(
+    id: string,
+    supersededBy: string | null,
+  ): Promise<RepoResult<void>>;
+
+  /** Advance the retrieval-recency signal for the given ids (non-fatal). */
+  touchRetrieved(ids: string[]): Promise<RepoResult<void>>;
+
   /** Insert one thought. */
   insert(thought: NewThought): Promise<RepoResult<void>>;
 
@@ -158,6 +205,12 @@ export interface ThoughtRepository {
 
   /** Increment usefulness for the given ids; data is the affected count. */
   incrementUsefulness(ids: string[]): Promise<RepoResult<number>>;
+
+  /** Weighted usefulness increment (rubber-stamp down-weighting). */
+  incrementUsefulnessWeighted(
+    ids: string[],
+    weight: number,
+  ): Promise<RepoResult<number>>;
 
   /**
    * HARD-delete every thought derived from a note snapshot; data is the count

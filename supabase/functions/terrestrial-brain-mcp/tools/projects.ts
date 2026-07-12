@@ -4,6 +4,7 @@ import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { hashContent } from "../helpers.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { PROJECT_TYPES } from "../enums.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
@@ -270,7 +271,11 @@ export function register(
         if (name !== undefined) updates.name = name;
         if (type !== undefined) updates.type = type;
         if (parent_id !== undefined) updates.parent_id = parent_id;
-        if (description !== undefined) updates.description = description;
+        if (description !== undefined) {
+          updates.description = description;
+          // INVARIANT 1: re-hash the project's editable prose on every edit.
+          updates.content_hash = await hashContent(description);
+        }
 
         if (Object.keys(updates).length === 0) {
           return errorResult(

@@ -4,6 +4,7 @@ import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, McpToolResult, textResult } from "../mcp-response.ts";
+import { hashContent } from "../helpers.ts";
 import type {
   TaskListRow,
   TaskRepository,
@@ -231,7 +232,11 @@ export function register(
       "update_task",
       async ({ id, content, status, due_by, project_id, assigned_to }) => {
         const updates: Record<string, unknown> = {};
-        if (content !== undefined) updates.content = content;
+        if (content !== undefined) {
+          updates.content = content;
+          // INVARIANT 1: re-hash on every content edit (one update path).
+          updates.content_hash = await hashContent(content);
+        }
         if (status !== undefined) updates.status = status;
         if (due_by !== undefined) updates.due_by = due_by;
         if (project_id !== undefined) updates.project_id = project_id;
@@ -387,6 +392,51 @@ export function register(
       }
 
       return textResult(result, { recordsReturned: data.length });
+    }, logger),
+  );
+
+  // Tool: Reconcile Tasks — propose open tasks to review for completion. This is
+  // a CONSENT surface: it surfaces open tasks so the model can check them against
+  // recent thoughts and ASK the user before closing any. It NEVER auto-closes —
+  // closing still goes through update_task (status: done) after confirmation.
+  server.registerTool(
+    "reconcile_tasks",
+    {
+      title: "Reconcile Tasks",
+      description:
+        "Return open tasks to reconcile against recent activity. For each, judge " +
+        "from recent thoughts whether it looks completed; if so, ASK the user to " +
+        "confirm before closing it (via update_task status: done). This tool " +
+        "NEVER changes any task status itself — it only proposes candidates. For " +
+        "a PMS-origin task, surface the consented-close choice; on decline it " +
+        "stays open.",
+      inputSchema: {
+        project_id: uuidField().optional().describe(
+          "Optional: only reconcile open tasks in this project",
+        ),
+      },
+    },
+    withMcpLogging("reconcile_tasks", async ({ project_id }) => {
+      const { data, error } = await taskRepository.list({
+        limit: 100,
+        includeArchived: false,
+        overdueOnly: false,
+        status: "open",
+        ...(project_id ? { projectId: project_id } : {}),
+      });
+      if (error) return errorResult(`Reconcile query failed: ${error.message}`);
+      const rows = data ?? [];
+      if (rows.length === 0) {
+        return textResult("No open tasks to reconcile.");
+      }
+      const lines = rows.map((task) => `- ${task.id}: "${task.content}"`);
+      return textResult(
+        `${rows.length} open task(s) to reconcile (confirm with the user before ` +
+          `closing any — this tool does not change status):\n${
+            lines.join("\n")
+          }`,
+        { recordsReturned: rows.length },
+      );
     }, logger),
   );
 }

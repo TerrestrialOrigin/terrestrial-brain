@@ -51,6 +51,7 @@ export type Database = {
       documents: {
         Row: {
           content: string
+          content_hash: string | null
           created_at: string
           file_path: string | null
           id: string
@@ -61,6 +62,7 @@ export type Database = {
         }
         Insert: {
           content: string
+          content_hash?: string | null
           created_at?: string
           file_path?: string | null
           id?: string
@@ -71,6 +73,7 @@ export type Database = {
         }
         Update: {
           content?: string
+          content_hash?: string | null
           created_at?: string
           file_path?: string | null
           id?: string
@@ -194,6 +197,7 @@ export type Database = {
       projects: {
         Row: {
           archived_at: string | null
+          content_hash: string | null
           created_at: string
           description: string | null
           id: string
@@ -205,6 +209,7 @@ export type Database = {
         }
         Insert: {
           archived_at?: string | null
+          content_hash?: string | null
           created_at?: string
           description?: string | null
           id?: string
@@ -216,6 +221,7 @@ export type Database = {
         }
         Update: {
           archived_at?: string | null
+          content_hash?: string | null
           created_at?: string
           description?: string | null
           id?: string
@@ -240,6 +246,7 @@ export type Database = {
           archived_at: string | null
           assigned_to: string | null
           content: string
+          content_hash: string | null
           created_at: string
           due_by: string | null
           id: string
@@ -254,6 +261,7 @@ export type Database = {
           archived_at?: string | null
           assigned_to?: string | null
           content: string
+          content_hash?: string | null
           created_at?: string
           due_by?: string | null
           id?: string
@@ -268,6 +276,7 @@ export type Database = {
           archived_at?: string | null
           assigned_to?: string | null
           content?: string
+          content_hash?: string | null
           created_at?: string
           due_by?: string | null
           id?: string
@@ -307,13 +316,17 @@ export type Database = {
           archived_at: string | null
           author: string | null
           content: string
+          content_hash: string | null
           created_at: string
           embedding: string | null
           id: string
+          last_actor: string | null
+          last_retrieved_at: string | null
           metadata: Json | null
           note_snapshot_id: string | null
           reference_id: string | null
           reliability: string | null
+          superseded_by: string | null
           updated_at: string
           usefulness_score: number
         }
@@ -321,13 +334,17 @@ export type Database = {
           archived_at?: string | null
           author?: string | null
           content: string
+          content_hash?: string | null
           created_at?: string
           embedding?: string | null
           id?: string
+          last_actor?: string | null
+          last_retrieved_at?: string | null
           metadata?: Json | null
           note_snapshot_id?: string | null
           reference_id?: string | null
           reliability?: string | null
+          superseded_by?: string | null
           updated_at?: string
           usefulness_score?: number
         }
@@ -335,13 +352,17 @@ export type Database = {
           archived_at?: string | null
           author?: string | null
           content?: string
+          content_hash?: string | null
           created_at?: string
           embedding?: string | null
           id?: string
+          last_actor?: string | null
+          last_retrieved_at?: string | null
           metadata?: Json | null
           note_snapshot_id?: string | null
           reference_id?: string | null
           reliability?: string | null
+          superseded_by?: string | null
           updated_at?: string
           usefulness_score?: number
         }
@@ -351,6 +372,13 @@ export type Database = {
             columns: ["note_snapshot_id"]
             isOneToOne: false
             referencedRelation: "note_snapshots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "thoughts_superseded_by_fkey"
+            columns: ["superseded_by"]
+            isOneToOne: false
+            referencedRelation: "thoughts"
             referencedColumns: ["id"]
           },
         ]
@@ -371,6 +399,10 @@ export type Database = {
         }[]
       }
       increment_usefulness: { Args: { thought_ids: string[] }; Returns: number }
+      increment_usefulness_weighted: {
+        Args: { thought_ids: string[]; weight: number }
+        Returns: number
+      }
       normalize_thought_project_refs: {
         Args: { target_id: string }
         Returns: undefined
