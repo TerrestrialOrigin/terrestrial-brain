@@ -5,6 +5,8 @@
     "test:unit": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env --allow-read tests/unit/",
     "test:integration": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env tests/integration/",
     "test:live-llm": "deno test --allow-net --allow-env tests/live/",
+    "test:eval": "deno test --allow-net --allow-env tests/eval/",
+    "test:sync-rules": "TB_AI_PROVIDER=fake deno test --allow-net --allow-env --allow-read tests/sync-rules/",
     "gen:types": "supabase gen types typescript --local --schema public > supabase/functions/terrestrial-brain-mcp/database.types.ts"
   },
   "imports": {
