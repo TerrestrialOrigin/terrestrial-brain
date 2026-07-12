@@ -1,15 +1,21 @@
 import { assertEquals } from "@std/assert";
 
-// Auth accept/deny matrix for the header-based-auth change.
-// x-tb-key header is the primary mechanism; ?key= is a deprecated fallback.
-// These are real HTTP requests against the running local stack — no mocks.
+// Auth accept/deny matrix for the header-based-auth change, updated for the
+// edge-security-residual change (Step 9): the ?key= query-param fallback is now
+// rejected by default (TB_ALLOW_KEY_IN_QUERY is unset in the test stack), and
+// CORS is locked to an allowlist (TB_ALLOWED_ORIGINS in the test stack's
+// supabase/functions/.env). These are real HTTP requests against the running
+// local stack — no mocks.
 
 const MCP_BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp";
 const VALID_KEY = "dev-test-key-123";
 
+const DISALLOWED_ORIGIN = "https://evil.example";
+
 interface AuthCallOptions {
   headerKey?: string;
   queryKey?: string;
+  origin?: string;
 }
 
 function buildUrl(path: string, options: AuthCallOptions): string {
@@ -27,6 +33,9 @@ function buildHeaders(options: AuthCallOptions): Record<string, string> {
   };
   if (options.headerKey !== undefined) {
     headers["x-tb-key"] = options.headerKey;
+  }
+  if (options.origin !== undefined) {
+    headers["Origin"] = options.origin;
   }
   return headers;
 }
@@ -89,11 +98,6 @@ Deno.test("auth: valid x-tb-key header is accepted on a direct route", async () 
   assertEquals(status, 200);
 });
 
-Deno.test("auth: deprecated ?key= query param fallback is still accepted", async () => {
-  const status = await callMcpRoot({ queryKey: VALID_KEY });
-  assertEquals(status, 200);
-});
-
 Deno.test("auth: valid header wins over an invalid query param", async () => {
   const status = await callMcpRoot({
     headerKey: VALID_KEY,
@@ -134,7 +138,28 @@ Deno.test("auth: wrong query param without header is rejected with 401", async (
   await assertUnauthorized({ queryKey: "wrong-key" });
 });
 
+// The security-residual default change: even a *valid* ?key= is rejected when
+// the header is absent and TB_ALLOW_KEY_IN_QUERY is off (the shipping default).
+Deno.test("auth: valid ?key= query param without header is rejected by default (401)", async () => {
+  await assertUnauthorized({ queryKey: VALID_KEY });
+});
+
 Deno.test("auth: direct route rejects missing credentials with 401", async () => {
   const status = await callDirectRoute({});
   assertEquals(status, 401);
+});
+
+// ─── CORS: non-browser auth is never origin-gated ─────────────────────────────
+// The app's CORS *header* behavior (reflect-vs-deny) is asserted in-process
+// against the real middleware in tests/unit/cors-middleware.test.ts, because the
+// local Supabase dev gateway (Kong) injects permissive `*` on /functions/v1/*
+// and masks the app on this network path. What IS observable and important here:
+// CORS never gates a non-browser client — auth is the real gate.
+
+Deno.test("cors: a valid header request still authenticates regardless of origin (non-browser path)", async () => {
+  const status = await callMcpRoot({
+    headerKey: VALID_KEY,
+    origin: DISALLOWED_ORIGIN,
+  });
+  assertEquals(status, 200);
 });

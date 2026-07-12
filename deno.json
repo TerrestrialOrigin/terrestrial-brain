@@ -16,7 +16,6 @@
     "@std/assert": "jsr:@std/assert@1",
     "zod": "npm:zod@4.1.13",
     "hono": "npm:hono@4.9.2",
-    "hono/": "npm:hono@4.9.2/",
     "@hono/mcp": "npm:@hono/mcp@0.1.1"
   },
   "lint": {

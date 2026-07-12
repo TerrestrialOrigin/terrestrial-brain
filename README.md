@@ -308,21 +308,26 @@ The ribbon **brain icon** offers a quick menu with:
 
 ### Step 7: Connect AI Agents via MCP
 
-Any MCP-compatible AI agent can connect to your Terrestrial Brain. Authentication uses the `x-tb-key` request header when the client supports custom headers. The `?key=` query parameter shown below is **deprecated** — it is kept only for MCP clients that cannot set custom headers (keys in URLs can end up in proxy logs and request traces). Here's how to configure common ones:
+Any MCP-compatible AI agent can connect to your Terrestrial Brain. Authentication uses the `x-tb-key` request header. The `?key=` query parameter is **deprecated and rejected by default** (keys in URLs can end up in proxy logs and request traces); it is accepted only if you explicitly set `TB_ALLOW_KEY_IN_QUERY=1` on the server, and only for MCP clients that genuinely cannot send custom headers. Prefer the header. Here's how to configure common ones:
 
 #### Claude Desktop
 
-Add this to your Claude Desktop MCP config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%/Claude/claude_desktop_config.json` on Windows):
+Add this to your Claude Desktop MCP config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%/Claude/claude_desktop_config.json` on Windows). Send the key as the `x-tb-key` header:
 
 ```json
 {
   "mcpServers": {
     "terrestrial-brain": {
-      "url": "https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp?key=<your-mcp-access-key>"
+      "url": "https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp",
+      "headers": {
+        "x-tb-key": "<your-mcp-access-key>"
+      }
     }
   }
 }
 ```
+
+If your client build cannot send custom headers, set `TB_ALLOW_KEY_IN_QUERY=1` on the server and append `?key=<your-mcp-access-key>` to the URL instead — but the header is strongly preferred (keys in URLs leak into logs).
 
 #### Claude Code
 
@@ -333,7 +338,10 @@ Add to your `.claude/settings.json`:
   "mcpServers": {
     "Terrestrial-Brain": {
       "type": "url",
-      "url": "https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp?key=<your-mcp-access-key>"
+      "url": "https://<your-project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp",
+      "headers": {
+        "x-tb-key": "<your-mcp-access-key>"
+      }
     }
   }
 }
@@ -517,8 +525,10 @@ Convenience scripts live in [`scripts/`](scripts/):
 
 | Secret | Required | Description |
 |---|---|---|
-| `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-tb-key` header; `?key=` is deprecated). Use a strong random string. |
+| `MCP_ACCESS_KEY` | Yes | Authenticates clients calling the MCP server (sent via the `x-tb-key` header). Use a strong random string. |
 | `OPENROUTER_API_KEY` | Prod / live tests | Used for real LLM calls (metadata extraction, embeddings). Required in production and for the opt-in `deno task test:live-llm` tier. NOT needed for the default test suite, which runs against the deterministic fake (`TB_AI_PROVIDER=fake`). Get from [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys). |
+| `TB_ALLOWED_ORIGINS` | No | Comma-separated allowlist of browser origins permitted by CORS (e.g. `https://console.example,https://app.example`). Defaults to empty — no cross-origin access, which is correct for the Obsidian plugin and MCP clients (neither is a browser). Set it only when a browser app (e.g. a future web console) must call the endpoint. The server never responds with wildcard `*`. |
+| `TB_ALLOW_KEY_IN_QUERY` | No | Set to exactly `1` to re-enable the deprecated `?key=` query-parameter auth fallback for MCP clients that cannot send the `x-tb-key` header. Off by default (any other value, including unset) — the header is the only accepted credential. Keys in URLs leak into proxy/CDN/edge logs, so leave this unset unless a client truly needs it. |
 | `TB_AI_PROVIDER` | No | Set to exactly `fake` to select the deterministic offline `FakeAiProvider` (used by the default test stack so it runs with no OpenRouter key). Any other value — unset, empty, or differently-cased — selects the live OpenRouter provider. Never set to `fake` in production. |
 | `TB_USER_TIMEZONE` | No | IANA timezone name (e.g. `America/New_York`, `Europe/Zurich`) used to resolve relative task due-dates ("today", "tomorrow", weekday names) against your local calendar day instead of UTC. Defaults to `UTC`; an invalid value falls back to `UTC` with a warning. |
 

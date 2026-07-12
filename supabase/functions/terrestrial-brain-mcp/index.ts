@@ -34,6 +34,12 @@ import {
 } from "./logger.ts";
 import { runWithRequestContext } from "./requestContext.ts";
 import { requireEnv } from "./env.ts";
+import {
+  buildCorsOptions,
+  isKeyInQueryAllowed,
+  parseAllowedOrigins,
+  resolveProvidedKey,
+} from "./security-config.ts";
 import type { Database } from "./database.types.ts";
 import type { AppSupabaseClient } from "./supabase-client.ts";
 import type { AiProvider } from "./ai/ai-provider.ts";
@@ -61,6 +67,17 @@ import { SupabaseQueryRepository } from "./repositories/supabase-query-repositor
 const SUPABASE_URL = requireEnv("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 const MCP_ACCESS_KEY = requireEnv("MCP_ACCESS_KEY");
+
+// Optional edge-boundary security switches (Step 9, edge-security-residual).
+// Both default to the most-restrictive posture: no cross-origin access and
+// header-only auth. Read once here (parse, don't cast) and passed into the
+// middleware config and request handler below.
+const ALLOWED_ORIGINS = parseAllowedOrigins(
+  Deno.env.get("TB_ALLOWED_ORIGINS"),
+);
+const ALLOW_KEY_IN_QUERY = isKeyInQueryAllowed(
+  Deno.env.get("TB_ALLOW_KEY_IN_QUERY"),
+);
 
 const supabase = createClient<Database>(
   SUPABASE_URL,
@@ -379,11 +396,14 @@ const app = new Hono();
 
 app.use(
   "*",
-  cors({
-    origin: "*",
-    allowMethods: ["POST", "GET", "OPTIONS"],
-    allowHeaders: ["Content-Type", "x-tb-key"],
-  }),
+  // Default-deny CORS: only origins in TB_ALLOWED_ORIGINS are reflected; an
+  // unset allowlist denies every cross-origin request. Never the wildcard `*`.
+  // CORS is a browser-side control only — the access-key check below is the real
+  // authorization gate for all clients (T7). NOTE: the local Supabase dev
+  // gateway (Kong) injects its own permissive CORS on /functions/v1/*, which
+  // masks this locally; hosted deployments are app-authoritative (see
+  // security-config tests, which assert this middleware directly).
+  cors(buildCorsOptions(ALLOWED_ORIGINS)),
 );
 
 // ─── Unified handler: route by URL path ──────────────────────────────────────
@@ -392,10 +412,14 @@ app.use(
 
 app.all("*", async (context) => {
   const url = new URL(context.req.url);
-  // x-tb-key header is the primary mechanism; ?key= is a deprecated
-  // fallback kept for MCP clients that cannot set custom headers.
-  const providedKey = context.req.header("x-tb-key") ||
-    url.searchParams.get("key");
+  // x-tb-key header is the primary and default mechanism. The deprecated ?key=
+  // fallback is consulted only when TB_ALLOW_KEY_IN_QUERY=1 (keys in URLs leak
+  // through proxy/CDN/edge logs). The header always wins when present (T2).
+  const providedKey = resolveProvidedKey({
+    headerKey: context.req.header("x-tb-key"),
+    queryKey: url.searchParams.get("key"),
+    allowKeyInQuery: ALLOW_KEY_IN_QUERY,
+  });
   if (!providedKey || !(await accessKeyMatches(providedKey, MCP_ACCESS_KEY))) {
     return context.json({ error: "Invalid or missing access key" }, 401);
   }

@@ -11,10 +11,10 @@ const SUPABASE_SERVICE_KEY =
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-const MCP_BASE =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123";
+const MCP_KEY = "dev-test-key-123";
+const MCP_BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp";
 const INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note?key=dev-test-key-123";
+  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note";
 
 // ---------------------------------------------------------------------------
 // /ingest-note HTTP route tests
@@ -28,7 +28,7 @@ Deno.test("/ingest-note does NOT fall through to MCP transport", async () => {
   // because callIngestNote doesn't send Accept: text/event-stream.
   const response = await fetch(INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-tb-key": MCP_KEY },
     body: JSON.stringify({
       content: "Route test — should not hit MCP transport.",
     }),
@@ -50,6 +50,7 @@ Deno.test("/ingest-note returns 401 without valid key", async () => {
     "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note",
     {
       method: "POST",
+      // No x-tb-key header and no ?key= → unauthenticated.
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: "test" }),
     },
@@ -62,7 +63,7 @@ Deno.test("/ingest-note returns 401 without valid key", async () => {
 Deno.test("/ingest-note returns 400 when content is missing", async () => {
   const response = await fetch(INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-tb-key": MCP_KEY },
     body: JSON.stringify({ title: "No content" }),
   });
   assertEquals(response.status, 400);
@@ -74,7 +75,7 @@ Deno.test("/ingest-note returns 400 when content is missing", async () => {
 Deno.test("/ingest-note returns 400 when content is empty string", async () => {
   const response = await fetch(INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-tb-key": MCP_KEY },
     body: JSON.stringify({ content: "   " }),
   });
   assertEquals(response.status, 400);
@@ -86,7 +87,7 @@ Deno.test("/ingest-note returns 400 when content is empty string", async () => {
 Deno.test("/ingest-note ingests a note and sets reliability and author", async () => {
   const response = await fetch(INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-tb-key": MCP_KEY },
     body: JSON.stringify({
       content:
         "The ingest route test verifies that thoughts have correct provenance fields after ingestion.",
@@ -138,6 +139,7 @@ Deno.test("ingest_note is NOT in MCP tool list", async () => {
     headers: {
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
+      "x-tb-key": MCP_KEY,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",

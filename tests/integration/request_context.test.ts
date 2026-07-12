@@ -11,15 +11,14 @@
 
 import { assert, assertEquals } from "@std/assert";
 import {
-  MCP_KEY,
+  mcpHeaders,
   restUrl,
   serviceHeaders,
   SUPABASE_URL,
   uniqueToken,
 } from "../helpers/mcp-client.ts";
 
-const MCP_ENDPOINT =
-  `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp?key=${MCP_KEY}`;
+const MCP_ENDPOINT = `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp`;
 
 Deno.test("MCP request records its client IP in function_call_logs (C8)", async () => {
   const marker = `rctx-int-${uniqueToken()}`;
@@ -27,11 +26,11 @@ Deno.test("MCP request records its client IP in function_call_logs (C8)", async 
 
   const response = await fetch(MCP_ENDPOINT, {
     method: "POST",
-    headers: {
+    headers: mcpHeaders({
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
       "x-forwarded-for": clientIp,
-    },
+    }),
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: marker,

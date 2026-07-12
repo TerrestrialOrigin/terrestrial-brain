@@ -6,16 +6,21 @@
 // test a clean red anchor: "the tool is not registered" / "the column does not
 // exist" — which Step 7 flips to green by adding the capability.
 
-import { MCP_BASE, restUrl, serviceHeaders } from "../../helpers/mcp-client.ts";
+import {
+  MCP_BASE,
+  mcpHeaders,
+  restUrl,
+  serviceHeaders,
+} from "../../helpers/mcp-client.ts";
 
 /** The set of tool names the running MCP server currently registers. */
 export async function toolNames(): Promise<string[]> {
   const response = await fetch(MCP_BASE, {
     method: "POST",
-    headers: {
+    headers: mcpHeaders({
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
-    },
+    }),
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
