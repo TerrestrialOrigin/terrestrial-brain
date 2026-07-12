@@ -47,7 +47,7 @@ AI Agents (Claude, etc.) -+---> Search thoughts semantically
 - **AI output workflow** -- AI agents can submit content (summaries, analyses, plans) to an `ai_output` table. The plugin polls for pending output, presents it for human review (accept/reject/postpone), and writes accepted content back into your vault. Batch task creation with auto-generated markdown checklists is also supported.
 - **Function call logging** -- Every MCP tool call and HTTP endpoint invocation is logged with input, response size, record count, errors, and caller IP address for a complete audit trail. Logged input is capped in size, and rows are purged automatically after a retention window (see [Data privacy, retention & erasure](#data-privacy-retention--erasure)).
 - **Note erasure (GDPR)** -- Deleting a note in your vault erases its backend data (the note snapshot and every thought derived from it); a "Forget this note in Terrestrial Brain" command does the same on demand without deleting the vault file.
-- **MCP server** -- 31 tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
+- **MCP server** -- 38 tools exposed via the Model Context Protocol, accessible to any MCP-compatible AI agent (Claude Desktop, Claude Code, custom agents).
 - **Security model** -- A single shared secret (`MCP_ACCESS_KEY`) enforced at the edge function is the system's security boundary; send it via the `x-tb-key` request header (the `?key=` query parameter still works but is deprecated). The edge function talks to the database with the service-role key; Row-Level Security's role is to lock the public anon key out of all data entirely. See [ThreatModel.md](ThreatModel.md) for the full analysis.
 
 ## Data privacy, retention & erasure
@@ -347,13 +347,13 @@ Add to your `.claude/settings.json`:
 }
 ```
 
-Once connected, your AI agent has access to 31 MCP tools:
+Once connected, your AI agent has access to 38 MCP tools:
 
 | Category | Tools |
 |---|---|
 | Thoughts | `search_thoughts`, `list_thoughts`, `capture_thought`, `get_thought_by_id`, `update_thought`, `thought_stats`, `record_useful_thoughts`, `archive_thought` |
 | Projects | `create_project`, `list_projects`, `get_project`, `update_project`, `archive_project` |
-| Tasks | `create_task`, `list_tasks`, `get_tasks`, `update_task`, `archive_task` |
+| Tasks | `create_task`, `list_tasks`, `list_open_tasks_by_project`, `get_tasks`, `update_task`, `archive_task`, `reconcile_tasks` |
 | People | `create_person`, `list_people`, `get_person`, `update_person`, `archive_person` |
 | Documents | `write_document`, `list_documents`, `get_document`, `update_document` |
 | AI Output | `create_ai_output`, `create_tasks_with_output` |
