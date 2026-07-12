@@ -48,6 +48,13 @@ Living document. Each OpenSpec change with security impact records its analysis 
   compliance gap (a public repo carrying third-party MIT material with no
   license file and no attribution) rather than a runtime attack surface — no
   code, input, or auth path is affected.
+- **Marketing branding separated from provenance.** Public marketing surfaces
+  (README headline, GitHub repository description) describe the product on its
+  own terms with no Open Brain / OB1 / Nate reference; the required MIT
+  attribution is retained in `NOTICE.md` and the README License section
+  (change `branding-separation`). A deterministic docs-consistency test
+  (`tests/unit/branding-separation.test.ts`) guards against reintroduction. No
+  code, input, or auth path is affected.
 
 ## Out of scope (accepted for a single-tenant personal system)
 
