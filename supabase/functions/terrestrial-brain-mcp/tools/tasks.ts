@@ -11,10 +11,62 @@ import type {
 } from "../repositories/task-repository.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { TASK_STATUSES } from "../enums.ts";
-import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
+import {
+  DEFAULT_GROUPED_TASK_LIMIT,
+  DEFAULT_LIST_LIMIT,
+  MAX_GROUPED_TASK_LIMIT,
+  MAX_QUERY_LIMIT,
+} from "../constants.ts";
 
 /** Resolves a batch of ids to a `Map<id, displayValue>` (injected for testing). */
 type NameResolver = (ids: string[]) => Promise<Map<string, string>>;
+
+/** Optional display context for a single rendered task line. */
+interface TaskLineContext {
+  /** When present, a `Project:` line is added for tasks with a resolved name. */
+  projectNames?: Map<string, string>;
+  personNames: Map<string, string>;
+}
+
+/**
+ * Renders one task as its numbered multi-line block (status icon, id/status,
+ * optional project + assignee, due date with overdue marker). Shared by
+ * `list_tasks` and `list_open_tasks_by_project` so a task looks identical
+ * wherever it appears. Pure apart from `new Date()` for overdue detection.
+ */
+export function renderTaskLine(
+  task: TaskListRow,
+  position: number,
+  context: TaskLineContext,
+): string {
+  const statusIcon = task.status === "done"
+    ? "[x]"
+    : task.status === "in_progress"
+    ? "[~]"
+    : "[ ]";
+  const parts = [`${position}. ${statusIcon} ${task.content}`];
+  parts.push(`   ID: ${task.id} | Status: ${task.status}`);
+  const projectName = task.project_id
+    ? context.projectNames?.get(task.project_id)
+    : undefined;
+  if (projectName) {
+    parts.push(`   Project: ${projectName}`);
+  }
+  const personName = task.assigned_to
+    ? context.personNames.get(task.assigned_to)
+    : undefined;
+  if (personName) {
+    parts.push(`   Assigned to: ${personName}`);
+  }
+  if (task.due_by) {
+    const due = new Date(task.due_by);
+    const overdue = due < new Date() && task.status !== "done";
+    parts.push(
+      `   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`,
+    );
+  }
+  return parts.join("\n");
+}
 
 /**
  * Formats a list of tasks into the `list_tasks` text body. Pure — no DB, no
@@ -25,31 +77,91 @@ export function buildTaskListText(
   projectNames: Map<string, string>,
   personNames: Map<string, string>,
 ): string {
-  const lines = tasks.map((task, index) => {
-    const statusIcon = task.status === "done"
-      ? "[x]"
-      : task.status === "in_progress"
-      ? "[~]"
-      : "[ ]";
-    const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
-    parts.push(`   ID: ${task.id} | Status: ${task.status}`);
-    if (task.project_id && projectNames.get(task.project_id)) {
-      parts.push(`   Project: ${projectNames.get(task.project_id)}`);
+  const lines = tasks.map((task, index) =>
+    renderTaskLine(task, index + 1, { projectNames, personNames })
+  );
+  return `${tasks.length} task(s):\n\n${lines.join("\n\n")}`;
+}
+
+/** A project (or the no-project bucket) with its tasks, ready to render. */
+interface RenderableTaskGroup {
+  heading: string;
+  /** 0 = known project, 1 = unknown/deleted project, 2 = the no-project bucket. */
+  rank: number;
+  sortKey: string;
+  tasks: TaskListRow[];
+}
+
+/**
+ * Groups incomplete tasks by project for `list_open_tasks_by_project`. Pure.
+ * Tasks arrive already globally sorted, so within-group order is preserved.
+ * Group order: known projects alphabetical by name, then unknown-project
+ * groups, then the "(No project)" bucket last. A task whose `project_id` does
+ * not resolve to a name is grouped under "(Unknown project <id>)" rather than
+ * dropped. Numbering restarts within each group.
+ */
+export function buildOpenTasksByProjectText(
+  tasks: TaskListRow[],
+  projectNames: Map<string, string>,
+  personNames: Map<string, string>,
+  options: { truncated: boolean; limit: number },
+): string {
+  const byProject = new Map<string, TaskListRow[]>();
+  const noProject: TaskListRow[] = [];
+  for (const task of tasks) {
+    if (!task.project_id) {
+      noProject.push(task);
+      continue;
     }
-    if (task.assigned_to && personNames.get(task.assigned_to)) {
-      parts.push(`   Assigned to: ${personNames.get(task.assigned_to)}`);
+    const bucket = byProject.get(task.project_id) ?? [];
+    bucket.push(task);
+    byProject.set(task.project_id, bucket);
+  }
+
+  const groups: RenderableTaskGroup[] = [];
+  for (const [projectId, groupTasks] of byProject) {
+    const name = projectNames.get(projectId);
+    if (name === undefined) {
+      groups.push({
+        heading: `(Unknown project ${projectId})`,
+        rank: 1,
+        sortKey: projectId,
+        tasks: groupTasks,
+      });
+    } else {
+      groups.push({
+        heading: name,
+        rank: 0,
+        sortKey: name.toLowerCase(),
+        tasks: groupTasks,
+      });
     }
-    if (task.due_by) {
-      const due = new Date(task.due_by);
-      const overdue = due < new Date() && task.status !== "done";
-      parts.push(
-        `   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`,
-      );
-    }
-    return parts.join("\n");
+  }
+  if (noProject.length > 0) {
+    groups.push({
+      heading: "(No project)",
+      rank: 2,
+      sortKey: "",
+      tasks: noProject,
+    });
+  }
+  groups.sort((a, b) => a.rank - b.rank || a.sortKey.localeCompare(b.sortKey));
+
+  const sections = groups.map((group) => {
+    const lines = group.tasks.map((task, index) =>
+      renderTaskLine(task, index + 1, { personNames })
+    );
+    return `## ${group.heading} (${group.tasks.length})\n${lines.join("\n\n")}`;
   });
 
-  return `${tasks.length} task(s):\n\n${lines.join("\n\n")}`;
+  const header =
+    `${tasks.length} open task(s) across ${groups.length} group(s):`;
+  let body = `${header}\n\n${sections.join("\n\n")}`;
+  if (options.truncated) {
+    body += `\n\n⚠️ Showing the first ${options.limit} tasks; more exist. ` +
+      `Narrow with list_tasks or filter by a single project.`;
+  }
+  return body;
 }
 
 /**
@@ -98,6 +210,59 @@ export async function handleListTasks(
 
   return textResult(buildTaskListText(data, projectNames, personNames), {
     recordsReturned: data.length,
+  });
+}
+
+/**
+ * `list_open_tasks_by_project` logic behind injected seams (fake repository +
+ * fake resolvers → no DB in unit tests). Fetches every incomplete unarchived
+ * task (bounded), detects truncation via the `limit + 1` probe, resolves
+ * project/person names in one batch each, and renders the grouped body.
+ * Reports the real emitted count + ids to the logger via `meta`.
+ */
+export async function handleOpenTasksByProject(
+  taskRepository: TaskRepository,
+  resolveProjects: NameResolver,
+  resolvePersons: NameResolver,
+  args: { limit: number; include_deferred: boolean },
+): Promise<McpToolResult> {
+  const { data, error } = await taskRepository.listIncompleteUnarchived({
+    limit: args.limit,
+    includeDeferred: args.include_deferred,
+  });
+
+  if (error) return errorResult(`Error: ${error.message}`);
+
+  const rows = data ?? [];
+  // The repository fetched `limit + 1`; more than `limit` means it was capped.
+  const truncated = rows.length > args.limit;
+  const tasks = truncated ? rows.slice(0, args.limit) : rows;
+
+  if (tasks.length === 0) {
+    return textResult("No open tasks.", { recordsReturned: 0 });
+  }
+
+  const projectIds = tasks.flatMap((task) =>
+    task.project_id ? [task.project_id] : []
+  );
+  const projectNames = projectIds.length > 0
+    ? await resolveProjects(projectIds)
+    : new Map<string, string>();
+
+  const personIds = tasks.flatMap((task) =>
+    task.assigned_to ? [task.assigned_to] : []
+  );
+  const personNames = personIds.length > 0
+    ? await resolvePersons(personIds)
+    : new Map<string, string>();
+
+  const body = buildOpenTasksByProjectText(tasks, projectNames, personNames, {
+    truncated,
+    limit: args.limit,
+  });
+  return textResult(body, {
+    recordsReturned: tasks.length,
+    returnedIds: tasks.map((task) => task.id),
   });
 }
 
@@ -197,6 +362,42 @@ export function register(
           (ids) => resolveNames(supabase, "projects", ids),
           (ids) => resolveNames(supabase, "people", ids),
           { project_id, status, overdue_only, include_archived, limit },
+        ),
+      logger,
+    ),
+  );
+
+  server.registerTool(
+    "list_open_tasks_by_project",
+    {
+      title: "List Open Tasks by Project",
+      description:
+        "Return ALL incomplete (not done), unarchived tasks across every project, " +
+        "grouped by project, in one call. Tasks with no project are collected in a " +
+        '"(No project)" group rendered last. Use this for a whole-brain ' +
+        "\"what's on my plate, by project\" review; for a single project's list or " +
+        "status/overdue filtering use list_tasks. Deferred tasks are included by " +
+        "default — pass include_deferred=false for only actionable (open/in_progress) " +
+        "work. Results are bounded (default 500, max 1000) and report truncation.",
+      inputSchema: {
+        include_deferred: z.boolean().optional().default(true).describe(
+          "Include deferred tasks in the incomplete set (default true)",
+        ),
+        limit: z.number().int().min(1).max(MAX_GROUPED_TASK_LIMIT).optional()
+          .default(DEFAULT_GROUPED_TASK_LIMIT).describe(
+            "Max tasks fetched across all groups (default 500, max 1000); " +
+              "truncation past the cap is reported",
+          ),
+      },
+    },
+    withMcpLogging(
+      "list_open_tasks_by_project",
+      ({ include_deferred, limit }) =>
+        handleOpenTasksByProject(
+          taskRepository,
+          (ids) => resolveNames(supabase, "projects", ids),
+          (ids) => resolveNames(supabase, "people", ids),
+          { include_deferred, limit },
         ),
       logger,
     ),

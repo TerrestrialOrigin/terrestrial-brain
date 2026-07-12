@@ -8,6 +8,7 @@ import type { AppSupabaseClient, InsertRow } from "../supabase-client.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   CreatedTask,
+  IncompleteTasksFilters,
   NewTaskValues,
   TaskDetailRow,
   TaskListFilters,
@@ -50,6 +51,29 @@ export class SupabaseTaskRepository implements TaskRepository {
     }
 
     const { data, error } = await query;
+    return { data, error: toRepoError(error) };
+  }
+
+  async listIncompleteUnarchived(
+    filters: IncompleteTasksFilters,
+  ): Promise<RepoResult<TaskListRow[]>> {
+    // Exclude done (always) and — when the caller opts out — deferred. The
+    // remaining statuses are the "incomplete" set. NOT IN keeps the query a
+    // single round-trip regardless of how many statuses are excluded.
+    const excluded = filters.includeDeferred ? ["done"] : ["done", "deferred"];
+    const { data, error } = await this.supabase
+      .from("tasks")
+      .select(
+        "id, content, status, due_by, project_id, assigned_to, archived_at, created_at",
+      )
+      .is("archived_at", null)
+      .not("status", "in", `(${excluded.join(",")})`)
+      // Overdue/soonest due first, undated last, then oldest-created first.
+      .order("due_by", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true })
+      // Fetch one extra so the handler can tell "exactly at the cap" from
+      // "more exist" and report truncation.
+      .limit(filters.limit + 1);
     return { data, error: toRepoError(error) };
   }
 

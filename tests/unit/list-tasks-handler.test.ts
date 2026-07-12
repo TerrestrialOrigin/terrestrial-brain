@@ -16,6 +16,7 @@ import type { RepoResult } from "../../supabase/functions/terrestrial-brain-mcp/
 function fakeRepo(listResult: RepoResult<TaskListRow[]>): TaskRepository {
   return {
     list: () => Promise.resolve(listResult),
+    listIncompleteUnarchived: () => Promise.resolve(listResult),
     insert: () => Promise.resolve({ data: null, error: null }),
     findByIds: () => Promise.resolve({ data: [], error: null }),
     update: () => Promise.resolve({ data: null, error: null }),

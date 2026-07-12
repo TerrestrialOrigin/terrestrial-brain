@@ -146,6 +146,9 @@ export class FakeTaskRepository implements TaskRepository {
   list() {
     return notImplemented("list");
   }
+  listIncompleteUnarchived() {
+    return notImplemented("listIncompleteUnarchived");
+  }
   findByIds() {
     return notImplemented("findByIds");
   }

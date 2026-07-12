@@ -58,6 +58,14 @@ export interface TaskListFilters {
   status?: string;
 }
 
+/** Filters for the whole-brain grouped-by-project view. */
+export interface IncompleteTasksFilters {
+  /** Hard cap on rows fetched. The impl reads `limit + 1` to detect truncation. */
+  limit: number;
+  /** When false, `deferred` tasks are excluded alongside `done`. */
+  includeDeferred: boolean;
+}
+
 /** A task row read for the extractor pipeline's reconciliation context seed. */
 export interface TaskReferenceRow {
   id: string;
@@ -71,6 +79,16 @@ export interface TaskRepository {
 
   /** List tasks with optional project/status/overdue/archived filters. */
   list(filters: TaskListFilters): Promise<RepoResult<TaskListRow[]>>;
+
+  /**
+   * Every incomplete (status != 'done'), unarchived task across all projects,
+   * ordered for grouped display (overdue/soonest due first, undated last, then
+   * created ascending). Fetches at most `limit + 1` rows so the caller can
+   * detect truncation. Backs `list_open_tasks_by_project`.
+   */
+  listIncompleteUnarchived(
+    filters: IncompleteTasksFilters,
+  ): Promise<RepoResult<TaskListRow[]>>;
 
   /** Fetch tasks by id (archived included). */
   findByIds(ids: string[]): Promise<RepoResult<TaskDetailRow[]>>;

@@ -151,6 +151,9 @@ function makeFakeTaskRepository(
     list() {
       return Promise.resolve({ data: [], error: null });
     },
+    listIncompleteUnarchived() {
+      return Promise.resolve({ data: [], error: null });
+    },
     findByIds() {
       return Promise.resolve({ data: [], error: null });
     },

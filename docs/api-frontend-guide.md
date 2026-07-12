@@ -41,4 +41,21 @@ All are `POST`, JSON in/out, and share the auth above. Success responses are
 ## MCP endpoint
 
 `POST` to the base URL with a JSON-RPC 2.0 body (`Accept: application/json, text/event-stream`).
-Responses may arrive as JSON or SSE (`event:`/`data:` lines). 31 tools — see README.
+Responses may arrive as JSON or SSE (`event:`/`data:` lines). 38 tools — see README.
+
+### `list_open_tasks_by_project` (change: list-open-tasks-by-project)
+
+Read-only. Returns every incomplete (status ≠ `done`), unarchived task across the whole
+brain, grouped by project, in one call — the whole-brain "what's on my plate, by project"
+view. For a single project's list or status/overdue filtering, use `list_tasks` instead.
+
+- **Input:** `{ include_deferred?: boolean = true, limit?: integer = 500 (1–1000) }`.
+  `include_deferred: false` drops `deferred` tasks (keeps `open` / `in_progress`).
+- **Output:** a markdown text body — one `## <Project name> (<n>)` section per project
+  (projects alphabetical), tasks whose `project_id` does not resolve under
+  `## (Unknown project <id>)`, and unassigned tasks under `## (No project) (<n>)` rendered
+  last. Header line: `<total> open task(s) across <G> group(s):`.
+- **Empty state:** `No open tasks.` (a success, not an error).
+- **Truncation:** results are bounded by `limit`; when more tasks exist the body ends with
+  an explicit `⚠️ Showing the first <limit> tasks; more exist. …` notice (also logged).
+- **Telemetry:** logs real `records_returned` (total emitted) and `returned_ids`.
