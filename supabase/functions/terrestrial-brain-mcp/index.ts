@@ -44,6 +44,12 @@ import type { Database } from "./database.types.ts";
 import type { AppSupabaseClient } from "./supabase-client.ts";
 import type { AiProvider } from "./ai/ai-provider.ts";
 import { createAiProvider } from "./ai/factory.ts";
+import {
+  AI_METERED_FUNCTIONS,
+  parseAiMonthlyLimit,
+} from "./metering-config.ts";
+import { SupabaseUsageMeter } from "./usage-meter.ts";
+import { AiQuotaGate, quotaExceededMessage } from "./ai-quota.ts";
 import type { ThoughtRepository } from "./repositories/thought-repository.ts";
 import type { TaskRepository } from "./repositories/task-repository.ts";
 import type { ProjectRepository } from "./repositories/project-repository.ts";
@@ -102,6 +108,16 @@ const queryRepository = new SupabaseQueryRepository(supabase);
 // deterministic FakeAiProvider based on TB_AI_PROVIDER (Step 22).
 const aiProvider = createAiProvider();
 
+// Managed-AI monthly quota (Step 15, managed-ai-metering). Read + parsed ONCE
+// here (parse, don't cast): unset/invalid/≤0 ⇒ unlimited — the safe self-host
+// default, so the gate short-circuits to "allowed" with no usage query. When a
+// positive limit is set (a hosted project secret), the gate counts AI-metered
+// calls this UTC month from function_call_logs and refuses over-quota operations
+// before any AI call.
+const aiMonthlyLimit = parseAiMonthlyLimit(Deno.env.get("TB_AI_MONTHLY_LIMIT"));
+const usageMeter = new SupabaseUsageMeter(supabase, AI_METERED_FUNCTIONS);
+const quotaGate = new AiQuotaGate(aiMonthlyLimit, usageMeter);
+
 // ─── MCP Server factory ─────────────────────────────────────────────────────
 // A fresh server is built per request (see the MCP branch below), following the
 // MCP SDK's stateless-transport guidance: one server + transport per request
@@ -114,6 +130,7 @@ function createMcpServer(
   supabaseClient: AppSupabaseClient,
   callLogger: FunctionCallLogger,
   provider: AiProvider,
+  gate: AiQuotaGate,
   repos: {
     thought: ThoughtRepository;
     task: TaskRepository;
@@ -142,6 +159,7 @@ function createMcpServer(
     repos.task,
     repos.project,
     repos.person,
+    gate,
   );
   registerProjects(
     server,
@@ -228,7 +246,7 @@ interface HttpRouteContext {
 
 type HttpRouteResult =
   | { ok: true; data?: unknown; message?: string; recordCount: number }
-  | { ok: false; error: string; status: 400 | 500 };
+  | { ok: false; error: string; status: 400 | 429 | 500 };
 
 interface HttpRoute {
   suffix: string;
@@ -274,6 +292,12 @@ const HTTP_ROUTES: HttpRoute[] = [
         !content || typeof content !== "string" || content.trim().length === 0
       ) {
         return { ok: false, error: "content is required", status: 400 };
+      }
+      // Metered AI operation (Step 15): refused before any embedding/extraction
+      // when over quota, with a distinct 429 (never a silent success/skip).
+      const quota = await quotaGate.check(Date.now());
+      if (!quota.allowed) {
+        return { ok: false, error: quotaExceededMessage(quota), status: 429 };
       }
       const result = await handleIngestNote(
         supabase,
@@ -501,7 +525,7 @@ app.all("*", async (context) => {
   // context so tool handlers read THIS request's IP (finding C8), and a fresh
   // server + transport are built per request per the SDK's stateless pattern.
   return runWithRequestContext({ ipAddress }, async () => {
-    const server = createMcpServer(supabase, logger, aiProvider, {
+    const server = createMcpServer(supabase, logger, aiProvider, quotaGate, {
       thought: thoughtRepository,
       task: taskRepository,
       project: projectRepository,

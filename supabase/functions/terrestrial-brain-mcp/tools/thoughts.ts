@@ -16,6 +16,7 @@ import {
   runExtractionPipeline,
 } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { AiQuotaGate, withAiQuota } from "../ai-quota.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { RELIABILITIES, THOUGHT_TYPES } from "../enums.ts";
@@ -165,6 +166,7 @@ export function register(
   taskRepository: TaskRepository,
   projectRepository: ProjectRepository,
   personRepository: PersonRepository,
+  quotaGate: AiQuotaGate,
 ) {
   // Tool 1: Semantic Search
   server.registerTool(
@@ -198,118 +200,127 @@ export function register(
     },
     withMcpLogging(
       "search_thoughts",
-      async ({ query, limit, threshold, author, reliability }) => {
-        const queryEmbedding = await getEmbedding(aiProvider, query);
-        const { data, error } = await thoughtRepository.matchByEmbedding({
-          embedding: queryEmbedding,
-          threshold,
-          count: limit,
-          author: author || null,
-          reliability: reliability || null,
-        });
-
-        if (error) {
-          return errorResult(`Search error: ${error.message}`);
-        }
-
-        if (!data || data.length === 0) {
-          return textResult(`No thoughts found matching "${query}".`, {
-            recordsReturned: 0,
+      // Metered AI operation (Step 15): refused before any embedding when over
+      // quota, with a distinct quota-exceeded error (never an empty "no results").
+      withAiQuota(
+        quotaGate,
+        async ({ query, limit, threshold, author, reliability }) => {
+          const queryEmbedding = await getEmbedding(aiProvider, query);
+          const { data, error } = await thoughtRepository.matchByEmbedding({
+            embedding: queryEmbedding,
+            threshold,
+            count: limit,
+            author: author || null,
+            reliability: reliability || null,
           });
-        }
 
-        // Collect all project UUIDs and resolve to names
-        const allProjectUuids: string[] = [];
-        for (const thought of data) {
-          const projectRefs = getProjectRefs(
-            (thought.metadata || {}) as Record<string, unknown>,
+          if (error) {
+            return errorResult(`Search error: ${error.message}`);
+          }
+
+          if (!data || data.length === 0) {
+            return textResult(`No thoughts found matching "${query}".`, {
+              recordsReturned: 0,
+            });
+          }
+
+          // Collect all project UUIDs and resolve to names
+          const allProjectUuids: string[] = [];
+          for (const thought of data) {
+            const projectRefs = getProjectRefs(
+              (thought.metadata || {}) as Record<string, unknown>,
+            );
+            allProjectUuids.push(...projectRefs);
+          }
+          const projectNameMap = await resolveNames(
+            supabase,
+            "projects",
+            allProjectUuids,
           );
-          allProjectUuids.push(...projectRefs);
-        }
-        const projectNameMap = await resolveNames(
-          supabase,
-          "projects",
-          allProjectUuids,
-        );
 
-        const results = data.map(
-          (thought, i: number) => {
-            const metadata = (thought.metadata ?? {}) as Record<
-              string,
-              unknown
-            >;
-            const parts = [
-              `--- Result ${i + 1} (${
-                (thought.similarity * 100).toFixed(1)
-              }% match) ---`,
-              `ID: ${thought.id}`,
-              `Captured: ${new Date(thought.created_at).toISOString()}`,
-            ];
-            if (thought.updated_at) {
-              parts.push(
-                `Updated: ${new Date(thought.updated_at).toISOString()}`,
-              );
-            }
-            parts.push(`Type: ${metadata.type || "unknown"}`);
-            if (thought.reliability || thought.author) {
-              const provenanceParts: string[] = [];
-              if (thought.reliability) {
-                provenanceParts.push(
-                  `Reliability: ${thought.reliability}`,
+          const results = data.map(
+            (thought, i: number) => {
+              const metadata = (thought.metadata ?? {}) as Record<
+                string,
+                unknown
+              >;
+              const parts = [
+                `--- Result ${i + 1} (${
+                  (thought.similarity * 100).toFixed(1)
+                }% match) ---`,
+                `ID: ${thought.id}`,
+                `Captured: ${new Date(thought.created_at).toISOString()}`,
+              ];
+              if (thought.updated_at) {
+                parts.push(
+                  `Updated: ${new Date(thought.updated_at).toISOString()}`,
                 );
               }
-              if (thought.author) {
-                provenanceParts.push(`Author: ${thought.author}`);
+              parts.push(`Type: ${metadata.type || "unknown"}`);
+              if (thought.reliability || thought.author) {
+                const provenanceParts: string[] = [];
+                if (thought.reliability) {
+                  provenanceParts.push(
+                    `Reliability: ${thought.reliability}`,
+                  );
+                }
+                if (thought.author) {
+                  provenanceParts.push(`Author: ${thought.author}`);
+                }
+                parts.push(provenanceParts.join(" | "));
               }
-              parts.push(provenanceParts.join(" | "));
-            }
-            if (Array.isArray(metadata.topics) && metadata.topics.length) {
-              parts.push(`Topics: ${(metadata.topics as string[]).join(", ")}`);
-            }
-            if (Array.isArray(metadata.people) && metadata.people.length) {
-              parts.push(`People: ${(metadata.people as string[]).join(", ")}`);
-            }
-            const projectRefs = getProjectRefs(
-              metadata as Record<string, unknown>,
-            );
-            if (projectRefs.length > 0) {
-              const projectNames = projectRefs.map((uuid) =>
-                projectNameMap.get(uuid) || uuid
+              if (Array.isArray(metadata.topics) && metadata.topics.length) {
+                parts.push(
+                  `Topics: ${(metadata.topics as string[]).join(", ")}`,
+                );
+              }
+              if (Array.isArray(metadata.people) && metadata.people.length) {
+                parts.push(
+                  `People: ${(metadata.people as string[]).join(", ")}`,
+                );
+              }
+              const projectRefs = getProjectRefs(
+                metadata as Record<string, unknown>,
               );
-              parts.push(`Projects: ${projectNames.join(", ")}`);
-            }
-            if (
-              Array.isArray(metadata.action_items) &&
-              metadata.action_items.length
-            ) {
-              parts.push(
-                `Actions: ${(metadata.action_items as string[]).join("; ")}`,
-              );
-            }
-            parts.push(`\n${thought.content}`);
-            return parts.join("\n");
-          },
-        );
+              if (projectRefs.length > 0) {
+                const projectNames = projectRefs.map((uuid) =>
+                  projectNameMap.get(uuid) || uuid
+                );
+                parts.push(`Projects: ${projectNames.join(", ")}`);
+              }
+              if (
+                Array.isArray(metadata.action_items) &&
+                metadata.action_items.length
+              ) {
+                parts.push(
+                  `Actions: ${(metadata.action_items as string[]).join("; ")}`,
+                );
+              }
+              parts.push(`\n${thought.content}`);
+              return parts.join("\n");
+            },
+          );
 
-        const thoughtIds = data.map((thought: { id: string }) => thought.id);
-        // search_thoughts intentionally emits the reminder as BOTH header and
-        // footer: a long results block pushes the header far up the context
-        // window, so repeating the required-action reminder at the end keeps it
-        // adjacent to where the model resumes generating.
-        // Advance the retrieval-recency signal (best-effort; a touch failure
-        // never breaks the read). Independent of usefulness recording.
-        await thoughtRepository.touchRetrieved(thoughtIds);
+          const thoughtIds = data.map((thought: { id: string }) => thought.id);
+          // search_thoughts intentionally emits the reminder as BOTH header and
+          // footer: a long results block pushes the header far up the context
+          // window, so repeating the required-action reminder at the end keeps it
+          // adjacent to where the model resumes generating.
+          // Advance the retrieval-recency signal (best-effort; a touch failure
+          // never breaks the read). Independent of usefulness recording.
+          await thoughtRepository.touchRetrieved(thoughtIds);
 
-        const header = buildUsefulnessHeader(thoughtIds, "hard");
-        const footer = buildUsefulnessReminder(thoughtIds, "hard");
+          const header = buildUsefulnessHeader(thoughtIds, "hard");
+          const footer = buildUsefulnessReminder(thoughtIds, "hard");
 
-        return textResult(
-          `${header}Found ${data.length} thought(s):\n\n${
-            results.join("\n\n")
-          }\n\n${footer}`,
-          { recordsReturned: data.length, returnedIds: thoughtIds },
-        );
-      },
+          return textResult(
+            `${header}Found ${data.length} thought(s):\n\n${
+              results.join("\n\n")
+            }\n\n${footer}`,
+            { recordsReturned: data.length, returnedIds: thoughtIds },
+          );
+        },
+      ),
       logger,
     ),
   );
@@ -651,109 +662,116 @@ export function register(
     },
     withMcpLogging(
       "capture_thought",
-      async ({ content, author, project_ids, document_ids, builds_on }) => {
-        // Run structural parser + extractor pipeline
-        let references: Record<string, string[]> = {};
-        try {
-          const parsedNote = parseNote(content, null, null, "mcp");
-          references = await runExtractionPipeline(
-            parsedNote,
-            createDefaultExtractors(),
-            supabase,
-            aiProvider,
-            taskRepository,
-            projectRepository,
-            personRepository,
-          );
-        } catch (pipelineError) {
-          console.error(
-            `capture_thought pipeline error: ${
-              (pipelineError as Error).message
-            }`,
-          );
-        }
-
-        // Merge explicit project_ids with pipeline-detected projects (union, deduplicated)
-        if (project_ids && project_ids.length > 0) {
-          const pipelineProjects: string[] = references.projects || [];
-          const merged = [...new Set([...pipelineProjects, ...project_ids])];
-          references = { ...references, projects: merged };
-        }
-
-        // Merge explicit document_ids into references (same union pattern)
-        if (document_ids && document_ids.length > 0) {
-          const existing: string[] = references.documents || [];
-          const merged = [...new Set([...existing, ...document_ids])];
-          references = { ...references, documents: merged };
-        }
-
-        const [embedding, metadata] = await Promise.all([
-          getEmbedding(aiProvider, content),
-          extractMetadata(aiProvider, content),
-        ]);
-        const contentHash = await hashContent(content);
-
-        // Write-time dedup gate (server-side, not prompt-nudge): a byte-identical
-        // or within-band restatement is dropped in favor of the existing thought;
-        // a cross-context near-duplicate is kept and routed to supersession.
-        const dedup = await resolveDedup(
-          thoughtRepository,
-          contentHash,
-          embedding,
-        );
-        if (dedup.duplicateOf) {
-          return textResult(
-            `Already captured — kept the existing thought (no duplicate created).`,
-          );
-        }
-
-        const { error } = await thoughtRepository.insert({
-          content,
-          embedding,
-          reliability: "reliable",
-          author: author || null,
-          content_hash: contentHash,
-          last_actor: "LLM",
-          metadata: { ...metadata, source: "mcp", references },
-        });
-
-        if (error) {
-          return errorResult(`Failed to capture: ${error.message}`);
-        }
-
-        let buildsOnNote = "";
-        if (builds_on && builds_on.length > 0) {
-          const { data: creditedCount, error: buildsOnError } =
-            await thoughtRepository.incrementUsefulness(builds_on);
-          if (buildsOnError) {
-            console.error(
-              `capture_thought builds_on error: ${buildsOnError.message}`,
+      // Metered AI operation (Step 15): refused before any embedding/extraction
+      // when over quota, with a distinct quota-exceeded error; no thought written.
+      withAiQuota(
+        quotaGate,
+        async ({ content, author, project_ids, document_ids, builds_on }) => {
+          // Run structural parser + extractor pipeline
+          let references: Record<string, string[]> = {};
+          try {
+            const parsedNote = parseNote(content, null, null, "mcp");
+            references = await runExtractionPipeline(
+              parsedNote,
+              createDefaultExtractors(),
+              supabase,
+              aiProvider,
+              taskRepository,
+              projectRepository,
+              personRepository,
             );
-            buildsOnNote =
-              ` — failed to credit sources: ${buildsOnError.message}`;
-          } else {
-            buildsOnNote =
-              ` — credited ${creditedCount} prior thought(s) as sources.`;
+          } catch (pipelineError) {
+            console.error(
+              `capture_thought pipeline error: ${
+                (pipelineError as Error).message
+              }`,
+            );
           }
-        }
 
-        const meta = metadata as Record<string, unknown>;
-        let confirmation = `Captured as ${meta.type || "thought"}`;
-        if (Array.isArray(meta.topics) && meta.topics.length) {
-          confirmation += ` — ${(meta.topics as string[]).join(", ")}`;
-        }
-        if (Array.isArray(meta.people) && meta.people.length) {
-          confirmation += ` | People: ${(meta.people as string[]).join(", ")}`;
-        }
-        if (Array.isArray(meta.action_items) && meta.action_items.length) {
-          confirmation += ` | Actions: ${
-            (meta.action_items as string[]).join("; ")
-          }`;
-        }
-        confirmation += buildsOnNote;
+          // Merge explicit project_ids with pipeline-detected projects (union, deduplicated)
+          if (project_ids && project_ids.length > 0) {
+            const pipelineProjects: string[] = references.projects || [];
+            const merged = [...new Set([...pipelineProjects, ...project_ids])];
+            references = { ...references, projects: merged };
+          }
 
-        return textResult(confirmation);
-      },
+          // Merge explicit document_ids into references (same union pattern)
+          if (document_ids && document_ids.length > 0) {
+            const existing: string[] = references.documents || [];
+            const merged = [...new Set([...existing, ...document_ids])];
+            references = { ...references, documents: merged };
+          }
+
+          const [embedding, metadata] = await Promise.all([
+            getEmbedding(aiProvider, content),
+            extractMetadata(aiProvider, content),
+          ]);
+          const contentHash = await hashContent(content);
+
+          // Write-time dedup gate (server-side, not prompt-nudge): a byte-identical
+          // or within-band restatement is dropped in favor of the existing thought;
+          // a cross-context near-duplicate is kept and routed to supersession.
+          const dedup = await resolveDedup(
+            thoughtRepository,
+            contentHash,
+            embedding,
+          );
+          if (dedup.duplicateOf) {
+            return textResult(
+              `Already captured — kept the existing thought (no duplicate created).`,
+            );
+          }
+
+          const { error } = await thoughtRepository.insert({
+            content,
+            embedding,
+            reliability: "reliable",
+            author: author || null,
+            content_hash: contentHash,
+            last_actor: "LLM",
+            metadata: { ...metadata, source: "mcp", references },
+          });
+
+          if (error) {
+            return errorResult(`Failed to capture: ${error.message}`);
+          }
+
+          let buildsOnNote = "";
+          if (builds_on && builds_on.length > 0) {
+            const { data: creditedCount, error: buildsOnError } =
+              await thoughtRepository.incrementUsefulness(builds_on);
+            if (buildsOnError) {
+              console.error(
+                `capture_thought builds_on error: ${buildsOnError.message}`,
+              );
+              buildsOnNote =
+                ` — failed to credit sources: ${buildsOnError.message}`;
+            } else {
+              buildsOnNote =
+                ` — credited ${creditedCount} prior thought(s) as sources.`;
+            }
+          }
+
+          const meta = metadata as Record<string, unknown>;
+          let confirmation = `Captured as ${meta.type || "thought"}`;
+          if (Array.isArray(meta.topics) && meta.topics.length) {
+            confirmation += ` — ${(meta.topics as string[]).join(", ")}`;
+          }
+          if (Array.isArray(meta.people) && meta.people.length) {
+            confirmation += ` | People: ${
+              (meta.people as string[]).join(", ")
+            }`;
+          }
+          if (Array.isArray(meta.action_items) && meta.action_items.length) {
+            confirmation += ` | Actions: ${
+              (meta.action_items as string[]).join("; ")
+            }`;
+          }
+          confirmation += buildsOnNote;
+
+          return textResult(confirmation);
+        },
+      ),
       logger,
     ),
   );

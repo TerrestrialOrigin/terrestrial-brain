@@ -1,0 +1,29 @@
+## Why
+
+In the hosted product a **shared** OpenRouter key is injected into each customer's project as a per-project secret (Step 10 provisioning already sets `OPENROUTER_API_KEY`), so every AI call a customer's brain makes is billed to Terrestrial Origin. Today nothing bounds that: a single customer can drive unlimited embeddings and chat-completions on the shared key. Step 15 adds **per-customer AI usage metering with an enforced monthly quota**, computed in the MCP edge function from the *existing* `function_call_logs` telemetry, so managed-AI cost is bounded per tenant. Crucially, the quota is **off by default** — a self-hoster who brings their own key sees no change — and quota-exhaustion is a **distinct, user-visible state**, never a silent empty result.
+
+## What Changes
+
+- **New capability in the PUBLIC repo's MCP edge function** (`supabase/functions/terrestrial-brain-mcp/`) — unlike Steps 10–14 (hosted-side, private repo), the enforcement lives in the open product because it runs inside each customer's own project. It is a *capability of the open product*, gated by config, not hosted-only business logic.
+- **A parse-at-boundary metering config** (`metering-config.ts`, in the `security-config.ts` style): a new `TB_AI_MONTHLY_LIMIT` env var parsed once at the composition root into a positive integer or `null`. **Unset / empty / non-numeric / ≤ 0 ⇒ unlimited** (the safe self-host default, matching how `isKeyInQueryAllowed` / `createAiProvider` treat unset). Also the pure UTC-month window helpers (`startOfUtcMonthMs` / `startOfNextUtcMonthMs`) and the single `AI_METERED_FUNCTIONS` constant.
+- **A bounded usage meter** behind a new `UsageMeter` seam: `countMeteredCallsSince(sinceMs)` runs a single **head-count** query (`count: "exact", head: true`) over `function_call_logs` filtered by `function_name IN AI_METERED_FUNCTIONS` and `called_at >= windowStart` — bounded by the existing `(function_name, called_at)` index, never loading rows. A real Supabase implementation + a deterministic fake.
+- **A quota gate** (`AiQuotaGate`) that, given the parsed limit + the meter, decides `allowed` for the current UTC-month window and reports `{ used, limit, resetAtMs }`. When the limit is `null` it allows immediately **without querying** (zero overhead / zero behavior change for self-hosters). A metering-query failure **fails open** (allows) with a loud log — the quota is a best-effort cost cap, explicitly not a security boundary.
+- **Enforcement at the AI-consuming entry points** — a `withAiQuota` decorator composed inside `withMcpLogging` for the metered MCP tools (`search_thoughts`, `capture_thought`), and a pre-handler guard on the `ingest-note` HTTP route. When over quota the operation is **refused before any AI call**: MCP tools return a distinct `errorResult("AI quota exceeded: …")` (`isError: true`, logged with `records_returned = 0`), and the HTTP route returns `429` with the same message — never a silent empty read (this is exactly the "quota-exceeded search must not look like *no results found*" guarantee).
+- **Documented metered-set boundary:** v1 meters `search_thoughts`, `capture_thought`, and the `ingest-note` route (the dominant conversational + bulk-import AI cost). Other AI-consuming surfaces (`write_document` / `update_document`, and `update_thought`'s conditional content path) are **explicitly not metered in this step** — a logged, deliberate cap boundary, listed as follow-up, never a silent omission.
+- **Docs:** README env-table entry + `.env.example` + a ThreatModel entry (T30).
+
+## Capabilities
+
+### New Capabilities
+- `managed-ai-metering`: per-customer managed-AI usage metering and monthly quota enforcement in the MCP edge function — a bounded usage count read from the existing `function_call_logs` telemetry, a config-gated monthly limit (unset ⇒ unlimited), and enforcement at the AI-consuming entry points that refuses over-quota operations before any AI call with a distinct, user-visible quota-exceeded state (never a silent empty result).
+
+### Modified Capabilities
+<!-- None. The `mcp-server` capability's existing tools keep their behavior unchanged when the quota is unset (the default); metering is additive and config-gated. No existing requirement's behavior changes for a self-host (unset) deployment, so no delta against `mcp-server` is required — this is a purely additive new capability. -->
+
+## Impact
+
+- **Repo touched (code):** THIS public repo, `supabase/functions/terrestrial-brain-mcp/` — new `metering-config.ts` (pure), new `UsageMeter` port + Supabase adapter + fake, new `AiQuotaGate` + `withAiQuota` decorator + `quotaExceededResult`, gate wired at the composition root (`index.ts`) and threaded into `registerThoughts` + the `ingest-note` route; new unit + integration tests; README + `.env.example` + `ThreatModel.md` (T30).
+- **Behavior when unset (self-host / default test suite):** **no change** — the gate short-circuits to *allowed* without a query. The existing suite stays green with `TB_AI_MONTHLY_LIMIT` unset.
+- **External systems:** none new. Reads the existing `function_call_logs` table; the shared OpenRouter key is already a per-project secret (Step 10). No Management-API or control-plane change.
+- **Hosted activation (out of scope here, noted):** the provisioner/onboarding sets `TB_AI_MONTHLY_LIMIT` as a per-project secret to activate the quota for a hosted customer; wiring that value from the control plane is Step 16 onboarding's job. This step delivers the enforcement mechanism, verified end-to-end against real `function_call_logs` telemetry.
+- **Reuses, does not fork:** mirrors `security-config.ts` (parse-at-boundary), the repository head-count pattern (`supabase-task-repository.ts`), the `errorResult` envelope, and `withMcpLogging` composition; copies nothing from OB1.
