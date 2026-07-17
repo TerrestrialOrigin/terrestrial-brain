@@ -10,6 +10,112 @@ import { PROJECT_TYPES } from "../enums.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
+export type ArchiveCascadeOutcome =
+  | { ok: true; childCount: number; taskCount: number }
+  | { ok: false; error: string };
+
+/**
+ * Archives a project and its whole active subtree (descendant projects + their
+ * open tasks) as one cascade (TOOL-2). The traversal uses a visited set so a
+ * parent cycle in the data terminates instead of spinning. Every read checks its
+ * error channel and aborts BEFORE any write, so a failed lookup is never
+ * rendered as a partial success. Writes are ordered tasks-first, projects-last:
+ * a crash between them leaves the projects ACTIVE, so a re-run rediscovers the
+ * whole subtree and finishes (a recoverable state).
+ */
+export async function archiveProjectCascade(
+  projectRepository: ProjectRepository,
+  taskRepository: TaskRepository,
+  rootId: string,
+): Promise<ArchiveCascadeOutcome> {
+  // 1. Collect all descendant project ids (BFS, cycle-safe via `visited`).
+  //    A failed lookup aborts BEFORE any write — nothing has been archived, so
+  //    the abort is clean.
+  const allProjectIds: string[] = [rootId];
+  const visited = new Set<string>([rootId]);
+  let frontier = [rootId];
+  while (frontier.length > 0) {
+    const { data: childProjects, error: childError } = await projectRepository
+      .listActiveChildIds(frontier);
+    if (childError) {
+      return {
+        ok: false,
+        error: `Read child projects failed: ${childError.message}`,
+      };
+    }
+    const next: string[] = [];
+    for (const child of (childProjects || [])) {
+      if (visited.has(child.id)) continue;
+      visited.add(child.id);
+      allProjectIds.push(child.id);
+      next.push(child.id);
+    }
+    frontier = next;
+  }
+
+  // 2. Collect open task ids for the whole subtree (before any write).
+  const { data: tasks, error: tasksError } = await taskRepository
+    .findOpenIdsByProjects(allProjectIds);
+  if (tasksError) {
+    return {
+      ok: false,
+      error: `Read open tasks failed: ${tasksError.message}`,
+    };
+  }
+  const taskIds = (tasks || []).map((task) => task.id);
+
+  // 3. Archive tasks FIRST (recoverable order): a crash here leaves the projects
+  //    still active, so a re-run rediscovers the whole subtree and finishes.
+  if (taskIds.length > 0) {
+    const { error: taskError } = await taskRepository.archiveMany(taskIds);
+    if (taskError) {
+      return { ok: false, error: `Archive tasks failed: ${taskError.message}` };
+    }
+  }
+
+  // 4. Archive projects LAST.
+  const { error: archiveError } = await projectRepository.archiveManyActive(
+    allProjectIds,
+  );
+  if (archiveError) {
+    return {
+      ok: false,
+      error: `Archive projects failed: ${archiveError.message}`,
+    };
+  }
+
+  return {
+    ok: true,
+    childCount: allProjectIds.length - 1,
+    taskCount: taskIds.length,
+  };
+}
+
+/**
+ * Returns whether setting `proposedParentId` as the parent of `id` would create
+ * a cycle in the project hierarchy (TOOL-2). Walks the proposed parent's
+ * ancestor chain; if it reaches `id`, the edge closes a loop. A `visited` set
+ * bounds the walk even if the existing data already contains a cycle.
+ */
+export async function wouldCreateProjectCycle(
+  projectRepository: ProjectRepository,
+  id: string,
+  proposedParentId: string,
+): Promise<{ cycle: boolean; error?: string }> {
+  if (proposedParentId === id) return { cycle: true };
+  const visited = new Set<string>();
+  let current: string | null = proposedParentId;
+  while (current) {
+    if (current === id) return { cycle: true };
+    if (visited.has(current)) break;
+    visited.add(current);
+    const { data, error } = await projectRepository.findById(current);
+    if (error) return { cycle: false, error: error.message };
+    current = data?.parent_id ?? null;
+  }
+  return { cycle: false };
+}
+
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
@@ -267,6 +373,27 @@ export function register(
     withMcpLogging(
       "update_project",
       async ({ id, name, type, parent_id, description }) => {
+        // Reject a parent_id that would close a cycle in the hierarchy (TOOL-2),
+        // which archive_project's cascade traversal would otherwise have to spin
+        // through. A null parent_id (remove parent) can never create a cycle.
+        if (typeof parent_id === "string") {
+          const cycleCheck = await wouldCreateProjectCycle(
+            projectRepository,
+            id,
+            parent_id,
+          );
+          if (cycleCheck.error) {
+            return errorResult(
+              `Could not verify project hierarchy: ${cycleCheck.error}`,
+            );
+          }
+          if (cycleCheck.cycle) {
+            return errorResult(
+              "Cannot set parent: this would create a cycle in the project hierarchy.",
+            );
+          }
+        }
+
         const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
         if (type !== undefined) updates.type = type;
@@ -325,45 +452,15 @@ export function register(
         );
       }
 
-      // Recursively collect all descendant project IDs
-      const allProjectIds: string[] = [id];
-      let frontier = [id];
-      while (frontier.length > 0) {
-        const { data: childProjects } = await projectRepository
-          .listActiveChildIds(
-            frontier,
-          );
-
-        frontier = (childProjects || []).map((child) => child.id);
-        allProjectIds.push(...frontier);
-      }
-
-      const childCount = allProjectIds.length - 1;
-
-      // Archive all projects
-      const { error: archiveError } = await projectRepository.archiveManyActive(
-        allProjectIds,
+      const outcome = await archiveProjectCascade(
+        projectRepository,
+        taskRepository,
+        id,
       );
-
-      if (archiveError) {
-        throw new Error(`Archive projects failed: ${archiveError.message}`);
+      if (!outcome.ok) {
+        return errorResult(outcome.error);
       }
-
-      // Archive open tasks for all these projects
-      const { data: tasks } = await taskRepository.findOpenIdsByProjects(
-        allProjectIds,
-      );
-
-      let taskCount = 0;
-      if (tasks && tasks.length > 0) {
-        const taskIds = tasks.map((task) => task.id);
-        const { error: taskError } = await taskRepository.archiveMany(taskIds);
-
-        if (taskError) {
-          throw new Error(`Archive tasks failed: ${taskError.message}`);
-        }
-        taskCount = tasks.length;
-      }
+      const { childCount, taskCount } = outcome;
 
       const parts = [`Archived project "${project.name}"`];
       if (childCount > 0) {
