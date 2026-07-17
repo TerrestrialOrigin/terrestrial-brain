@@ -56,17 +56,32 @@ class RecordingExtractor implements Extractor {
   }
 }
 
-function runWith(extractors: Extractor[]) {
+function runWith(
+  extractors: Extractor[],
+  repos?: {
+    task?: FakeTaskRepository;
+    project?: FakeProjectRepository;
+    person?: FakePersonRepository;
+  },
+) {
   const note = parseNote("- [ ] a task", "Note", null, "obsidian");
   return runExtractionPipeline(
     note,
     extractors,
     fakeSupabase,
     fakeAiProvider,
-    new FakeTaskRepository(),
-    new FakeProjectRepository(),
-    new FakePersonRepository(),
+    repos?.task ?? new FakeTaskRepository(),
+    repos?.project ?? new FakeProjectRepository(),
+    repos?.person ?? new FakePersonRepository(),
   );
+}
+
+/** Narrow a PipelineOutcome to its success branch or throw with a clear message. */
+function expectOk(outcome: Awaited<ReturnType<typeof runWith>>) {
+  if (!outcome.ok) {
+    throw new Error(`expected ok outcome, got failure: ${outcome.error}`);
+  }
+  return outcome;
 }
 
 Deno.test("pipeline: runs extractors in list order", async () => {
@@ -86,13 +101,15 @@ Deno.test("pipeline: runs extractors in list order", async () => {
 Deno.test("pipeline: collects each extractor's ids under its reference key", async () => {
   const runLog: string[] = [];
   const observed: Record<string, string[]> = {};
-  const references = await runWith([
-    new RecordingExtractor("projects", ["p1", "p2"], runLog, observed),
-    new RecordingExtractor("people", ["u1"], runLog, observed),
-    new RecordingExtractor("tasks", ["t1"], runLog, observed),
-  ]);
+  const outcome = expectOk(
+    await runWith([
+      new RecordingExtractor("projects", ["p1", "p2"], runLog, observed),
+      new RecordingExtractor("people", ["u1"], runLog, observed),
+      new RecordingExtractor("tasks", ["t1"], runLog, observed),
+    ]),
+  );
 
-  assertEquals(references, {
+  assertEquals(outcome.references, {
     projects: ["p1", "p2"],
     people: ["u1"],
     tasks: ["t1"],
@@ -136,6 +153,118 @@ Deno.test("pipeline: surfaces (logs) extractor write errors, does not swallow", 
   assertEquals(logged.length, 1);
   assertStringIncludes(logged[0], "insert failed: boom");
   assertStringIncludes(logged[0], "projects");
+});
+
+// ---------------------------------------------------------------------------
+// EXTR-6 — extractor write errors are RETURNED (not just logged) so callers
+// can report partial failure (failing-first).
+// ---------------------------------------------------------------------------
+
+Deno.test("pipeline: returns collected extractor write errors on the outcome", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  const originalError = console.error;
+  console.error = () => {};
+  let outcome;
+  try {
+    outcome = expectOk(
+      await runWith([
+        new RecordingExtractor("projects", ["p1"], runLog, observed, [
+          "project insert failed: boom",
+        ]),
+        new RecordingExtractor("people", ["u1"], runLog, observed, [
+          "person insert failed: bang",
+        ]),
+      ]),
+    );
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(outcome.errors.sort(), [
+    "person insert failed: bang",
+    "project insert failed: boom",
+  ]);
+});
+
+Deno.test("pipeline: success outcome has an empty errors array when all writes succeed", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  const outcome = expectOk(
+    await runWith([
+      new RecordingExtractor("projects", ["p1"], runLog, observed),
+    ]),
+  );
+  assertEquals(outcome.errors, []);
+});
+
+// ---------------------------------------------------------------------------
+// EXTR-2 — a failed SEED read aborts extraction (no extractor runs, no writes),
+// instead of coalescing to an empty context and duplicating tasks (failing-first).
+// ---------------------------------------------------------------------------
+
+Deno.test("pipeline: aborts (no writes) when the known-tasks seed read fails", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  // findByReference errors → knownTasks would silently be [] and every checkbox
+  // would be re-created. The pipeline must abort instead.
+  const failingTasks = new FakeTaskRepository();
+  failingTasks.findByReference = () =>
+    Promise.resolve({ data: null, error: { message: "tasks read failed" } });
+
+  const note = parseNote(
+    "- [ ] a task",
+    "Note",
+    "notes/re-ingest.md",
+    "obsidian",
+  );
+  const outcome = await runExtractionPipeline(
+    note,
+    [new RecordingExtractor("tasks", ["t1"], runLog, observed)],
+    fakeSupabase,
+    fakeAiProvider,
+    failingTasks,
+    new FakeProjectRepository(),
+    new FakePersonRepository(),
+  );
+
+  assertEquals(outcome.ok, false);
+  assertEquals(runLog, []); // no extractor ran
+  assertEquals(failingTasks.inserted.length, 0); // no task inserted
+});
+
+Deno.test("pipeline: aborts when the active-projects seed read fails", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  const failingProjects = new FakeProjectRepository();
+  failingProjects.listActive = () =>
+    Promise.resolve({ data: null, error: { message: "projects read failed" } });
+
+  const outcome = await runWith(
+    [new RecordingExtractor("projects", ["p1"], runLog, observed)],
+    { project: failingProjects },
+  );
+
+  assertEquals(outcome.ok, false);
+  assertEquals(runLog, []);
+  assertEquals(failingProjects.inserted.length, 0);
+});
+
+Deno.test("pipeline: aborts when the active-people seed read fails", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  const failingPeople = new FakePersonRepository();
+  failingPeople.listActive = () =>
+    Promise.resolve({ data: null, error: { message: "people read failed" } });
+
+  const outcome = await runWith(
+    [new RecordingExtractor("people", ["u1"], runLog, observed)],
+    { person: failingPeople },
+  );
+
+  assertEquals(outcome.ok, false);
+  assertEquals(runLog, []);
+  assertEquals(failingPeople.inserted.length, 0);
 });
 
 Deno.test("createDefaultExtractors: returns the three concrete extractors in order", () => {

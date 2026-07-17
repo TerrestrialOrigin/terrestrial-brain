@@ -1,6 +1,7 @@
 import { assertEquals, assertExists } from "@std/assert";
 import {
   callTool,
+  callToolRaw,
   restUrl,
   serviceHeaders,
   uniqueName,
@@ -73,6 +74,53 @@ Deno.test("create_project with parent_id works and get_project shows children", 
     assertExists(parent);
     assertEquals(parent.includes(childName), true);
     assertEquals(parent.includes(parentName), true);
+  } finally {
+    await deleteProjects(created);
+  }
+});
+
+Deno.test("update_project rejects a parent_id that would create a cycle (TOOL-2)", async () => {
+  const parentName = uniqueName("Cycle Parent");
+  const childName = uniqueName("Cycle Child");
+  const created: string[] = [];
+  try {
+    const parentResult = await callTool("create_project", {
+      name: parentName,
+      type: "personal",
+    });
+    const parentId = projectIdFrom(parentResult);
+    created.push(parentId);
+
+    const childResult = await callTool("create_project", {
+      name: childName,
+      type: "personal",
+      parent_id: parentId,
+    });
+    const childId = projectIdFrom(childResult);
+    created.push(childId);
+
+    // Making the parent's parent its own child (parent -> child -> parent).
+    const result = await callToolRaw("update_project", {
+      id: parentId,
+      parent_id: childId,
+    });
+    assertEquals(
+      result.isError,
+      true,
+      `expected an error result: ${result.text}`,
+    );
+    assertEquals(
+      result.text.toLowerCase().includes("cycle"),
+      true,
+      `expected a cycle rejection, got: ${result.text}`,
+    );
+
+    // The parent's parent_id must remain unchanged (null), not the cyclic value.
+    const rows = await (await fetch(
+      restUrl(`projects?id=eq.${parentId}&select=parent_id`),
+      { headers: serviceHeaders() },
+    )).json() as { parent_id: string | null }[];
+    assertEquals(rows[0].parent_id, null);
   } finally {
     await deleteProjects(created);
   }

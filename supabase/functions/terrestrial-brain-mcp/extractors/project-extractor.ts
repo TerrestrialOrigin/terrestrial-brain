@@ -71,6 +71,7 @@ export async function extractProjectNameFromPath(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "project-from-path",
         systemPrompt:
           `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
 
@@ -190,6 +191,7 @@ async function detectProjectsByContent(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "projects-by-content",
         systemPrompt:
           `You identify which projects a note is about. You are given a note summary and a list of known projects. Return ONLY project IDs from the list that the note clearly references or relates to. Do not invent new projects. If no projects match, return an empty array.
 
@@ -230,6 +232,9 @@ export class ProjectExtractor implements Extractor {
     context: ExtractionContext,
   ): Promise<ExtractionResult> {
     const matchedIds: string[] = [];
+    // Accumulate auto-create failures so the runner can report partial failure
+    // instead of silently dropping projects (EXTR-6).
+    const errors: string[] = [];
 
     // Signal 1a: Conventional path detection (case-insensitive, any depth)
     const folderName = extractProjectFromConventionalPath(note.referenceId);
@@ -237,7 +242,11 @@ export class ProjectExtractor implements Extractor {
 
     if (folderName) {
       conventionalPathMatched = true;
-      const projectId = await this.matchOrCreateProject(folderName, context);
+      const projectId = await this.matchOrCreateProject(
+        folderName,
+        context,
+        errors,
+      );
       if (projectId) matchedIds.push(projectId);
     }
 
@@ -254,6 +263,7 @@ export class ProjectExtractor implements Extractor {
         const projectId = await this.matchOrCreateProject(
           pathResult.projectName,
           context,
+          errors,
         );
         if (projectId) matchedIds.push(projectId);
       }
@@ -277,17 +287,19 @@ export class ProjectExtractor implements Extractor {
     return {
       referenceKey: this.referenceKey,
       ids: uniqueIds,
+      errors: errors.length > 0 ? errors : undefined,
     };
   }
 
   /**
    * Matches a project name against known projects (case-insensitive),
-   * or auto-creates a new project if not found.
-   * Returns the project ID, or null on failure.
+   * or auto-creates a new project if not found. Returns the project ID, or null
+   * on failure; a failure is also recorded in `errors` (returned to the runner).
    */
   private async matchOrCreateProject(
     projectName: string,
     context: ExtractionContext,
+    errors: string[],
   ): Promise<string | null> {
     const existingProject = context.knownProjects.find(
       (project) => project.name.toLowerCase() === projectName.toLowerCase(),
@@ -314,9 +326,10 @@ export class ProjectExtractor implements Extractor {
       return newProject.id;
     }
 
-    console.error(
-      `ProjectExtractor auto-create failed for "${projectName}": ${error?.message}`,
-    );
+    const message =
+      `ProjectExtractor auto-create failed for "${projectName}": ${error?.message}`;
+    console.error(message);
+    errors.push(message);
     return null;
   }
 }

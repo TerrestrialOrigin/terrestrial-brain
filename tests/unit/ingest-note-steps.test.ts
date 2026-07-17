@@ -5,7 +5,12 @@
 // transport error propagates, and the delete list SOFT-ARCHIVES rather than
 // hard-deletes (a hallucinated id must never destroy knowledge).
 
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import {
   executeReconciliationPlan,
   formatIngestSummary,
@@ -73,8 +78,9 @@ function fakeThoughtRepository(
 
 Deno.test("requestReconciliationPlan: builds the prompt and returns the parsed plan", async () => {
   let captured: AiJsonCompletionRequest | null = null;
+  // keep id must belong to this note (id-9) so the allowlist passes it through.
   const plan: ReconciliationPlan = {
-    keep: ["k1"],
+    keep: ["id-9"],
     update: [],
     add: [],
     delete: [],
@@ -119,6 +125,95 @@ Deno.test("requestReconciliationPlan: transport error propagates (does NOT degra
     () => requestReconciliationPlan(provider, [], "t", "c"),
     AiProviderHttpError,
   );
+});
+
+// ─── TOOL-1: reconciliation plan validation + id allowlist (failing-first) ───
+
+const KNOWN_ID = "00000000-0000-0000-0000-0000000000aa";
+const FOREIGN_ID = "11111111-1111-1111-1111-1111111111bb";
+
+function existingThought(id: string) {
+  return { id, content: "existing", created_at: "2026-01-01T00:00:00Z" };
+}
+
+Deno.test("requestReconciliationPlan: drops delete/update/keep ids not belonging to this note", async () => {
+  const rawPlan = {
+    keep: [KNOWN_ID, FOREIGN_ID],
+    update: [
+      { id: KNOWN_ID, content: "revised" },
+      { id: FOREIGN_ID, content: "hallucinated overwrite" },
+    ],
+    add: [],
+    delete: [KNOWN_ID, FOREIGN_ID],
+  };
+  const provider = fakeAiProvider((_req, parse) =>
+    Promise.resolve(parse(rawPlan))
+  );
+
+  const result = await requestReconciliationPlan(
+    provider,
+    [existingThought(KNOWN_ID)],
+    "t",
+    "c",
+  );
+
+  assertExists(result);
+  // The hallucinated foreign UUID must never reach update()/archive().
+  assertEquals(result.keep, [KNOWN_ID]);
+  assertEquals(result.delete, [KNOWN_ID]);
+  assertEquals(result.update, [{ id: KNOWN_ID, content: "revised" }]);
+});
+
+Deno.test("requestReconciliationPlan: an update entry missing content degrades to null (fresh ingest)", async () => {
+  const rawPlan = {
+    keep: [],
+    update: [{ id: KNOWN_ID }], // no content
+    add: [],
+    delete: [],
+  };
+  const provider = fakeAiProvider((_req, parse) =>
+    Promise.resolve(parse(rawPlan))
+  );
+  const result = await requestReconciliationPlan(
+    provider,
+    [existingThought(KNOWN_ID)],
+    "t",
+    "c",
+  );
+  assertEquals(result, null);
+});
+
+Deno.test("requestReconciliationPlan: a non-array field degrades to null (fresh ingest)", async () => {
+  const rawPlan = { keep: [], update: [], add: [], delete: "all" };
+  const provider = fakeAiProvider((_req, parse) =>
+    Promise.resolve(parse(rawPlan))
+  );
+  const result = await requestReconciliationPlan(
+    provider,
+    [existingThought(KNOWN_ID)],
+    "t",
+    "c",
+  );
+  assertEquals(result, null);
+});
+
+Deno.test("requestReconciliationPlan: an add entry that is an object (not a string) degrades to null", async () => {
+  const rawPlan = {
+    keep: [],
+    update: [],
+    add: [{ thought: "should have been a bare string" }],
+    delete: [],
+  };
+  const provider = fakeAiProvider((_req, parse) =>
+    Promise.resolve(parse(rawPlan))
+  );
+  const result = await requestReconciliationPlan(
+    provider,
+    [existingThought(KNOWN_ID)],
+    "t",
+    "c",
+  );
+  assertEquals(result, null);
 });
 
 // ─── executeReconciliationPlan ───────────────────────────────────────────────

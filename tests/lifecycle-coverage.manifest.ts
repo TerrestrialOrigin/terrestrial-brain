@@ -23,6 +23,14 @@ export interface CoverageEntry {
   milestone: Milestone;
   expectation: Expectation;
   testRef: string;
+  /**
+   * A stable substring of a `Deno.test(...)` name in `testRef` that exercises
+   * THIS scenario. The coverage meta-test asserts the referenced file actually
+   * contains a test whose name includes it — anchoring each pass-now scenario to
+   * a real test so a testRef pointing at a deleted/renamed file (or a file with
+   * no matching test) fails the build (TEST-5).
+   */
+  testNameContains?: string;
 }
 
 export const COVERAGE_MANIFEST: CoverageEntry[] = [
@@ -90,6 +98,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/dedup_gate.test.ts",
+    testNameContains: "supersession candidate",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -131,6 +140,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/extraction_type_allowlist.test.ts",
+    testNameContains: "out-of-allowlist type is coerced",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -184,6 +194,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/supersession.test.ts",
+    testNameContains: "re-embeds",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -225,6 +236,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/usefulness_reinforcement.test.ts",
+    testNameContains: "does not reinforce usefulness",
   },
   // Requirement: Temporal validity and staleness decay signal
   {
@@ -267,6 +279,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/archival.test.ts",
+    testNameContains: "conjunction gates the queue",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -277,6 +290,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/archival.test.ts",
+    testNameContains: "synced-note-owned",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -287,6 +301,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/archival.test.ts",
+    testNameContains: "consented state transition",
   },
   // Requirement: Task reconciliation is consent-based
   {
@@ -298,6 +313,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/task_reconciliation.test.ts",
+    testNameContains: "asks before closing",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -308,6 +324,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     milestone: "shipped",
     expectation: "pass-now",
     testRef: "tests/integration/lifecycle/task_reconciliation.test.ts",
+    testNameContains: "declining leaves the task open",
   },
   {
     capability: "memory-lifecycle-rules",

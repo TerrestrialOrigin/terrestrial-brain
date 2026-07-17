@@ -13,6 +13,7 @@ import {
 import { parseNote } from "../parser.ts";
 import {
   createDefaultExtractors,
+  partialExtractionWarning,
   runExtractionPipeline,
 } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
@@ -669,9 +670,10 @@ export function register(
         async ({ content, author, project_ids, document_ids, builds_on }) => {
           // Run structural parser + extractor pipeline
           let references: Record<string, string[]> = {};
+          let extractionWarning = "";
           try {
             const parsedNote = parseNote(content, null, null, "mcp");
-            references = await runExtractionPipeline(
+            const outcome = await runExtractionPipeline(
               parsedNote,
               createDefaultExtractors(),
               supabase,
@@ -680,6 +682,19 @@ export function register(
               projectRepository,
               personRepository,
             );
+            if (!outcome.ok) {
+              // A seed read failed: proceeding would risk duplicate task/project
+              // writes, so abort and write nothing (EXTR-2).
+              return errorResult(
+                `Capture aborted — could not read existing references ` +
+                  `(${outcome.error}). No thought was written to avoid ` +
+                  `duplicates; please retry.`,
+              );
+            }
+            references = outcome.references;
+            if (outcome.errors.length > 0) {
+              extractionWarning = partialExtractionWarning(outcome.errors);
+            }
           } catch (pipelineError) {
             console.error(
               `capture_thought pipeline error: ${
@@ -718,9 +733,14 @@ export function register(
           );
           if (dedup.duplicateOf) {
             return textResult(
-              `Already captured — kept the existing thought (no duplicate created).`,
+              `Already captured — kept the existing thought (no duplicate created).${extractionWarning}`,
             );
           }
+          // When the dedup check itself failed (CORE-2), we still capture, but
+          // flag that this may duplicate an existing thought.
+          const dedupNote = dedup.degraded
+            ? " (note: duplicate check was unavailable, so this may duplicate an existing thought)"
+            : "";
 
           const { error } = await thoughtRepository.insert({
             content,
@@ -733,6 +753,15 @@ export function register(
           });
 
           if (error) {
+            // The partial unique index on content_hash makes exact dedup atomic
+            // under concurrency (TOOL-7): a 23505 means a concurrent capture
+            // already stored this exact content — the same "already captured"
+            // success outcome, never an error.
+            if (error.code === "23505") {
+              return textResult(
+                `Already captured — kept the existing thought (no duplicate created).${extractionWarning}`,
+              );
+            }
             return errorResult(`Failed to capture: ${error.message}`);
           }
 
@@ -768,6 +797,8 @@ export function register(
             }`;
           }
           confirmation += buildsOnNote;
+          confirmation += extractionWarning;
+          confirmation += dedupNote;
 
           return textResult(confirmation);
         },
@@ -1084,6 +1115,56 @@ export interface ReconciliationPlan {
   delete: string[];
 }
 
+/**
+ * Runtime schema for the LLM reconciliation plan (TOOL-1). The plan drives
+ * irreversible mutations (content overwrite, archive), so it is PARSED, never
+ * cast: a wrong shape (non-array field, an `update` entry missing `content`, an
+ * `add` entry that is an object rather than a bare string) fails validation and
+ * is thrown as an `AiProviderParseError`, which the caller degrades to a safe
+ * fresh ingest. Ids are validated structurally here; the belonging check (that
+ * an id is actually one of THIS note's thoughts) is a separate allowlist pass in
+ * `filterPlanToKnownIds`, so a hallucinated UUID can never reach a mutation.
+ */
+const ReconciliationPlanSchema = z.object({
+  keep: z.array(z.string()).default([]),
+  update: z.array(z.object({ id: z.string(), content: z.string().min(1) }))
+    .default([]),
+  add: z.array(z.string().min(1)).default([]),
+  delete: z.array(z.string()).default([]),
+});
+
+/**
+ * Drops every `keep`/`update`/`delete` id that is not one of this note's own
+ * thoughts (TOOL-1 allowlist). A valid-but-foreign UUID from the LLM would
+ * otherwise overwrite or archive an unrelated thought. `add` entries are new
+ * content, not ids, so they are never allowlisted.
+ */
+function filterPlanToKnownIds(
+  plan: ReconciliationPlan,
+  knownIds: Set<string>,
+): ReconciliationPlan {
+  const droppedIds: string[] = [];
+  const isKnown = (id: string): boolean => {
+    if (knownIds.has(id)) return true;
+    droppedIds.push(id);
+    return false;
+  };
+  const filtered: ReconciliationPlan = {
+    keep: plan.keep.filter(isKnown),
+    update: plan.update.filter((item) => isKnown(item.id)),
+    add: plan.add,
+    delete: plan.delete.filter(isKnown),
+  };
+  if (droppedIds.length > 0) {
+    console.warn(
+      `Reconciliation dropped ${droppedIds.length} hallucinated id(s) not in this note: ${
+        droppedIds.join(", ")
+      }`,
+    );
+  }
+  return filtered;
+}
+
 interface IngestResult {
   success: boolean;
   message?: string;
@@ -1177,9 +1258,12 @@ export async function requestReconciliationPlan(
     )
     .join("\n\n");
 
+  const knownIds = new Set(existingThoughts.map((thought) => thought.id));
+
   try {
-    return await aiProvider.completeJson(
+    const rawPlan = await aiProvider.completeJson(
       {
+        purpose: "reconcile",
         systemPrompt:
           `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
 
@@ -1212,8 +1296,19 @@ Return ONLY valid JSON in this exact structure:
             title || "untitled"
           }):\n${content}`,
       },
-      (raw) => raw as ReconciliationPlan,
+      (raw) => {
+        const parsed = ReconciliationPlanSchema.safeParse(raw);
+        if (!parsed.success) {
+          throw new AiProviderParseError(
+            "reconciliation plan",
+            parsed.error.message,
+          );
+        }
+        return parsed.data;
+      },
     );
+    // Allowlist ids to this note's thoughts BEFORE any mutation can see them.
+    return filterPlanToKnownIds(rawPlan, knownIds);
   } catch (reconcileError) {
     if (!(reconcileError instanceof AiProviderParseError)) {
       throw reconcileError;
@@ -1282,21 +1377,19 @@ export async function executeReconciliationPlan(
     })());
   }
 
-  for (const addItem of (plan.add || [])) {
-    const thoughtContent = typeof addItem === "string"
-      ? addItem
-      : (addItem as unknown as { thought: string }).thought || addItem;
+  for (const thoughtContent of (plan.add || [])) {
+    // Schema (TOOL-1) guarantees each add entry is a non-empty string — no cast.
     ops.push((async () => {
       const [embedding, metadata] = await Promise.all([
-        getEmbedding(aiProvider, thoughtContent as string),
-        extractMetadata(aiProvider, thoughtContent as string),
+        getEmbedding(aiProvider, thoughtContent),
+        extractMetadata(aiProvider, thoughtContent),
       ]);
       const { error } = await thoughtRepository.insert({
         content: thoughtContent,
         embedding,
         reference_id: noteId || null,
         note_snapshot_id: noteSnapshotId,
-        content_hash: await hashContent(thoughtContent as string),
+        content_hash: await hashContent(thoughtContent),
         last_actor: "sync",
         reliability: INGEST_PROVENANCE.reliability,
         author: INGEST_PROVENANCE.author,
@@ -1417,8 +1510,9 @@ export async function handleIngestNote(
     );
 
     let references: Record<string, string[]> = {};
+    let extractionWarning = "";
     try {
-      references = await runExtractionPipeline(
+      const outcome = await runExtractionPipeline(
         parsedNote,
         createDefaultExtractors(),
         supabase,
@@ -1427,6 +1521,18 @@ export async function handleIngestNote(
         projectRepository,
         personRepository,
       );
+      if (!outcome.ok) {
+        // A seed read failed: aborting avoids duplicate task/project writes on a
+        // transient DB error during re-ingest (EXTR-2). Nothing has been written.
+        return {
+          success: false,
+          error:
+            `Sync aborted — could not read existing references (${outcome.error}). ` +
+            `No thoughts or tasks were written to avoid duplicates; please retry.`,
+        };
+      }
+      references = outcome.references;
+      extractionWarning = partialExtractionWarning(outcome.errors);
     } catch (pipelineError) {
       console.error(
         `Extractor pipeline error: ${(pipelineError as Error).message}`,
@@ -1449,6 +1555,13 @@ export async function handleIngestNote(
         ),
       );
 
+    // Appends any partial-extraction warning (EXTR-6) to a result's message so
+    // a successful sync still reports that some reference writes failed.
+    const appendWarning = (result: IngestResult): IngestResult =>
+      extractionWarning && result.message
+        ? { ...result, message: result.message + extractionWarning }
+        : result;
+
     const existingThoughts = await fetchExistingThoughts(
       thoughtRepository,
       note_id,
@@ -1456,7 +1569,7 @@ export async function handleIngestNote(
 
     // No existing thoughts → fresh split and insert.
     if (existingThoughts.length === 0) {
-      return await runFreshIngest();
+      return appendWarning(await runFreshIngest());
     }
 
     // Existing thoughts found → reconcile. A null plan (unparseable) degrades to
@@ -1468,7 +1581,7 @@ export async function handleIngestNote(
       content,
     );
     if (plan === null) {
-      return await runFreshIngest();
+      return appendWarning(await runFreshIngest());
     }
 
     const counts = await executeReconciliationPlan(
@@ -1486,11 +1599,11 @@ export async function handleIngestNote(
       noteId: note_id,
     });
 
-    return {
+    return appendWarning({
       success: !isError,
       message,
       ...(isError ? { error: message } : {}),
-    };
+    });
   } catch (err: unknown) {
     return {
       success: false,

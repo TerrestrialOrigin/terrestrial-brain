@@ -6,15 +6,15 @@
 // Contradiction *detection* (choosing WHAT to supersede) is model judgment,
 // covered by the opt-in eval tier — these deterministic tests assert the EFFECT.
 
-import { assert } from "@std/assert";
-import { callTool } from "../../helpers/mcp-client.ts";
+import { assert, assertEquals } from "@std/assert";
+import { callTool, restUrl, serviceHeaders } from "../../helpers/mcp-client.ts";
 import {
   captureThought,
   deleteThoughtsByMarker,
   lifecycleMarker,
+  sha256Hex,
   thoughtById,
 } from "./_thoughts.ts";
-import { columnExists } from "./_tools.ts";
 
 // Effect: a superseded thought leaves default search while the survivor stays.
 Deno.test("supersession: a recorded supersession removes the older thought from default search", async () => {
@@ -92,12 +92,48 @@ Deno.test("supersession: supersession never deletes history and is reversible", 
   }
 });
 
-// A supersession/resolve that mutates stored content re-hashes it (INVARIANT 1).
-// The content_hash surface that guarantees this exists on thoughts (the full
-// re-hash-on-edit behavior is asserted in invariant1_reembed_rehash.test.ts).
-Deno.test("supersession: the re-hash surface exists for superseded content", async () => {
-  assert(
-    await columnExists("thoughts", "content_hash"),
-    "content_hash must exist so a content-mutating resolve re-hashes the survivor",
-  );
+// Behavioral: recording a supersession and then editing the surviving thought
+// re-embeds AND re-hashes the survivor (INVARIANT 1) — the survivor is findable
+// by its NEW wording and its stored content_hash equals sha256 of the new text.
+Deno.test("supersession: editing the surviving thought re-embeds and re-hashes it", async () => {
+  const marker = lifecycleMarker("supersede-rehash");
+  try {
+    const older = await captureThought(marker, `${marker} outdated premise`);
+    const survivor = await captureThought(
+      marker,
+      `${marker} original survivor wording`,
+    );
+    await callTool("resolve_supersession", {
+      id: older.id,
+      superseded_by: survivor.id,
+    });
+
+    // Edit the surviving thought's content through the one update path.
+    const newContent = `${marker} zebulon marmalade quasar survivor wording`;
+    await callTool("update_thought", { id: survivor.id, content: newContent });
+
+    // Re-hashed: the stored content_hash equals sha256 of the new content.
+    const rows = await (await fetch(
+      restUrl(`thoughts?id=eq.${survivor.id}&select=content_hash`),
+      { headers: serviceHeaders() },
+    )).json() as { content_hash: string | null }[];
+    assertEquals(
+      rows[0]?.content_hash,
+      await sha256Hex(newContent),
+      "the survivor's content_hash must be re-stamped on edit",
+    );
+
+    // Re-embedded: the survivor is findable by its new, distinctive wording.
+    const found = await callTool("search_thoughts", {
+      query: "zebulon marmalade quasar",
+      limit: 10,
+      threshold: 0.1,
+    });
+    assert(
+      found.includes(survivor.id),
+      "the survivor must be findable by its post-edit wording (re-embedded)",
+    );
+  } finally {
+    await deleteThoughtsByMarker(marker);
+  }
 });

@@ -52,6 +52,7 @@ async function detectAllPeople(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "detect-people",
         systemPrompt:
           `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
 
@@ -128,6 +129,9 @@ export class PeopleExtractor implements Extractor {
       context.aiProvider,
     );
     const resultIds: string[] = [];
+    // Accumulate auto-create failures so the runner can report partial failure
+    // instead of silently dropping people (EXTR-6).
+    const errors: string[] = [];
 
     for (const detected of detectedPeople) {
       if (detected.knownId) {
@@ -144,7 +148,7 @@ export class PeopleExtractor implements Extractor {
           }
         } else {
           // Auto-create
-          const newId = await this.createPerson(detected.name, context);
+          const newId = await this.createPerson(detected.name, context, errors);
           if (newId && !resultIds.includes(newId)) {
             resultIds.push(newId);
           }
@@ -155,16 +159,19 @@ export class PeopleExtractor implements Extractor {
     return {
       referenceKey: this.referenceKey,
       ids: resultIds,
+      errors: errors.length > 0 ? errors : undefined,
     };
   }
 
   /**
    * Inserts a new person record and adds it to the context so downstream
-   * extractors (TaskExtractor) can use it immediately.
+   * extractors (TaskExtractor) can use it immediately. On failure, records a
+   * message in `errors` (returned to the runner) as well as logging it.
    */
   private async createPerson(
     name: string,
     context: ExtractionContext,
+    errors: string[],
   ): Promise<string | null> {
     const { data: newPerson, error } = await context.personRepository.insert({
       name,
@@ -182,9 +189,10 @@ export class PeopleExtractor implements Extractor {
       return newPerson.id;
     }
 
-    console.error(
-      `PeopleExtractor auto-create failed for "${name}": ${error?.message}`,
-    );
+    const message =
+      `PeopleExtractor auto-create failed for "${name}": ${error?.message}`;
+    console.error(message);
+    errors.push(message);
     return null;
   }
 }

@@ -29,6 +29,7 @@ Deno.test("live: getEmbedding returns a 1536-dim numeric vector", async () => {
 Deno.test("live: completeJson parses a JSON-mode response", async () => {
   const result = await provider.completeJson<{ ok: boolean }>(
     {
+      purpose: "reconcile",
       systemPrompt: 'Reply with JSON only. Return exactly {"ok": true}.',
       userContent: "ping",
     },

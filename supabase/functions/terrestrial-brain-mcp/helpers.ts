@@ -95,24 +95,39 @@ export async function resolveDedup(
   thoughtRepository: ThoughtRepository,
   contentHash: string,
   embedding: number[],
-): Promise<{ duplicateOf: string | null }> {
-  const { data: exact } = await thoughtRepository.findByContentHash(
-    contentHash,
-  );
+): Promise<{ duplicateOf: string | null; degraded: boolean }> {
+  // CORE-2: a failed lookup must NOT read as "genuinely new". Surface a degraded
+  // outcome so the caller can flag that the dedup gate could not run, instead of
+  // silently admitting a duplicate.
+  const { data: exact, error: exactError } = await thoughtRepository
+    .findByContentHash(contentHash);
+  if (exactError) {
+    console.error(
+      `resolveDedup: content-hash lookup failed: ${exactError.message}`,
+    );
+    return { duplicateOf: null, degraded: true };
+  }
   if (exact && exact.length > 0) {
-    return { duplicateOf: exact[0].id };
+    return { duplicateOf: exact[0].id, degraded: false };
   }
-  const { data: near } = await thoughtRepository.matchByEmbedding({
-    embedding,
-    threshold: DEDUP_MIN_SIMILARITY,
-    count: 1,
-    author: null,
-    reliability: null,
-  });
+  const { data: near, error: nearError } = await thoughtRepository
+    .matchByEmbedding({
+      embedding,
+      threshold: DEDUP_MIN_SIMILARITY,
+      count: 1,
+      author: null,
+      reliability: null,
+    });
+  if (nearError) {
+    console.error(
+      `resolveDedup: embedding match failed: ${nearError.message}`,
+    );
+    return { duplicateOf: null, degraded: true };
+  }
   if (near && near.length > 0) {
-    return { duplicateOf: near[0].id };
+    return { duplicateOf: near[0].id, degraded: false };
   }
-  return { duplicateOf: null };
+  return { duplicateOf: null, degraded: false };
 }
 
 export async function extractMetadata(
@@ -126,6 +141,7 @@ export async function extractMetadata(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "extract-metadata",
         systemPrompt:
           `You are given a single captured thought. Produce a JSON object that summarizes it using exactly these fields:
 - "people": names of any individuals the text refers to; use [] when nobody is named.
@@ -148,6 +164,31 @@ Base every field on what the text actually supports — do not invent details it
   }
 }
 
+/**
+ * Parses the LLM split response into a list of standalone thought strings.
+ * One malformed element (null, wrong type, missing/empty `thought`) is skipped,
+ * never allowed to crash the whole batch (CORE-12).
+ */
+export function parseSplitThoughts(raw: unknown): string[] {
+  const thoughtsValue = typeof raw === "object" && raw !== null
+    ? (raw as { thoughts?: unknown }).thoughts
+    : undefined;
+  const items: unknown[] = Array.isArray(thoughtsValue) ? thoughtsValue : [];
+  const collected: string[] = [];
+  for (const item of items) {
+    if (typeof item === "string") {
+      if (item.trim().length > 0) collected.push(item);
+    } else if (
+      typeof item === "object" && item !== null && "thought" in item &&
+      typeof (item as { thought: unknown }).thought === "string"
+    ) {
+      const thought = (item as { thought: string }).thought;
+      if (thought.trim().length > 0) collected.push(thought);
+    }
+  }
+  return collected;
+}
+
 export async function freshIngest(
   thoughtRepository: ThoughtRepository,
   aiProvider: AiProvider,
@@ -165,6 +206,7 @@ export async function freshIngest(
   try {
     thoughts = await aiProvider.completeJson(
       {
+        purpose: "split-thoughts",
         systemPrompt:
           `You split notes into discrete, standalone thoughts for a personal knowledge base.
 
@@ -181,23 +223,7 @@ RULES:
 Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
         userContent: title ? `Note title: ${title}\n\n${content}` : content,
       },
-      (raw): string[] => {
-        const parsed = raw as { thoughts?: unknown };
-        const collected: string[] = [];
-        if (Array.isArray(parsed.thoughts)) {
-          for (const item of parsed.thoughts) {
-            if (typeof item === "string" && item.trim().length > 0) {
-              collected.push(item);
-            } else if (
-              typeof item === "object" && item.thought &&
-              typeof item.thought === "string" && item.thought.trim().length > 0
-            ) {
-              collected.push(item.thought);
-            }
-          }
-        }
-        return collected;
-      },
+      (raw): string[] => parseSplitThoughts(raw),
     );
   } catch (error) {
     if (error instanceof AiProviderParseError) {
@@ -244,7 +270,9 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
           ? { reliability: provenance.reliability, author: provenance.author }
           : {}),
       });
-      if (error) throw new Error(error.message);
+      // A 23505 unique-violation on content_hash means this exact content is
+      // already captured (the partial unique index, TOOL-7) — not a failure.
+      if (error && error.code !== "23505") throw new Error(error.message);
     }),
   );
 
