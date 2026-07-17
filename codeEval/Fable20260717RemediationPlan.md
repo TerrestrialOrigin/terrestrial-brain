@@ -1242,7 +1242,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - [x] 8. Lifecycle test depth (`feature/LifecycleTestDepth`) — TEST-1..6
 
 ## Phase B — Security, GDPR & infrastructure
-- [ ] 9. DB policy & function hardening (`bug/DbPolicyAndFunctionHardening`) — SQL-1, SQL-4, SQL-8
+- [x] 9. DB policy & function hardening (`bug/DbPolicyAndFunctionHardening`) — SQL-1, SQL-4, SQL-8
 - [ ] 10. pgTAP denial suite + wiring (`feature/PgTapDenialSuite`) — SQL-5, SQL-6, TEST-8
 - [ ] 11. Dedup indexes & hashes (`bug/DedupIndexesAndHashes`) — SQL-2, EXTR-5, EXTR-7
 - [ ] 12. Bounded queries (`feature/BoundedQueries`) — SQL-3, REPO-1, TOOL-10

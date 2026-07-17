@@ -355,3 +355,112 @@ Deno.test("service role can still execute increment_usefulness", async () => {
     await serviceDeleteById("thoughts", seededThought.id as string);
   }
 });
+
+// ─── function_call_logs: anon-key denial (SQL-1) ────────────────────────────
+// The policy is scoped `to service_role`; this personal-data table (serialized
+// tool inputs + ip_address) must be unreachable by the anon key.
+
+Deno.test("anon key cannot read function_call_logs", async () => {
+  const anonResponse = await fetch(
+    `${REST_URL}/function_call_logs?limit=1`,
+    { headers: restHeaders(SUPABASE_ANON_KEY) },
+  );
+  const anonBody = await anonResponse.json();
+  assertEquals(
+    anonResponse.status === 401 || anonResponse.status === 403,
+    true,
+    `anon select on function_call_logs must be rejected, got ${anonResponse.status}: ${
+      JSON.stringify(anonBody)
+    }`,
+  );
+  assertEquals(
+    anonBody.code,
+    "42501",
+    "rejection must be a permission-denied error",
+  );
+});
+
+// ─── increment_usefulness_weighted: weight bounds (SQL-8) ────────────────────
+// The RPC applies `usefulness_score + weight` on a persistent ranking column;
+// an out-of-range weight (edge bug or LLM-derived value) must be rejected at the
+// DB boundary before any mutation, not clamped or applied.
+
+async function serviceScore(thoughtId: string): Promise<number> {
+  const rows = await serviceSelectById("thoughts", thoughtId);
+  return rows[0].usefulness_score as number;
+}
+
+for (const badWeight of [0, 101, -5]) {
+  Deno.test(`weighted usefulness RPC rejects out-of-range weight ${badWeight}`, async () => {
+    const seededThought = await serviceInsert("thoughts", {
+      content: uniqueName("acl-test-weight-bounds thought"),
+    });
+    try {
+      const scoreBefore = await serviceScore(seededThought.id as string);
+
+      const response = await fetch(
+        `${REST_URL}/rpc/increment_usefulness_weighted`,
+        {
+          method: "POST",
+          headers: restHeaders(SUPABASE_SERVICE_KEY),
+          body: JSON.stringify({
+            thought_ids: [seededThought.id],
+            weight: badWeight,
+          }),
+        },
+      );
+      const body = await response.json();
+      assertEquals(
+        response.ok,
+        false,
+        `out-of-range weight ${badWeight} must be rejected, got ${response.status}: ${
+          JSON.stringify(body)
+        }`,
+      );
+
+      const scoreAfter = await serviceScore(seededThought.id as string);
+      assertEquals(
+        scoreAfter,
+        scoreBefore,
+        "usefulness_score must be unchanged after a rejected weighted RPC",
+      );
+    } finally {
+      await serviceDeleteById("thoughts", seededThought.id as string);
+    }
+  });
+}
+
+Deno.test("weighted usefulness RPC applies an in-range weight exactly", async () => {
+  const seededThought = await serviceInsert("thoughts", {
+    content: uniqueName("acl-test-weight-apply thought"),
+  });
+  try {
+    const scoreBefore = await serviceScore(seededThought.id as string);
+    const weight = 3;
+
+    const response = await fetch(
+      `${REST_URL}/rpc/increment_usefulness_weighted`,
+      {
+        method: "POST",
+        headers: restHeaders(SUPABASE_SERVICE_KEY),
+        body: JSON.stringify({ thought_ids: [seededThought.id], weight }),
+      },
+    );
+    const affectedCount = await response.json();
+    assertEquals(
+      response.ok,
+      true,
+      `in-range weighted RPC failed: ${JSON.stringify(affectedCount)}`,
+    );
+    assertEquals(affectedCount, 1, "RPC must report one affected thought");
+
+    const scoreAfter = await serviceScore(seededThought.id as string);
+    assertEquals(
+      scoreAfter,
+      scoreBefore + weight,
+      "in-range weighted RPC must increment the score by exactly the weight",
+    );
+  } finally {
+    await serviceDeleteById("thoughts", seededThought.id as string);
+  }
+});
