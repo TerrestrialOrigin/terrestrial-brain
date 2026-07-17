@@ -45,19 +45,13 @@ jobs:
       - name: pgTAP database tests
         run: supabase test db
 
-      # RED-BY-DESIGN until Step 7 (New-Feature-Plan): `deno task test` now
-      # includes the lifecycle verification harness
-      # (tests/integration/lifecycle/), whose deterministic tests encode Step 7
-      # behavior that is not built yet. They fail on purpose, each with a
-      # documented `PENDING(step7:<feature>)` reason; Step 7 turns them green.
-      # The burn-down is logged by tests/unit/lifecycle-coverage.test.ts
-      # ("[lifecycle burn-down] ..."). The opt-in eval and sync tiers
-      # (`deno task test:eval`, `deno task test:sync-rules`) are NOT run here —
-      # they stay outside the required CI path.
-      - name: Deno tests (deterministic, fake AI provider — lifecycle tier red until Step 7)
+      # The default suite (unit + integration) must be fully green. The opt-in
+      # eval and sync tiers (`deno task test:eval`, `deno task test:sync-rules`)
+      # are NOT run here — they stay outside the required CI path.
+      - name: Deno tests (deterministic, fake AI provider)
         run: deno task test
 
-      # `if: always()` so lint/format signal survives the intentional red above.
+      # `if: always()` so lint/format still report even when the tests above fail.
       - name: Deno lint
         if: always()
         run: deno lint

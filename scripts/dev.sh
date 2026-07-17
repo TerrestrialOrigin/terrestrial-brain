@@ -24,7 +24,7 @@ cleanup() {
     wait "$PLUGIN_WATCH_PID" 2>/dev/null || true
   fi
   # Stop the Supabase stack (idempotent — safe if already stopped).
-  (cd "$REPO_ROOT" && supabase stop --no-backup) || true
+  (cd "$REPO_ROOT" && npx supabase stop --no-backup) || true
   echo "==> Dev stack stopped."
 }
 trap cleanup EXIT INT TERM
@@ -35,12 +35,22 @@ if [[ ! -f "$REPO_ROOT/supabase/functions/.env" ]]; then
 fi
 
 echo "==> Starting Supabase stack (serves the edge functions)..."
-(cd "$REPO_ROOT" && supabase start)
+(cd "$REPO_ROOT" && npx supabase start)
+
+# Blank-slate by default (SCRIPT-3): reset applies migrations + seed so the dev
+# stack matches the e2e/CI path and the documented seed accounts exist. Set
+# TB_DEV_KEEP_DATA=1 to preserve a long-lived local vault DB across restarts.
+if [[ "${TB_DEV_KEEP_DATA:-0}" == "1" ]]; then
+  echo "==> TB_DEV_KEEP_DATA=1 — keeping existing database state (no reset)."
+else
+  echo "==> Resetting database (migrations + seed) for a blank slate..."
+  (cd "$REPO_ROOT" && npx supabase db reset)
+fi
 
 # Regenerate the typed database schema so the edge function's
 # `database.types.ts` stays in sync with the applied migrations (Step 24).
 echo "==> Regenerating database types from the local schema..."
-(cd "$REPO_ROOT" && supabase gen types typescript --local --schema public \
+(cd "$REPO_ROOT" && npx supabase gen types typescript --local --schema public \
   > "$REPO_ROOT/supabase/functions/terrestrial-brain-mcp/database.types.ts") \
   || echo "WARNING: database type generation failed; continuing with existing types." >&2
 

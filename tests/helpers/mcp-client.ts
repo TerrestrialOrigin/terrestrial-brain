@@ -12,7 +12,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // ─── Connection constants ────────────────────────────────────────────────────
 
-export const SUPABASE_URL = "http://localhost:54321";
+export const SUPABASE_URL = "http://localhost:55421";
 
 // Local-stack service-role key (from `supabase status`). Bypasses RLS — used by
 // tests to verify DB side-effects and to clean up fixtures directly via REST.

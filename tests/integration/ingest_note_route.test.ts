@@ -5,16 +5,16 @@ import { createClient } from "@supabase/supabase-js";
 // Supabase client + endpoints
 // ---------------------------------------------------------------------------
 
-const SUPABASE_URL = "http://localhost:54321";
+const SUPABASE_URL = "http://localhost:55421";
 const SUPABASE_SERVICE_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 const MCP_KEY = "dev-test-key-123";
-const MCP_BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp";
+const MCP_BASE = "http://localhost:55421/functions/v1/terrestrial-brain-mcp";
 const INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note";
+  "http://localhost:55421/functions/v1/terrestrial-brain-mcp/ingest-note";
 
 // ---------------------------------------------------------------------------
 // /ingest-note HTTP route tests
@@ -47,7 +47,7 @@ Deno.test("/ingest-note does NOT fall through to MCP transport", async () => {
 
 Deno.test("/ingest-note returns 401 without valid key", async () => {
   const response = await fetch(
-    "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note",
+    "http://localhost:55421/functions/v1/terrestrial-brain-mcp/ingest-note",
     {
       method: "POST",
       // No x-tb-key header and no ?key= → unauthenticated.

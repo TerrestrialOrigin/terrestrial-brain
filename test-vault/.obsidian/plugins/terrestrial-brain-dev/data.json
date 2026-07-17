@@ -1,6 +1,6 @@
 {
   "settings": {
-    "tbEndpointUrl": "http://localhost:54321/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123",
+    "tbEndpointUrl": "http://localhost:55421/functions/v1/terrestrial-brain-mcp?key=dev-test-key-123",
     "excludeTag": "terrestrialBrainExclude",
     "syncDelayMinutes": 5,
     "pollIntervalMinutes": 10,

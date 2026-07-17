@@ -182,7 +182,7 @@ Deno.test("HTTP: /fetch-ai-output-content returns empty for rejected IDs", async
 
 Deno.test("HTTP: endpoints return 401 without valid key", async () => {
   const noAuthUrl =
-    "http://localhost:54321/functions/v1/terrestrial-brain-mcp/get-pending-ai-output-metadata";
+    "http://localhost:55421/functions/v1/terrestrial-brain-mcp/get-pending-ai-output-metadata";
   const response = await fetch(noAuthUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -1247,7 +1247,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - [x] 11. Dedup indexes & hashes (`bug/DedupIndexesAndHashes`) — SQL-2, EXTR-5, EXTR-7
 - [x] 12. Bounded queries (`feature/BoundedQueries`) — SQL-3, REPO-1, TOOL-10
 - [x] 13. Prod script secrets & cron verification (`bug/ProdScriptsSecrets`) — SCRIPT-1, SQL-7
-- [ ] 14. Dev stack hygiene (`feature/DevStackHygiene`) — SCRIPT-2..6
+- [x] 14. Dev stack hygiene (`feature/DevStackHygiene`) — SCRIPT-2..6
 - [ ] (decision needed) Archived-rows retention policy — SQL-9 (requires a user decision on the retention window before an opsx change is scoped)
 
 ## Phase C — Error honesty & concurrency (server)
