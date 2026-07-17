@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
 import { PeopleExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
 import type { ExtractionContext } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import { parseNote } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
@@ -97,4 +97,35 @@ Deno.test("PeopleExtractor: empty note content short-circuits with no LLM call",
 
   assertEquals(result.ids, []);
   assertEquals(provider.requests.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// EXTR-6 — auto-create failures are RETURNED in result.errors, not just logged
+// (failing-first).
+// ---------------------------------------------------------------------------
+
+Deno.test("PeopleExtractor: auto-create failure is reported in result.errors", async () => {
+  const note = parseNote("Talk to Ghost about it", "Note", null, "obsidian");
+  const provider = new FakeAiProvider(() => ({
+    people: [{ name: "Ghost", id: null }],
+  }));
+  const personRepository = new FakePersonRepository();
+  personRepository.insert = () =>
+    Promise.resolve({ data: null, error: { message: "insert denied" } });
+  const context = makeContext([], provider, personRepository);
+
+  const originalError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await new PeopleExtractor().extract(note, context);
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(result.ids, []);
+  assertExists(result.errors);
+  assertEquals(result.errors.length, 1);
+  assertStringIncludes(result.errors[0], "Ghost");
+  assertStringIncludes(result.errors[0], "insert denied");
 });

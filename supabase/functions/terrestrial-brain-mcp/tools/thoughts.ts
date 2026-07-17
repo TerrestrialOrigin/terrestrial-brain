@@ -13,6 +13,7 @@ import {
 import { parseNote } from "../parser.ts";
 import {
   createDefaultExtractors,
+  partialExtractionWarning,
   runExtractionPipeline,
 } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
@@ -669,9 +670,10 @@ export function register(
         async ({ content, author, project_ids, document_ids, builds_on }) => {
           // Run structural parser + extractor pipeline
           let references: Record<string, string[]> = {};
+          let extractionWarning = "";
           try {
             const parsedNote = parseNote(content, null, null, "mcp");
-            references = await runExtractionPipeline(
+            const outcome = await runExtractionPipeline(
               parsedNote,
               createDefaultExtractors(),
               supabase,
@@ -680,6 +682,19 @@ export function register(
               projectRepository,
               personRepository,
             );
+            if (!outcome.ok) {
+              // A seed read failed: proceeding would risk duplicate task/project
+              // writes, so abort and write nothing (EXTR-2).
+              return errorResult(
+                `Capture aborted — could not read existing references ` +
+                  `(${outcome.error}). No thought was written to avoid ` +
+                  `duplicates; please retry.`,
+              );
+            }
+            references = outcome.references;
+            if (outcome.errors.length > 0) {
+              extractionWarning = partialExtractionWarning(outcome.errors);
+            }
           } catch (pipelineError) {
             console.error(
               `capture_thought pipeline error: ${
@@ -718,7 +733,7 @@ export function register(
           );
           if (dedup.duplicateOf) {
             return textResult(
-              `Already captured — kept the existing thought (no duplicate created).`,
+              `Already captured — kept the existing thought (no duplicate created).${extractionWarning}`,
             );
           }
 
@@ -768,6 +783,7 @@ export function register(
             }`;
           }
           confirmation += buildsOnNote;
+          confirmation += extractionWarning;
 
           return textResult(confirmation);
         },
@@ -1417,8 +1433,9 @@ export async function handleIngestNote(
     );
 
     let references: Record<string, string[]> = {};
+    let extractionWarning = "";
     try {
-      references = await runExtractionPipeline(
+      const outcome = await runExtractionPipeline(
         parsedNote,
         createDefaultExtractors(),
         supabase,
@@ -1427,6 +1444,18 @@ export async function handleIngestNote(
         projectRepository,
         personRepository,
       );
+      if (!outcome.ok) {
+        // A seed read failed: aborting avoids duplicate task/project writes on a
+        // transient DB error during re-ingest (EXTR-2). Nothing has been written.
+        return {
+          success: false,
+          error:
+            `Sync aborted — could not read existing references (${outcome.error}). ` +
+            `No thoughts or tasks were written to avoid duplicates; please retry.`,
+        };
+      }
+      references = outcome.references;
+      extractionWarning = partialExtractionWarning(outcome.errors);
     } catch (pipelineError) {
       console.error(
         `Extractor pipeline error: ${(pipelineError as Error).message}`,
@@ -1449,6 +1478,13 @@ export async function handleIngestNote(
         ),
       );
 
+    // Appends any partial-extraction warning (EXTR-6) to a result's message so
+    // a successful sync still reports that some reference writes failed.
+    const appendWarning = (result: IngestResult): IngestResult =>
+      extractionWarning && result.message
+        ? { ...result, message: result.message + extractionWarning }
+        : result;
+
     const existingThoughts = await fetchExistingThoughts(
       thoughtRepository,
       note_id,
@@ -1456,7 +1492,7 @@ export async function handleIngestNote(
 
     // No existing thoughts → fresh split and insert.
     if (existingThoughts.length === 0) {
-      return await runFreshIngest();
+      return appendWarning(await runFreshIngest());
     }
 
     // Existing thoughts found → reconcile. A null plan (unparseable) degrades to
@@ -1468,7 +1504,7 @@ export async function handleIngestNote(
       content,
     );
     if (plan === null) {
-      return await runFreshIngest();
+      return appendWarning(await runFreshIngest());
     }
 
     const counts = await executeReconciliationPlan(
@@ -1486,11 +1522,11 @@ export async function handleIngestNote(
       noteId: note_id,
     });
 
-    return {
+    return appendWarning({
       success: !isError,
       message,
       ...(isError ? { error: message } : {}),
-    };
+    });
   } catch (err: unknown) {
     return {
       success: false,

@@ -270,3 +270,66 @@ Deno.test("extractProjectNameFromPath: sends correct path to the provider", asyn
     "Path: some/path/Test Project.md",
   );
 });
+
+// ---------------------------------------------------------------------------
+// EXTR-6 — ProjectExtractor auto-create failures are RETURNED in result.errors
+// (failing-first). Uses the shared extraction fakes to drive the real
+// ProjectExtractor.extract with a conventional project path.
+// ---------------------------------------------------------------------------
+
+import {
+  assertExists as assertExistsExtr6,
+  assertStringIncludes as assertStringIncludesExtr6,
+} from "@std/assert";
+import { ProjectExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts";
+import { parseNote as parseNoteExtr6 } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
+import type { ExtractionContext as ExtractionContextExtr6 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
+import type { SupabaseClient as SupabaseClientExtr6 } from "@supabase/supabase-js";
+import {
+  FakeAiProvider as SharedFakeAiProvider,
+  FakePersonRepository as SharedFakePersonRepository,
+  FakeProjectRepository as SharedFakeProjectRepository,
+  FakeTaskRepository as SharedFakeTaskRepository,
+} from "./fakes/extraction-fakes.ts";
+
+Deno.test("ProjectExtractor: auto-create failure is reported in result.errors", async () => {
+  // A conventional project path -> matchOrCreateProject("Acme") for a NEW project.
+  const note = parseNoteExtr6(
+    "Some content",
+    "Note",
+    "projects/Acme/note.md",
+    "obsidian",
+  );
+  const projectRepository = new SharedFakeProjectRepository();
+  projectRepository.insert = () =>
+    Promise.resolve({ data: null, error: { message: "rls denied" } });
+
+  const context: ExtractionContextExtr6 = {
+    supabase: {} as unknown as SupabaseClientExtr6,
+    aiProvider: new SharedFakeAiProvider(() => ({})),
+    taskRepository: new SharedFakeTaskRepository(),
+    projectRepository,
+    personRepository: new SharedFakePersonRepository(),
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const originalError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await new ProjectExtractor().extract(note, context);
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(result.ids, []);
+  assertExistsExtr6(result.errors);
+  assertStringIncludesExtr6(result.errors[0], "Acme");
+  assertStringIncludesExtr6(result.errors[0], "rls denied");
+});

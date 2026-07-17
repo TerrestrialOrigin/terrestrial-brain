@@ -120,6 +120,44 @@ export interface Extractor {
 // ---------------------------------------------------------------------------
 
 /**
+ * Discriminated outcome of an extraction run.
+ *
+ * `ok: false` means a SEED read (known projects/people, or the note's existing
+ * tasks) failed. Proceeding with an empty seed is never safe — it silently turns
+ * a transient read failure into duplicate writes (every checkbox re-created,
+ * duplicate projects auto-created) — so the runner aborts BEFORE running any
+ * extractor and the caller must surface an error instead of ingesting (EXTR-2).
+ *
+ * `ok: true` carries the reference map plus any non-fatal per-write failures the
+ * extractors reported (`errors`), so callers can report partial failure rather
+ * than claiming full success (EXTR-6).
+ */
+export interface PipelineSuccess {
+  ok: true;
+  references: Record<string, string[]>;
+  errors: string[];
+}
+
+export interface PipelineFailure {
+  ok: false;
+  error: string;
+}
+
+export type PipelineOutcome = PipelineSuccess | PipelineFailure;
+
+/**
+ * Formats a caller-facing suffix describing partial extraction failures, so a
+ * tool response reports "some reference writes failed" instead of claiming full
+ * success (EXTR-6). Returns "" when there are no errors.
+ */
+export function partialExtractionWarning(errors: string[]): string {
+  if (errors.length === 0) return "";
+  return ` (warning: ${errors.length} reference write(s) failed: ${
+    errors.join("; ")
+  })`;
+}
+
+/**
  * Runs extractors sequentially against a parsed note, collecting results
  * into a reference map. Each extractor may enrich the shared context for
  * downstream extractors.
@@ -132,12 +170,31 @@ export async function runExtractionPipeline(
   taskRepository: TaskRepository,
   projectRepository: ProjectRepository,
   personRepository: PersonRepository,
-): Promise<Record<string, string[]>> {
-  // Initialize context — fetch known projects and people through the repos
-  const [{ data: activeProjects }, { data: activePeople }] = await Promise.all([
+): Promise<PipelineOutcome> {
+  // Initialize context — fetch known projects and people through the repos.
+  const [activeProjectsResult, activePeopleResult] = await Promise.all([
     projectRepository.listActive(),
     personRepository.listActive(),
   ]);
+  const activeProjects = activeProjectsResult.data;
+  const activePeople = activePeopleResult.data;
+
+  // Abort on a failed seed read: an empty seed silently becomes duplicate
+  // writes, so a read failure must NOT degrade into "genuinely new" (EXTR-2).
+  if (activeProjectsResult.error) {
+    return {
+      ok: false,
+      error:
+        `Could not read active projects: ${activeProjectsResult.error.message}`,
+    };
+  }
+  if (activePeopleResult.error) {
+    return {
+      ok: false,
+      error:
+        `Could not read active people: ${activePeopleResult.error.message}`,
+    };
+  }
 
   // Fetch known tasks for this note's reference_id (for reconciliation)
   let knownTasks: {
@@ -146,9 +203,15 @@ export async function runExtractionPipeline(
     reference_id: string | null;
   }[] = [];
   if (note.referenceId) {
-    const { data: existingTasks } = await taskRepository.findByReference(
-      note.referenceId,
-    );
+    const { data: existingTasks, error: tasksError } = await taskRepository
+      .findByReference(note.referenceId);
+    if (tasksError) {
+      return {
+        ok: false,
+        error:
+          `Could not read existing tasks for "${note.referenceId}": ${tasksError.message}`,
+      };
+    }
     knownTasks = (existingTasks || []).map(
       (task: { id: string; content: string; reference_id: string | null }) => ({
         id: task.id,
@@ -185,12 +248,15 @@ export async function runExtractionPipeline(
 
   // Run each extractor sequentially, collecting results
   const references: Record<string, string[]> = {};
+  const collectedErrors: string[] = [];
 
   for (const extractor of extractors) {
     const result = await extractor.extract(note, context);
     references[result.referenceKey] = result.ids;
-    // Surface (don't swallow) any write failures the extractor reported.
+    // Surface (don't swallow) any write failures the extractor reported:
+    // both logged AND returned so the caller can report partial failure.
     if (result.errors && result.errors.length > 0) {
+      collectedErrors.push(...result.errors);
       console.error(
         `Extractor "${result.referenceKey}" reported ${result.errors.length} write failure(s): ${
           result.errors.join("; ")
@@ -200,7 +266,7 @@ export async function runExtractionPipeline(
     context.accumulatedReferences = { ...references };
   }
 
-  return references;
+  return { ok: true, references, errors: collectedErrors };
 }
 
 // ---------------------------------------------------------------------------

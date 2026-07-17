@@ -5,6 +5,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { parseNote } from "../parser.ts";
 import {
   createDefaultExtractors,
+  partialExtractionWarning,
   runExtractionPipeline,
 } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
@@ -71,12 +72,13 @@ export function register(
         let resolvedReferences: Record<string, string[]> = references
           ? { people: references.people || [], tasks: references.tasks || [] }
           : {};
+        let extractionWarning = "";
 
         // Auto-extract references using the existing extraction pipeline
         if (!references) {
           try {
             const parsedNote = parseNote(content, title, null, "mcp");
-            const extractedRefs = await runExtractionPipeline(
+            const outcome = await runExtractionPipeline(
               parsedNote,
               createDefaultExtractors(),
               supabase,
@@ -85,7 +87,16 @@ export function register(
               projectRepository,
               personRepository,
             );
-            resolvedReferences = extractedRefs;
+            if (!outcome.ok) {
+              // Seed read failed: abort rather than store a document whose
+              // extraction may have created duplicate tasks/projects (EXTR-2).
+              return errorResult(
+                `Document not stored — reference extraction could not read ` +
+                  `existing state (${outcome.error}). Please retry.`,
+              );
+            }
+            resolvedReferences = outcome.references;
+            extractionWarning = partialExtractionWarning(outcome.errors);
           } catch (pipelineError) {
             console.error(
               `write_document extraction pipeline error: ${
@@ -134,7 +145,7 @@ export function register(
           : "";
 
         return textResult(
-          `Document stored: "${data.title}" (id: ${data.id})${refSuffix}\n` +
+          `Document stored: "${data.title}" (id: ${data.id})${refSuffix}${extractionWarning}\n` +
             `thoughts_required: true — Use capture_thought with document_ids: ["${data.id}"] to atomize this document into searchable thoughts.`,
         );
       },
@@ -345,7 +356,7 @@ export function register(
           const effectiveTitle = title ?? existing.title;
           try {
             const parsedNote = parseNote(content, effectiveTitle, null, "mcp");
-            const extractedRefs = await runExtractionPipeline(
+            const outcome = await runExtractionPipeline(
               parsedNote,
               createDefaultExtractors(),
               supabase,
@@ -354,7 +365,16 @@ export function register(
               projectRepository,
               personRepository,
             );
-            updates.references = extractedRefs;
+            if (!outcome.ok) {
+              // Seed read failed: abort BEFORE the update so we neither store
+              // wrong references nor risk duplicate task/project writes (EXTR-2).
+              return errorResult(
+                `Update aborted — reference extraction could not read existing ` +
+                  `state (${outcome.error}). The document was not changed; retry.`,
+              );
+            }
+            updates.references = outcome.references;
+            contentWarning = partialExtractionWarning(outcome.errors);
           } catch (pipelineError) {
             console.error(
               `update_document extraction pipeline error: ${

@@ -1233,7 +1233,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 
 ## Phase A — High-severity correctness & data integrity
 - [x] 1. Marker word boundaries (`bug/MarkerWordBoundaries`) — EXTR-1
-- [ ] 2. Pipeline seed errors (`bug/PipelineSeedErrors`) — EXTR-2, EXTR-6
+- [x] 2. Pipeline seed errors (`bug/PipelineSeedErrors`) — EXTR-2, EXTR-6
 - [ ] 3. Reconciliation plan validation (`bug/ReconciliationPlanValidation`) — TOOL-1
 - [ ] 4. Fake provider fidelity (`bug/FakeProviderFidelity`) — CORE-1, CORE-8, CORE-12
 - [ ] 5. Dedup gate integrity (`bug/DedupGateIntegrity`) — CORE-2, TOOL-7

@@ -44,6 +44,19 @@ const personRepository = new SupabasePersonRepository(supabase);
 // no live key; the opt-in live-LLM tier runs the real provider.
 const testAiProvider = createAiProvider();
 
+// Thin wrapper: the pipeline now returns a discriminated PipelineOutcome
+// (EXTR-2/EXTR-6). These tests assert on the reference map, so unwrap the
+// success branch here (a seed-read abort is a hard test failure).
+async function runPipelineRefs(
+  ...pipelineArgs: Parameters<typeof runExtractionPipeline>
+): Promise<Record<string, string[]>> {
+  const outcome = await runExtractionPipeline(...pipelineArgs);
+  if (!outcome.ok) {
+    throw new Error(`extraction pipeline aborted unexpectedly: ${outcome.error}`);
+  }
+  return outcome.references;
+}
+
 // Seed project IDs (from seed.sql)
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 const TERRESTRIAL_BRAIN_ID = "00000000-0000-0000-0000-000000000002";
@@ -71,7 +84,7 @@ Deno.test("pipeline: single extractor returns correct references", async () => {
   };
 
   const note = parseNote("Some content", "Test", null, "obsidian");
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [mockExtractor],
     supabase,
@@ -97,7 +110,7 @@ Deno.test("pipeline: multiple extractors compose results", async () => {
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [projectExtractor, taskExtractor],
     supabase,
@@ -137,7 +150,7 @@ Deno.test("pipeline: extractors run in sequential order", async () => {
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  await runExtractionPipeline(
+  await runPipelineRefs(
     note,
     [extractorA, extractorB, extractorC],
     supabase,
@@ -175,7 +188,7 @@ Deno.test("pipeline: context enrichment visible to downstream extractors", async
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  await runExtractionPipeline(
+  await runPipelineRefs(
     note,
     [enrichingExtractor, observingExtractor],
     supabase,
@@ -195,7 +208,7 @@ Deno.test("pipeline: extractor returning empty ids includes key in result", asyn
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [emptyExtractor],
     supabase,
@@ -221,7 +234,7 @@ Deno.test("pipeline: context knownProjects populated from DB", async () => {
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  await runExtractionPipeline(
+  await runPipelineRefs(
     note,
     [inspectingExtractor],
     supabase,
@@ -552,7 +565,7 @@ Deno.test("pipeline: ProjectExtractor wired into pipeline produces correct refer
     "obsidian",
   );
 
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [new ProjectExtractor()],
     supabase,
@@ -577,7 +590,7 @@ Deno.test("pipeline: ProjectExtractor with no matches returns empty projects arr
     "obsidian",
   );
 
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [new ProjectExtractor()],
     supabase,
@@ -1164,7 +1177,7 @@ Deno.test("pipeline: ProjectExtractor + TaskExtractor produce composed reference
 
   // Run the real pipeline — ProjectExtractor sets accumulatedReferences.projects,
   // TaskExtractor reads them via context.accumulatedReferences.projects
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
     supabase,
@@ -1235,7 +1248,7 @@ Deno.test("pipeline: knownTasks populated from DB for matching reference_id", as
     referenceId,
     "obsidian",
   );
-  await runExtractionPipeline(
+  await runPipelineRefs(
     note,
     [inspectingExtractor],
     supabase,
@@ -1267,7 +1280,7 @@ Deno.test("pipeline: knownTasks empty for note with no referenceId", async () =>
   };
 
   const note = parseNote("Some content", "No Ref", null, "obsidian");
-  await runExtractionPipeline(
+  await runPipelineRefs(
     note,
     [inspectingExtractor],
     supabase,
@@ -1430,7 +1443,7 @@ Deno.test("pipeline: knownPeople populated from DB", async () => {
   };
 
   const note = parseNote("Content", "Test", null, "obsidian");
-  await runExtractionPipeline(
+  await runPipelineRefs(
     note,
     [inspectingExtractor],
     supabase,
@@ -1866,7 +1879,7 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
     "# Test Proj\n\n- [ ] Alice should review the PR by 2026-05-01\n";
   const note = parseNote(content, "Full Test", referenceId, "obsidian");
 
-  const result = await runExtractionPipeline(
+  const result = await runPipelineRefs(
     note,
     [new ProjectExtractor(), new PeopleExtractor(), new TaskExtractor()],
     supabase,
