@@ -78,80 +78,95 @@ function uniqueName(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-// ─── people: anon-key denial ────────────────────────────────────────────────
+// ─── Every brain-data table denies the anon publishable key (TEST-8) ─────────
+// The anon key must be locked out of ALL brain data, not just `people`. A
+// parameterized SELECT+INSERT denial probe runs against every public table, so
+// a future migration re-granting anon DML or shipping a permissive policy on any
+// table (thoughts is the most sensitive) fails here. Keep this list in sync with
+// `SELECT tablename FROM pg_tables WHERE schemaname='public'`.
+const BRAIN_TABLES = [
+  "thoughts",
+  "projects",
+  "tasks",
+  "note_snapshots",
+  "ai_output",
+  "people",
+  "documents",
+  "function_call_logs",
+] as const;
 
-Deno.test("anon key cannot read people", async () => {
-  const seededPerson = await serviceInsert("people", {
-    name: uniqueName("acl-test-read"),
-    type: "human",
-    email: "acl-read@example.com",
-  });
-  try {
-    const anonResponse = await fetch(
-      `${REST_URL}/people?id=eq.${seededPerson.id}`,
-      {
-        headers: restHeaders(SUPABASE_ANON_KEY),
-      },
-    );
-    const anonBody = await anonResponse.json();
+async function assertAnonDenied(
+  method: "GET" | "POST",
+  table: string,
+): Promise<void> {
+  const init: RequestInit = { method, headers: restHeaders(SUPABASE_ANON_KEY) };
+  if (method === "POST") {
+    init.headers = restHeaders(SUPABASE_ANON_KEY, {
+      "Content-Type": "application/json",
+    });
+    init.body = "{}";
+  }
+  const response = await fetch(`${REST_URL}/${table}?limit=1`, init);
+  const body = await response.json().catch(() => null);
+  assertEquals(
+    response.status === 401 || response.status === 403,
+    true,
+    `anon ${method} on ${table} must be rejected, got ${response.status}: ${
+      JSON.stringify(body)
+    }`,
+  );
+  assertEquals(
+    body?.code,
+    "42501",
+    `anon ${method} on ${table} must be a permission-denied error`,
+  );
+}
+
+for (const table of BRAIN_TABLES) {
+  Deno.test(`anon key cannot SELECT ${table}`, () =>
+    assertAnonDenied("GET", table));
+  Deno.test(`anon key cannot INSERT into ${table}`, () =>
+    assertAnonDenied("POST", table));
+}
+
+// ─── Every exposed RPC denies the anon publishable key (TEST-8) ──────────────
+// EXECUTE is revoked from anon/authenticated for every RPC; assert the anon key
+// is rejected through the REST /rpc surface. Keep in sync with the public
+// function list (excluding the update_updated_at trigger function).
+const RPC_PROBES: ReadonlyArray<
+  { name: string; args: Record<string, unknown> }
+> = [
+  { name: "increment_usefulness", args: { thought_ids: [] } },
+  {
+    name: "increment_usefulness_weighted",
+    args: { thought_ids: [], weight: 1 },
+  },
+  { name: "thought_stats", args: { p_project_id: null } },
+  { name: "purge_function_call_logs", args: { retention_days: 90 } },
+  { name: "get_pending_ai_output_metadata", args: {} },
+  { name: "normalize_thought_project_refs", args: { target_id: null } },
+];
+
+for (const rpc of RPC_PROBES) {
+  Deno.test(`anon key cannot EXECUTE ${rpc.name}`, async () => {
+    const response = await fetch(`${REST_URL}/rpc/${rpc.name}`, {
+      method: "POST",
+      headers: restHeaders(SUPABASE_ANON_KEY),
+      body: JSON.stringify(rpc.args),
+    });
+    const body = await response.json().catch(() => null);
     assertEquals(
-      anonResponse.status === 401 || anonResponse.status === 403,
+      response.status === 401 || response.status === 403 ||
+        response.status === 404,
       true,
-      `anon select must be rejected, got ${anonResponse.status}: ${
-        JSON.stringify(anonBody)
+      `anon RPC ${rpc.name} must be rejected, got ${response.status}: ${
+        JSON.stringify(body)
       }`,
     );
-    assertEquals(
-      anonBody.code,
-      "42501",
-      "rejection must be a permission-denied error",
-    );
-  } finally {
-    await serviceDeleteById("people", seededPerson.id as string);
-  }
-});
-
-Deno.test("anon key cannot insert into people", async () => {
-  const attemptedName = uniqueName("acl-test-insert");
-  const anonResponse = await fetch(`${REST_URL}/people`, {
-    method: "POST",
-    headers: restHeaders(SUPABASE_ANON_KEY, {
-      "Prefer": "return=representation",
-    }),
-    body: JSON.stringify({ name: attemptedName, type: "human" }),
   });
-  const anonBody = await anonResponse.json();
-  try {
-    assertEquals(
-      anonResponse.status === 401 || anonResponse.status === 403,
-      true,
-      `anon insert must be rejected, got ${anonResponse.status}: ${
-        JSON.stringify(anonBody)
-      }`,
-    );
-    assertEquals(
-      anonBody.code,
-      "42501",
-      "rejection must be a row-level security violation",
-    );
+}
 
-    const serviceCheckResponse = await fetch(
-      `${REST_URL}/people?name=eq.${attemptedName}`,
-      { headers: restHeaders(SUPABASE_SERVICE_KEY) },
-    );
-    const serviceCheckRows = await serviceCheckResponse.json();
-    assertEquals(
-      serviceCheckRows.length,
-      0,
-      "no row may be created by an anon insert",
-    );
-  } finally {
-    // If the insert wrongly succeeded (the pre-fix bug), remove the row.
-    if (Array.isArray(anonBody) && anonBody[0]?.id) {
-      await serviceDeleteById("people", anonBody[0].id as string);
-    }
-  }
-});
+// ─── people: anon-key denial (update/delete detail beyond the SELECT/INSERT loop) ───
 
 Deno.test("anon key cannot update people", async () => {
   const originalEmail = "acl-update-original@example.com";
@@ -354,30 +369,6 @@ Deno.test("service role can still execute increment_usefulness", async () => {
   } finally {
     await serviceDeleteById("thoughts", seededThought.id as string);
   }
-});
-
-// ─── function_call_logs: anon-key denial (SQL-1) ────────────────────────────
-// The policy is scoped `to service_role`; this personal-data table (serialized
-// tool inputs + ip_address) must be unreachable by the anon key.
-
-Deno.test("anon key cannot read function_call_logs", async () => {
-  const anonResponse = await fetch(
-    `${REST_URL}/function_call_logs?limit=1`,
-    { headers: restHeaders(SUPABASE_ANON_KEY) },
-  );
-  const anonBody = await anonResponse.json();
-  assertEquals(
-    anonResponse.status === 401 || anonResponse.status === 403,
-    true,
-    `anon select on function_call_logs must be rejected, got ${anonResponse.status}: ${
-      JSON.stringify(anonBody)
-    }`,
-  );
-  assertEquals(
-    anonBody.code,
-    "42501",
-    "rejection must be a permission-denied error",
-  );
 });
 
 // ─── increment_usefulness_weighted: weight bounds (SQL-8) ────────────────────
