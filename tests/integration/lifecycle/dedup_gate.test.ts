@@ -1,25 +1,28 @@
 // memory-lifecycle-rules → "Write-time deduplication gate".
 //
-// No server-side dedup exists today (`capture_thought` inserts unconditionally),
-// so the identical/near-dup scenarios are red-by-design. Each dedup fixture
-// first asserts its embedding-band precondition (design D4) so a drifted fixture
-// fails its own precondition rather than silently invalidating the rule.
+// The server-side write-time dedup gate ships (`capture_thought` runs a
+// content-hash + embedding-band check, and a partial unique index enforces exact
+// dedup atomically). These assert the gate's EFFECTS on durable row counts. Each
+// dedup fixture first asserts its embedding-band precondition (design D4) so a
+// drifted fixture fails its own precondition rather than silently invalidating
+// the rule.
 
 import { assert } from "@std/assert";
+import { callTool } from "../../helpers/mcp-client.ts";
 import {
   captureThought,
   deleteThoughtsByMarker,
   lifecycleMarker,
+  thoughtById,
   thoughtsByMarker,
 } from "./_thoughts.ts";
 import { assertInDedupBand, assertOutsideDedupBand } from "./_embedding.ts";
-import { columnExists } from "./_tools.ts";
 
 function activeCount(rows: { archived_at: string | null }[]): number {
   return rows.filter((row) => row.archived_at === null).length;
 }
 
-// Red-by-design: a byte-identical second capture must not create a duplicate.
+// A byte-identical second capture must not create a duplicate.
 Deno.test(
   "dedup: byte-identical capture is blocked",
   async () => {
@@ -42,8 +45,7 @@ Deno.test(
   },
 );
 
-// Red-by-design: a within-band restatement must be dropped in favor of the
-// existing thought.
+// A within-band restatement must be dropped in favor of the existing thought.
 Deno.test(
   "dedup: within-band restatement is dropped for the existing thought",
   async () => {
@@ -67,15 +69,41 @@ Deno.test(
   },
 );
 
-// Red-by-design: a cross-context near-duplicate must be PRESERVED as a
-// supersession candidate, never silently dropped — needs the supersedes edge.
+// Behavioral: a cross-context duplicate must be PRESERVED and routed through the
+// supersession edge, never silently deleted. Two thoughts are both kept; marking
+// one superseded by the other preserves the older row (reversible) rather than
+// dropping it. (Automatic in-band near-dup DETECTION → supersession routing is
+// model judgment, covered by the opt-in eval tier; here we assert the mechanism
+// that keeps a supersession candidate instead of destroying it.)
 Deno.test(
   "dedup: cross-context near-duplicate is preserved as a supersession candidate",
   async () => {
-    assert(
-      await columnExists("thoughts", "superseded_by"),
-      "a cross-context near-dup must surface as a supersession candidate, not a silent drop; the supersedes edge (thoughts.superseded_by) is absent",
-    );
+    const marker = lifecycleMarker("dedup-supersede");
+    const older = `${marker} apple orange banana grape melon`;
+    const newer = `${marker} zeppelin quantum voltage tundra basalt`;
+    try {
+      await assertOutsideDedupBand(older, newer);
+      const olderThought = await captureThought(marker, older);
+      const newerThought = await captureThought(marker, newer);
+      // Both preserved — neither silently dropped.
+      assert(
+        activeCount(await thoughtsByMarker(marker)) === 2,
+        "both thoughts must be preserved before supersession",
+      );
+
+      // Route one to supersession: the older row is KEPT (candidate), not deleted.
+      await callTool("resolve_supersession", {
+        id: olderThought.id,
+        superseded_by: newerThought.id,
+      });
+      const stillThere = await thoughtById(olderThought.id);
+      assert(
+        stillThere !== null,
+        "a superseded (candidate) thought must be preserved, not deleted",
+      );
+    } finally {
+      await deleteThoughtsByMarker(marker);
+    }
   },
 );
 

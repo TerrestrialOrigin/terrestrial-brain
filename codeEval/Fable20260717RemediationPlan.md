@@ -1239,7 +1239,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - [x] 5. Dedup gate integrity (`bug/DedupGateIntegrity`) — CORE-2, TOOL-7
 - [x] 6. archive_project cascade (`bug/ArchiveProjectCascade`) — TOOL-2
 - [x] 7. OpenRouter timeout & validation (`bug/OpenRouterTimeoutValidation`) — CORE-3, CORE-4
-- [ ] 8. Lifecycle test depth (`feature/LifecycleTestDepth`) — TEST-1..6
+- [x] 8. Lifecycle test depth (`feature/LifecycleTestDepth`) — TEST-1..6
 
 ## Phase B — Security, GDPR & infrastructure
 - [ ] 9. DB policy & function hardening (`bug/DbPolicyAndFunctionHardening`) — SQL-1, SQL-4, SQL-8

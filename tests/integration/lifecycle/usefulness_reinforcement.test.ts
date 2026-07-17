@@ -36,8 +36,9 @@ Deno.test("usefulness: get_thought_by_id auto-records server-side", async () => 
   }
 });
 
-// Pass-now: a content edit is not a usefulness signal — a user edit must not
-// reinforce the score.
+// Pass-now: a content edit is not a usefulness signal — neither a user edit nor
+// a sync edit must reinforce the score. The `actor` is passed explicitly so the
+// test exercises the user/sync mutation paths (not the default LLM actor).
 Deno.test("usefulness: a user content edit does not reinforce usefulness", async () => {
   const marker = lifecycleMarker("useful-useredit");
   try {
@@ -45,13 +46,35 @@ Deno.test("usefulness: a user content edit does not reinforce usefulness", async
     const before = await score(thought.id);
     await callTool("update_thought", {
       id: thought.id,
-      content: `${marker} revised wording`,
+      content: `${marker} revised wording apple orange banana`,
+      actor: "user",
     });
     const after = await score(thought.id);
     assertEquals(
       after,
       before,
       `a user edit must not change usefulness (before=${before}, after=${after})`,
+    );
+  } finally {
+    await deleteThoughtsByMarker(marker);
+  }
+});
+
+Deno.test("usefulness: a sync content edit does not reinforce usefulness", async () => {
+  const marker = lifecycleMarker("useful-syncedit");
+  try {
+    const thought = await captureThought(marker, `${marker} first wording`);
+    const before = await score(thought.id);
+    await callTool("update_thought", {
+      id: thought.id,
+      content: `${marker} revised wording zeppelin quantum voltage`,
+      actor: "sync",
+    });
+    const after = await score(thought.id);
+    assertEquals(
+      after,
+      before,
+      `a sync edit must not change usefulness (before=${before}, after=${after})`,
     );
   } finally {
     await deleteThoughtsByMarker(marker);

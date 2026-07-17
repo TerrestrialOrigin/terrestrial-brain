@@ -130,6 +130,44 @@ Deno.test("coverage: tier is consistent with tag", () => {
   }
 });
 
+Deno.test("coverage: every pass-now testRef exists and is anchored to a real test", async () => {
+  const testFileCache = new Map<string, string>();
+  const readTestFile = async (relativePath: string): Promise<string> => {
+    const cached = testFileCache.get(relativePath);
+    if (cached !== undefined) return cached;
+    const url = new URL(`../../${relativePath}`, import.meta.url);
+    const text = await Deno.readTextFile(url);
+    testFileCache.set(relativePath, text);
+    return text;
+  };
+
+  for (const entry of COVERAGE_MANIFEST) {
+    if (entry.expectation !== "pass-now") continue;
+
+    // (a) The referenced file must exist — kills dead references.
+    const url = new URL(`../../${entry.testRef}`, import.meta.url);
+    const stat = await Deno.stat(url).catch(() => null);
+    assert(
+      stat?.isFile === true,
+      `testRef missing for "${entry.scenario}": ${entry.testRef}`,
+    );
+
+    // (b) If anchored, the file must contain a Deno.test whose name includes
+    //     the anchor — proving the scenario maps to a real, named test.
+    if (entry.testNameContains) {
+      const text = await readTestFile(entry.testRef);
+      const testNames = [
+        ...text.matchAll(/Deno\.test\(\s*(["'`])((?:.|\n)*?)\1/g),
+      ]
+        .map((match) => match[2]);
+      assert(
+        testNames.some((name) => name.includes(entry.testNameContains!)),
+        `no Deno.test in ${entry.testRef} contains "${entry.testNameContains}" for "${entry.scenario}"`,
+      );
+    }
+  }
+});
+
 Deno.test("coverage: burn-down is reported", () => {
   const counts = burnDown();
   // The console line is the legible burn-down for Step 7 (and v1.5).

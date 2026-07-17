@@ -73,3 +73,72 @@ export async function deleteThoughtsByMarker(marker: string): Promise<void> {
 export function lifecycleMarker(slug: string): string {
   return `lifecycle-${slug}-${crypto.randomUUID()}`;
 }
+
+/**
+ * Patch arbitrary columns on a thought row via the service-role REST surface.
+ * Used to place a captured thought into a specific lifecycle state (e.g. an old
+ * `created_at`, a set `last_retrieved_at`, or a `note_snapshot_id`) that the
+ * capture path does not set directly — reusing the embedding the fake generated.
+ */
+export async function patchThought(
+  id: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const response = await fetch(restUrl(`thoughts?id=eq.${id}`), {
+    method: "PATCH",
+    headers: { ...serviceHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  await response.body?.cancel();
+  if (!response.ok) {
+    throw new Error(`patchThought failed (${response.status}) for ${id}`);
+  }
+}
+
+/** An ISO timestamp `days` in the past (for backdating `created_at`). */
+export function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+/** Create a note_snapshot row (a "synced note") and return its id. */
+export async function createNoteSnapshot(referenceId: string): Promise<string> {
+  const response = await fetch(restUrl("note_snapshots"), {
+    method: "POST",
+    headers: {
+      ...serviceHeaders(),
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify({
+      reference_id: referenceId,
+      title: "lifecycle snapshot",
+      content: "lifecycle snapshot content",
+      source: "obsidian",
+    }),
+  });
+  const rows = (await response.json()) as { id: string }[];
+  if (!response.ok || !rows[0]?.id) {
+    throw new Error(`createNoteSnapshot failed (${response.status})`);
+  }
+  return rows[0].id;
+}
+
+/** SHA-256 hex of `text` — must match the server's `hashContent` (helpers.ts). */
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Delete a note_snapshot row by id (fixture cleanup). */
+export async function deleteNoteSnapshot(id: string): Promise<void> {
+  const response = await fetch(restUrl(`note_snapshots?id=eq.${id}`), {
+    method: "DELETE",
+    headers: serviceHeaders(),
+  });
+  await response.body?.cancel();
+}
