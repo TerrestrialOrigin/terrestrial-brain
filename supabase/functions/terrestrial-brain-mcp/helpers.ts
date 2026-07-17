@@ -95,24 +95,39 @@ export async function resolveDedup(
   thoughtRepository: ThoughtRepository,
   contentHash: string,
   embedding: number[],
-): Promise<{ duplicateOf: string | null }> {
-  const { data: exact } = await thoughtRepository.findByContentHash(
-    contentHash,
-  );
+): Promise<{ duplicateOf: string | null; degraded: boolean }> {
+  // CORE-2: a failed lookup must NOT read as "genuinely new". Surface a degraded
+  // outcome so the caller can flag that the dedup gate could not run, instead of
+  // silently admitting a duplicate.
+  const { data: exact, error: exactError } = await thoughtRepository
+    .findByContentHash(contentHash);
+  if (exactError) {
+    console.error(
+      `resolveDedup: content-hash lookup failed: ${exactError.message}`,
+    );
+    return { duplicateOf: null, degraded: true };
+  }
   if (exact && exact.length > 0) {
-    return { duplicateOf: exact[0].id };
+    return { duplicateOf: exact[0].id, degraded: false };
   }
-  const { data: near } = await thoughtRepository.matchByEmbedding({
-    embedding,
-    threshold: DEDUP_MIN_SIMILARITY,
-    count: 1,
-    author: null,
-    reliability: null,
-  });
+  const { data: near, error: nearError } = await thoughtRepository
+    .matchByEmbedding({
+      embedding,
+      threshold: DEDUP_MIN_SIMILARITY,
+      count: 1,
+      author: null,
+      reliability: null,
+    });
+  if (nearError) {
+    console.error(
+      `resolveDedup: embedding match failed: ${nearError.message}`,
+    );
+    return { duplicateOf: null, degraded: true };
+  }
   if (near && near.length > 0) {
-    return { duplicateOf: near[0].id };
+    return { duplicateOf: near[0].id, degraded: false };
   }
-  return { duplicateOf: null };
+  return { duplicateOf: null, degraded: false };
 }
 
 export async function extractMetadata(
@@ -255,7 +270,9 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
           ? { reliability: provenance.reliability, author: provenance.author }
           : {}),
       });
-      if (error) throw new Error(error.message);
+      // A 23505 unique-violation on content_hash means this exact content is
+      // already captured (the partial unique index, TOOL-7) — not a failure.
+      if (error && error.code !== "23505") throw new Error(error.message);
     }),
   );
 

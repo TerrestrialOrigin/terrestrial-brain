@@ -736,6 +736,11 @@ export function register(
               `Already captured — kept the existing thought (no duplicate created).${extractionWarning}`,
             );
           }
+          // When the dedup check itself failed (CORE-2), we still capture, but
+          // flag that this may duplicate an existing thought.
+          const dedupNote = dedup.degraded
+            ? " (note: duplicate check was unavailable, so this may duplicate an existing thought)"
+            : "";
 
           const { error } = await thoughtRepository.insert({
             content,
@@ -748,6 +753,15 @@ export function register(
           });
 
           if (error) {
+            // The partial unique index on content_hash makes exact dedup atomic
+            // under concurrency (TOOL-7): a 23505 means a concurrent capture
+            // already stored this exact content — the same "already captured"
+            // success outcome, never an error.
+            if (error.code === "23505") {
+              return textResult(
+                `Already captured — kept the existing thought (no duplicate created).${extractionWarning}`,
+              );
+            }
             return errorResult(`Failed to capture: ${error.message}`);
           }
 
@@ -784,6 +798,7 @@ export function register(
           }
           confirmation += buildsOnNote;
           confirmation += extractionWarning;
+          confirmation += dedupNote;
 
           return textResult(confirmation);
         },
