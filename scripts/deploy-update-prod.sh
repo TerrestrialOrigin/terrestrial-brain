@@ -106,13 +106,30 @@ echo ""
 echo "--- Step 3/4: Current secrets ---"
 npx supabase secrets list --project-ref "$PROJECT_REF"
 echo ""
-echo "  If this deploy introduced new env vars, set them with:"
-echo "    npx supabase secrets set KEY=value --project-ref $PROJECT_REF"
+echo "  If this deploy introduced new env vars, set them with an env-file"
+echo "  (never argv — see SCRIPT-1):"
+echo "    printf 'KEY=value\\n' > secrets.env && chmod 600 secrets.env"
+echo "    npx supabase secrets set --env-file secrets.env --project-ref $PROJECT_REF"
 echo ""
 
 # Step 4: Verify migration status
 echo "--- Step 4/4: Migration status ---"
 npx supabase migration list --linked
+echo ""
+
+# SQL-7: verify the GDPR retention purge job is scheduled on the linked project
+# and fail loud if it is not (the migration's pg_cron schedule is best-effort).
+echo "  Retention purge job (GDPR):"
+if npx supabase db query --linked \
+  "select jobname from cron.job where jobname = 'purge-function-call-logs-daily';" \
+  2>/dev/null | grep -q 'purge-function-call-logs-daily'; then
+  echo "    ✓ purge-function-call-logs-daily is scheduled"
+else
+  echo "    WARNING: retention purge job 'purge-function-call-logs-daily' is NOT" >&2
+  echo "    scheduled. function_call_logs (note content + IP addresses) will never" >&2
+  echo "    be purged. Enable pg_cron and re-run 'npx supabase db push --linked'." >&2
+  exit 1
+fi
 echo ""
 
 echo "=== Deploy complete ==="

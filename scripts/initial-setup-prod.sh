@@ -80,20 +80,28 @@ if [[ "$REPLY" =~ ^[Yy]$ ]]; then
   read -rsp "  MCP_ACCESS_KEY: " MCP_ACCESS_KEY
   echo ""
 
-  # Pass as a quoted array so each KEY=value stays one argument even if a value
-  # contains spaces or shell metacharacters (no word-splitting / globbing).
-  SECRETS=(
-    "OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-    "MCP_ACCESS_KEY=$MCP_ACCESS_KEY"
-  )
+  # SCRIPT-1: pass secrets via a private env-file, NOT as argv. Process
+  # arguments are world-readable via `ps` / /proc/<pid>/cmdline for the whole
+  # (network-bound) CLI call — and this machine is shared. The file is created
+  # 0600 (umask 077) and removed by a trap so an interrupted run leaves nothing.
+  SECRETS_FILE="$(umask 077 && mktemp)"
+  trap 'rm -f "${SECRETS_FILE:-}"' EXIT
+  cat > "$SECRETS_FILE" <<ENVFILE
+OPENROUTER_API_KEY=$OPENROUTER_API_KEY
+MCP_ACCESS_KEY=$MCP_ACCESS_KEY
+ENVFILE
 
-  npx supabase secrets set "${SECRETS[@]}" --project-ref "$PROJECT_REF"
+  npx supabase secrets set --env-file "$SECRETS_FILE" --project-ref "$PROJECT_REF"
+
+  rm -f "$SECRETS_FILE"
+  trap - EXIT
   echo ""
   echo "  Secrets set."
 else
   echo ""
-  echo "  Skipped. Set them later with:"
-  echo "    npx supabase secrets set KEY=value --project-ref $PROJECT_REF"
+  echo "  Skipped. Set them later with an env-file (never argv — see SCRIPT-1):"
+  echo "    printf 'KEY=value\\n' > secrets.env && chmod 600 secrets.env"
+  echo "    npx supabase secrets set --env-file secrets.env --project-ref $PROJECT_REF"
 fi
 echo ""
 
@@ -106,6 +114,24 @@ npx supabase migration list --linked
 echo ""
 echo "  Secrets:"
 npx supabase secrets list --project-ref "$PROJECT_REF"
+echo ""
+
+# SQL-7: the 90-day retention purge of function_call_logs (note content + IP
+# addresses) is a GDPR control. Its pg_cron schedule is best-effort in the
+# migration (so local/CI without pg_cron still applies), which means a
+# production scheduling failure would otherwise pass silently. Verify the job
+# exists on the linked project and FAIL LOUD if it does not.
+echo "  Retention purge job (GDPR):"
+if npx supabase db query --linked \
+  "select jobname from cron.job where jobname = 'purge-function-call-logs-daily';" \
+  2>/dev/null | grep -q 'purge-function-call-logs-daily'; then
+  echo "    ✓ purge-function-call-logs-daily is scheduled"
+else
+  echo "    WARNING: retention purge job 'purge-function-call-logs-daily' is NOT" >&2
+  echo "    scheduled. function_call_logs (note content + IP addresses) will never" >&2
+  echo "    be purged. Enable pg_cron and re-run 'npx supabase db push --linked'." >&2
+  exit 1
+fi
 echo ""
 
 echo "=== Setup complete ==="
