@@ -124,19 +124,96 @@ Deno.test("completeJson: parse callback throwing surfaces as AiProviderParseErro
 
 // ─── getEmbedding ───────────────────────────────────────────────────────────
 
-Deno.test("getEmbedding: returns the vector on HTTP 200", async () => {
-  const embed = (() =>
+/** A well-formed 1536-length embedding vector (the vector(1536) column width). */
+function embeddingOf(length = 1536): number[] {
+  return Array.from({ length }, (_unused, index) => (index % 7) / 10);
+}
+
+function okEmbedding(vector: number[]): typeof fetch {
+  return (() =>
     Promise.resolve(
       {
         ok: true,
-        json: () => Promise.resolve({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+        json: () => Promise.resolve({ data: [{ embedding: vector }] }),
       } as Response,
     )) as typeof fetch;
-  await withFetch(embed, async () => {
+}
+
+Deno.test("getEmbedding: returns the vector on HTTP 200", async () => {
+  const vector = embeddingOf();
+  await withFetch(okEmbedding(vector), async () => {
     const provider = new OpenRouterAiProvider();
-    const vector = await provider.getEmbedding("hello");
-    assertEquals(vector, [0.1, 0.2, 0.3]);
+    const result = await provider.getEmbedding("hello");
+    assertEquals(result, vector);
   });
+});
+
+// ─── CORE-4: boundary validation of OpenRouter responses ─────────────────────
+
+Deno.test("getEmbedding: a wrong-length embedding is rejected at the boundary (AiProviderParseError)", async () => {
+  await withFetch(okEmbedding(embeddingOf(3)), async () => {
+    const provider = new OpenRouterAiProvider();
+    const error = await assertRejects(() => provider.getEmbedding("hello"));
+    assertInstanceOf(error, AiProviderParseError);
+  });
+});
+
+Deno.test("getEmbedding: a shape-mismatched body is a typed parse error, not a raw TypeError", async () => {
+  const wrongShape = (() =>
+    Promise.resolve(
+      { ok: true, json: () => Promise.resolve({ notData: true }) } as Response,
+    )) as typeof fetch;
+  await withFetch(wrongShape, async () => {
+    const provider = new OpenRouterAiProvider();
+    const error = await assertRejects(() => provider.getEmbedding("hello"));
+    assertInstanceOf(error, AiProviderParseError);
+  });
+});
+
+// ─── CORE-3: outbound timeout surfaces as a typed transport error ────────────
+
+function timingOutFetch(): typeof fetch {
+  return (() =>
+    Promise.reject(
+      new DOMException("The signal has been aborted", "TimeoutError"),
+    )) as typeof fetch;
+}
+
+Deno.test("getEmbedding: an outbound timeout surfaces as AiProviderHttpError (status 0)", async () => {
+  await withFetch(timingOutFetch(), async () => {
+    const provider = new OpenRouterAiProvider();
+    const error = await assertRejects(() => provider.getEmbedding("hello"));
+    assertInstanceOf(error, AiProviderHttpError);
+    assertEquals((error as AiProviderHttpError).status, 0);
+  });
+});
+
+Deno.test("completeJson: an outbound timeout surfaces as AiProviderHttpError (status 0)", async () => {
+  await withFetch(timingOutFetch(), async () => {
+    const provider = new OpenRouterAiProvider();
+    const error = await assertRejects(() =>
+      provider.completeJson(
+        { purpose: "reconcile", systemPrompt: "s", userContent: "u" },
+        (raw) => raw,
+      )
+    );
+    assertInstanceOf(error, AiProviderHttpError);
+    assertEquals((error as AiProviderHttpError).status, 0);
+  });
+});
+
+Deno.test("OpenRouterAiProvider: fetch is injectable (unit-testable with no global stub)", async () => {
+  const vector = embeddingOf();
+  const injected: typeof fetch = (() =>
+    Promise.resolve(
+      {
+        ok: true,
+        json: () => Promise.resolve({ data: [{ embedding: vector }] }),
+      } as Response,
+    )) as typeof fetch;
+  const provider = new OpenRouterAiProvider(injected);
+  const result = await provider.getEmbedding("hello");
+  assertEquals(result, vector);
 });
 
 Deno.test("getEmbedding: throws (does not degrade) on non-OK", async () => {

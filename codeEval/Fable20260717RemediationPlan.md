@@ -1238,7 +1238,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - [x] 4. Fake provider fidelity (`bug/FakeProviderFidelity`) — CORE-1, CORE-8, CORE-12
 - [x] 5. Dedup gate integrity (`bug/DedupGateIntegrity`) — CORE-2, TOOL-7
 - [x] 6. archive_project cascade (`bug/ArchiveProjectCascade`) — TOOL-2
-- [ ] 7. OpenRouter timeout & validation (`bug/OpenRouterTimeoutValidation`) — CORE-3, CORE-4
+- [x] 7. OpenRouter timeout & validation (`bug/OpenRouterTimeoutValidation`) — CORE-3, CORE-4
 - [ ] 8. Lifecycle test depth (`feature/LifecycleTestDepth`) — TEST-1..6
 
 ## Phase B — Security, GDPR & infrastructure
