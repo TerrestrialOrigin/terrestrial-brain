@@ -62,6 +62,13 @@ export interface PersonRepository {
   findName(id: string): Promise<RepoResult<{ name: string }>>;
 
   /**
+   * The person matching `name` exactly, or `null` data when none exists. Used to
+   * recover the existing id after a concurrent auto-create loses the
+   * unique-name race (create-or-get, finding EXTR-7).
+   */
+  findByName(name: string): Promise<RepoResult<PersonIdentity | null>>;
+
+  /**
    * Apply a partial update to a person. Returns the updated row's id, or `null`
    * data when no row matched `id` (Step 24 affected-row verification).
    */

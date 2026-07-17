@@ -51,6 +51,13 @@ export interface ProjectRepository {
   /** A single project's name by id (used for parent/name lookups). */
   findName(id: string): Promise<RepoResult<{ name: string }>>;
 
+  /**
+   * The active project matching `name` case-insensitively, or `null` data when
+   * none exists. Used to recover the existing id after a concurrent auto-create
+   * loses the unique-index race (create-or-get, finding EXTR-7).
+   */
+  findByName(name: string): Promise<RepoResult<ProjectIdentity | null>>;
+
   /** Active children of a project (id + name + type) for `get_project`. */
   listChildrenBasic(parentId: string): Promise<RepoResult<ProjectChildRow[]>>;
 

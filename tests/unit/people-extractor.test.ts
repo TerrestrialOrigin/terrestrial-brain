@@ -129,3 +129,53 @@ Deno.test("PeopleExtractor: auto-create failure is reported in result.errors", a
   assertStringIncludes(result.errors[0], "Ghost");
   assertStringIncludes(result.errors[0], "insert denied");
 });
+
+// ---------------------------------------------------------------------------
+// EXTR-7 — a concurrent auto-create that loses the unique-name race (23505)
+// recovers the winner's id via findByName instead of dropping the person.
+// ---------------------------------------------------------------------------
+
+Deno.test("PeopleExtractor: 23505 name collision recovers the existing id", async () => {
+  const note = parseNote("Talk to Ghost about it", "Note", null, "obsidian");
+  const provider = new FakeAiProvider(() => ({
+    people: [{ name: "Ghost", id: null }],
+  }));
+  const personRepository = new FakePersonRepository();
+  // Simulate: a concurrent ingest already created "Ghost"; our insert loses.
+  personRepository.collideOn.add("Ghost");
+  personRepository.existingByName.set("Ghost", {
+    id: "existing-ghost-id",
+    name: "Ghost",
+  });
+  const context = makeContext([], provider, personRepository);
+
+  const result = await new PeopleExtractor().extract(note, context);
+
+  assertEquals(result.ids, ["existing-ghost-id"], "recovers the winner's id");
+  assertEquals(result.errors, undefined, "a recovered race is not an error");
+});
+
+Deno.test("PeopleExtractor: 23505 with a failed recovery lookup is reported, not dropped silently", async () => {
+  const note = parseNote("Talk to Ghost about it", "Note", null, "obsidian");
+  const provider = new FakeAiProvider(() => ({
+    people: [{ name: "Ghost", id: null }],
+  }));
+  const personRepository = new FakePersonRepository();
+  personRepository.collideOn.add("Ghost");
+  personRepository.findByNameError = "lookup boom";
+  const context = makeContext([], provider, personRepository);
+
+  const originalError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await new PeopleExtractor().extract(note, context);
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(result.ids, []);
+  assertExists(result.errors);
+  assertEquals(result.errors.length, 1);
+  assertStringIncludes(result.errors[0], "Ghost");
+});

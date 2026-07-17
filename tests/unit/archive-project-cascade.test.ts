@@ -43,6 +43,7 @@ function makeRepos(config: FakeConfig) {
       });
     },
     findName: notImpl,
+    findByName: notImpl,
     listChildrenBasic: notImpl,
     listChildParentIds: notImpl,
     listActiveChildIds: (parentIds: string[]) => {

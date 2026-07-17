@@ -45,8 +45,11 @@ overwrite the older thought.
 
 The system SHALL store a `content_hash` on `thoughts`, `projects`, `tasks`, and
 `documents`, computed wherever content is written, in the single server-side
-update path. A thought content edit SHALL also re-embed. Emptying content SHALL
-be a valid, re-hashed edit, never swallowed.
+update path. This SHALL include the task extractor's re-ingest path: whenever
+`TaskExtractor` writes a task's `content` (updating a matched task or creating a
+new one), it SHALL re-compute and store `content_hash` from that content, so the
+dedup gate never compares against a stale hash. A thought content edit SHALL also
+re-embed. Emptying content SHALL be a valid, re-hashed edit, never swallowed.
 
 #### Scenario: A content edit updates the stored hash
 
@@ -57,6 +60,11 @@ be a valid, re-hashed edit, never swallowed.
 
 - **WHEN** the schema is inspected
 - **THEN** `content_hash` exists on `thoughts`, `projects`, `tasks`, and `documents`
+
+#### Scenario: The extractor stamps content_hash on the task it writes
+
+- **WHEN** the task extractor creates or updates a task's content during ingest
+- **THEN** the task's stored `content_hash` equals the SHA-256 of the written content (never null or stale)
 
 ### Requirement: Mutations record their actor
 

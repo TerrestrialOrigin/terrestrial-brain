@@ -31,6 +31,7 @@ import { ASSIGNMENT_MARKER_PATTERN, DUE_MARKER_PATTERN } from "./markers.ts";
 import { monthPattern } from "./date-parser.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { NewTaskValues } from "../repositories/task-repository.ts";
+import { hashContent } from "../helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Content similarity
@@ -1050,6 +1051,10 @@ export class TaskExtractor implements Extractor {
 
       const updates: Record<string, unknown> = {
         content: state.content,
+        // INVARIANT 1: re-hash on every content edit (the extractor is part of
+        // the one server-side update path). A stale hash is worse than none —
+        // the dedup gate would compare against text the row no longer holds.
+        content_hash: await hashContent(state.content),
         status: newStatus,
         metadata: buildTaskMetadata(run.note.source, checkbox.sectionHeading),
         archived_at: newStatus === "done" ? new Date().toISOString() : null,
@@ -1105,6 +1110,8 @@ export class TaskExtractor implements Extractor {
 
       const insertData: NewTaskValues = {
         content: state.content,
+        // INVARIANT 1: stamp content_hash on create (the one update path).
+        content_hash: await hashContent(state.content),
         status,
         reference_id: run.note.referenceId,
         project_id: state.projectId,

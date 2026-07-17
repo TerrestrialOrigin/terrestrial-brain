@@ -326,6 +326,26 @@ export class ProjectExtractor implements Extractor {
       return newProject.id;
     }
 
+    // Interleave recovery (EXTR-7): the unique active-name index means a
+    // concurrent ingest may have won the insert. Treat 23505 as create-or-get —
+    // re-query the existing active row by name and return its id rather than
+    // dropping the reference. Only a genuine failure (or a lookup error) records.
+    if (error?.code === "23505") {
+      const { data: existing, error: lookupError } = await context
+        .projectRepository.findByName(projectName);
+      if (!lookupError && existing) {
+        context.knownProjects.push({ id: existing.id, name: existing.name });
+        return existing.id;
+      }
+      const recoveryMessage =
+        `ProjectExtractor auto-create raced for "${projectName}" and recovery lookup ${
+          lookupError ? `failed: ${lookupError.message}` : "found no row"
+        }`;
+      console.error(recoveryMessage);
+      errors.push(recoveryMessage);
+      return null;
+    }
+
     const message =
       `ProjectExtractor auto-create failed for "${projectName}": ${error?.message}`;
     console.error(message);

@@ -189,6 +189,25 @@ export class PeopleExtractor implements Extractor {
       return newPerson.id;
     }
 
+    // Interleave recovery (EXTR-7): `people.name` is unique, so a concurrent
+    // ingest of the same new name makes the losing insert fail 23505. Recover
+    // the winner's id via create-or-get instead of dropping the person.
+    if (error?.code === "23505") {
+      const { data: existing, error: lookupError } = await context
+        .personRepository.findByName(name);
+      if (!lookupError && existing) {
+        context.knownPeople.push({ id: existing.id, name: existing.name });
+        return existing.id;
+      }
+      const recoveryMessage =
+        `PeopleExtractor auto-create raced for "${name}" and recovery lookup ${
+          lookupError ? `failed: ${lookupError.message}` : "found no row"
+        }`;
+      console.error(recoveryMessage);
+      errors.push(recoveryMessage);
+      return null;
+    }
+
     const message =
       `PeopleExtractor auto-create failed for "${name}": ${error?.message}`;
     console.error(message);

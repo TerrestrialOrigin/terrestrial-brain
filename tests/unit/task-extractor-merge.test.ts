@@ -18,6 +18,7 @@ import type {
 } from "../../supabase/functions/terrestrial-brain-mcp/repositories/task-repository.ts";
 import type { ProjectRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/project-repository.ts";
 import type { PersonRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/person-repository.ts";
+import { hashContent } from "../../supabase/functions/terrestrial-brain-mcp/helpers.ts";
 
 // TaskExtractor never touches the project/person repositories — these stubs only
 // satisfy the ExtractionContext shape (fix-plan Step 17).
@@ -26,6 +27,7 @@ const STUB_PROJECT_REPOSITORY: ProjectRepository = {
   list: () => Promise.reject(new Error("unused")),
   findById: () => Promise.reject(new Error("unused")),
   findName: () => Promise.reject(new Error("unused")),
+  findByName: () => Promise.reject(new Error("unused")),
   listChildrenBasic: () => Promise.reject(new Error("unused")),
   listChildParentIds: () => Promise.reject(new Error("unused")),
   listActiveChildIds: () => Promise.reject(new Error("unused")),
@@ -39,6 +41,7 @@ const STUB_PERSON_REPOSITORY: PersonRepository = {
   list: () => Promise.reject(new Error("unused")),
   findById: () => Promise.reject(new Error("unused")),
   findName: () => Promise.reject(new Error("unused")),
+  findByName: () => Promise.reject(new Error("unused")),
   update: () => Promise.reject(new Error("unused")),
   archive: () => Promise.reject(new Error("unused")),
   listActive: () => Promise.reject(new Error("unused")),
@@ -540,4 +543,55 @@ Deno.test("stripMarkersForComparison: 'by section 3' is not stripped (marker as 
 Deno.test("stripMarkersForComparison: real marker-plus-month fragment is still stripped", () => {
   const text = "Fix bug due March 30";
   assertEquals(stripMarkersForComparison(text), "Fix bug");
+});
+
+// ---------------------------------------------------------------------------
+// EXTR-5 — content edits re-stamp content_hash (the extractor is part of the
+// one server-side update path; a stale hash misleads the dedup gate).
+// ---------------------------------------------------------------------------
+
+Deno.test("EXTR-5: matched-task update re-stamps content_hash = hash(content)", async () => {
+  await withFetchStub(async () => {
+    stubFetchOk({ enrichments: [] });
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, { knownProjects: [] });
+
+    // Matches the seeded knownTask "Fix the login page" → Phase-2 update.
+    await new TaskExtractor().extract(
+      note([checkbox("Fix the login page")]),
+      context,
+    );
+
+    const update = matchedUpdate(writes);
+    assertEquals(update !== undefined, true);
+    const content = String(update!.payload.content);
+    assertEquals(
+      update!.payload.content_hash,
+      await hashContent(content),
+      "matched-task update must re-hash the written content",
+    );
+  });
+});
+
+Deno.test("EXTR-5: new-task insert stamps content_hash = hash(content)", async () => {
+  await withFetchStub(async () => {
+    stubFetchOk({ enrichments: [] });
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, { knownProjects: [] });
+
+    // A brand-new checkbox (not in knownTasks) → Phase-3 insert.
+    await new TaskExtractor().extract(
+      note([checkbox("Draft the launch plan")]),
+      context,
+    );
+
+    const insert = writes.find((write) => write.op === "insert");
+    assertEquals(insert !== undefined, true);
+    const content = String(insert!.payload.content);
+    assertEquals(
+      insert!.payload.content_hash,
+      await hashContent(content),
+      "new-task insert must stamp content_hash from the content",
+    );
+  });
 });

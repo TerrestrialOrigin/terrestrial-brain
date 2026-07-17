@@ -27,6 +27,17 @@ export class SupabasePersonRepository implements PersonRepository {
     return { data, error: toRepoError(error) };
   }
 
+  async findByName(name: string): Promise<RepoResult<PersonIdentity | null>> {
+    // `people.name` is globally unique (exact), so a 23505-losing racer recovers
+    // the winning row by exact name. `maybeSingle` maps a clean miss to null.
+    const { data, error } = await this.supabase
+      .from("people")
+      .select("id, name")
+      .eq("name", name)
+      .maybeSingle();
+    return { data, error: toRepoError(error) };
+  }
+
   async list(filters: PersonListFilters): Promise<RepoResult<PersonListRow[]>> {
     let query = this.supabase
       .from("people")

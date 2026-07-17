@@ -19,6 +19,7 @@ import {
   PeopleExtractor,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
 import { createAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/factory.ts";
+import { hashContent } from "../../supabase/functions/terrestrial-brain-mcp/helpers.ts";
 import { SupabaseTaskRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-task-repository.ts";
 import { SupabaseProjectRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-project-repository.ts";
 import { SupabasePersonRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-person-repository.ts";
@@ -1924,6 +1925,112 @@ Deno.test("pipeline: full extraction populates metadata, due_by, and assigned_to
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// EXTR-5 — created tasks carry a content_hash equal to hash(content) (the
+// extractor is part of the one server-side update path; INVARIANT 1).
+// ---------------------------------------------------------------------------
+
+Deno.test("EXTR-5: a task created by the extractor stores content_hash = hash(content)", async () => {
+  const extractor = new TaskExtractor();
+  const referenceId = `test/task-extractor/hash-stamp-${Date.now()}.md`;
+  const content = "- [ ] Reconcile the Q3 vendor invoices\n";
+  const note = parseNote(content, "HashStamp", referenceId, "obsidian");
+
+  const context: ExtractionContext = {
+    supabase,
+    aiProvider: testAiProvider,
+    taskRepository,
+    projectRepository,
+    personRepository,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+
+  const result = await extractor.extract(note, context);
+  assertEquals(result.ids.length, 1);
+  const taskId = result.ids[0];
+  createdTaskIds.push(taskId);
+
+  const { data: row } = await supabase
+    .from("tasks")
+    .select("content, content_hash")
+    .eq("id", taskId)
+    .single();
+  assertExists(row);
+  assertEquals(
+    row.content_hash,
+    await hashContent(row.content),
+    "created task's content_hash must equal the SHA-256 of its content (not null)",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// EXTR-7 — two concurrent ingests referencing the same NEW project create
+// exactly one active row (unique active-name index) and resolve to the same id
+// (23505-recovering create-or-get). projects.name had no unique constraint —
+// this is the actual duplicate-row bug.
+// ---------------------------------------------------------------------------
+
+Deno.test("EXTR-7: concurrent auto-create of the same new project yields one row and a shared id", async () => {
+  const projectName = `RaceProj_${Date.now()}`;
+  const note = parseNote(
+    "Kickoff.",
+    "Kickoff",
+    `projects/${projectName}/kickoff.md`,
+    "obsidian",
+  );
+
+  // Separate contexts so both in-memory snapshots miss the new name and both
+  // attempt the insert — the real race the DB index must arbitrate.
+  const makeCtx = (): ExtractionContext => ({
+    supabase,
+    aiProvider: testAiProvider,
+    taskRepository,
+    projectRepository,
+    personRepository,
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  });
+
+  const [resultA, resultB] = await Promise.all([
+    new ProjectExtractor().extract(note, makeCtx()),
+    new ProjectExtractor().extract(note, makeCtx()),
+  ]);
+
+  try {
+    assertEquals(resultA.ids.length, 1);
+    assertEquals(resultB.ids.length, 1);
+    assertEquals(
+      resultA.ids[0],
+      resultB.ids[0],
+      "both concurrent ingests must resolve to the same project id",
+    );
+
+    const { data: rows } = await supabase
+      .from("projects")
+      .select("id")
+      .ilike("name", projectName)
+      .is("archived_at", null);
+    assertEquals(
+      rows?.length,
+      1,
+      "exactly one active project row must exist for the raced name",
+    );
+  } finally {
+    await supabase.from("projects").delete().ilike("name", projectName);
+  }
+});
+
 // Cleanup
 // ---------------------------------------------------------------------------
 
