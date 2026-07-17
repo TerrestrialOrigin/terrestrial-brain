@@ -1100,6 +1100,56 @@ export interface ReconciliationPlan {
   delete: string[];
 }
 
+/**
+ * Runtime schema for the LLM reconciliation plan (TOOL-1). The plan drives
+ * irreversible mutations (content overwrite, archive), so it is PARSED, never
+ * cast: a wrong shape (non-array field, an `update` entry missing `content`, an
+ * `add` entry that is an object rather than a bare string) fails validation and
+ * is thrown as an `AiProviderParseError`, which the caller degrades to a safe
+ * fresh ingest. Ids are validated structurally here; the belonging check (that
+ * an id is actually one of THIS note's thoughts) is a separate allowlist pass in
+ * `filterPlanToKnownIds`, so a hallucinated UUID can never reach a mutation.
+ */
+const ReconciliationPlanSchema = z.object({
+  keep: z.array(z.string()).default([]),
+  update: z.array(z.object({ id: z.string(), content: z.string().min(1) }))
+    .default([]),
+  add: z.array(z.string().min(1)).default([]),
+  delete: z.array(z.string()).default([]),
+});
+
+/**
+ * Drops every `keep`/`update`/`delete` id that is not one of this note's own
+ * thoughts (TOOL-1 allowlist). A valid-but-foreign UUID from the LLM would
+ * otherwise overwrite or archive an unrelated thought. `add` entries are new
+ * content, not ids, so they are never allowlisted.
+ */
+function filterPlanToKnownIds(
+  plan: ReconciliationPlan,
+  knownIds: Set<string>,
+): ReconciliationPlan {
+  const droppedIds: string[] = [];
+  const isKnown = (id: string): boolean => {
+    if (knownIds.has(id)) return true;
+    droppedIds.push(id);
+    return false;
+  };
+  const filtered: ReconciliationPlan = {
+    keep: plan.keep.filter(isKnown),
+    update: plan.update.filter((item) => isKnown(item.id)),
+    add: plan.add,
+    delete: plan.delete.filter(isKnown),
+  };
+  if (droppedIds.length > 0) {
+    console.warn(
+      `Reconciliation dropped ${droppedIds.length} hallucinated id(s) not in this note: ${
+        droppedIds.join(", ")
+      }`,
+    );
+  }
+  return filtered;
+}
+
 interface IngestResult {
   success: boolean;
   message?: string;
@@ -1193,8 +1243,10 @@ export async function requestReconciliationPlan(
     )
     .join("\n\n");
 
+  const knownIds = new Set(existingThoughts.map((thought) => thought.id));
+
   try {
-    return await aiProvider.completeJson(
+    const rawPlan = await aiProvider.completeJson(
       {
         systemPrompt:
           `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
@@ -1228,8 +1280,19 @@ Return ONLY valid JSON in this exact structure:
             title || "untitled"
           }):\n${content}`,
       },
-      (raw) => raw as ReconciliationPlan,
+      (raw) => {
+        const parsed = ReconciliationPlanSchema.safeParse(raw);
+        if (!parsed.success) {
+          throw new AiProviderParseError(
+            "reconciliation plan",
+            parsed.error.message,
+          );
+        }
+        return parsed.data;
+      },
     );
+    // Allowlist ids to this note's thoughts BEFORE any mutation can see them.
+    return filterPlanToKnownIds(rawPlan, knownIds);
   } catch (reconcileError) {
     if (!(reconcileError instanceof AiProviderParseError)) {
       throw reconcileError;
@@ -1298,21 +1361,19 @@ export async function executeReconciliationPlan(
     })());
   }
 
-  for (const addItem of (plan.add || [])) {
-    const thoughtContent = typeof addItem === "string"
-      ? addItem
-      : (addItem as unknown as { thought: string }).thought || addItem;
+  for (const thoughtContent of (plan.add || [])) {
+    // Schema (TOOL-1) guarantees each add entry is a non-empty string — no cast.
     ops.push((async () => {
       const [embedding, metadata] = await Promise.all([
-        getEmbedding(aiProvider, thoughtContent as string),
-        extractMetadata(aiProvider, thoughtContent as string),
+        getEmbedding(aiProvider, thoughtContent),
+        extractMetadata(aiProvider, thoughtContent),
       ]);
       const { error } = await thoughtRepository.insert({
         content: thoughtContent,
         embedding,
         reference_id: noteId || null,
         note_snapshot_id: noteSnapshotId,
-        content_hash: await hashContent(thoughtContent as string),
+        content_hash: await hashContent(thoughtContent),
         last_actor: "sync",
         reliability: INGEST_PROVENANCE.reliability,
         author: INGEST_PROVENANCE.author,
