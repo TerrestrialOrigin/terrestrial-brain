@@ -52,7 +52,9 @@ async function runPipelineRefs(
 ): Promise<Record<string, string[]>> {
   const outcome = await runExtractionPipeline(...pipelineArgs);
   if (!outcome.ok) {
-    throw new Error(`extraction pipeline aborted unexpectedly: ${outcome.error}`);
+    throw new Error(
+      `extraction pipeline aborted unexpectedly: ${outcome.error}`,
+    );
   }
   return outcome.references;
 }
