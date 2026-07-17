@@ -5,6 +5,7 @@
  */
 
 import type { AppSupabaseClient } from "../supabase-client.ts";
+import { LIST_ACTIVE_HARD_CAP } from "../constants.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NewPersonValues,
@@ -46,6 +47,9 @@ export class SupabasePersonRepository implements PersonRepository {
 
     if (!filters.includeArchived) query = query.is("archived_at", null);
     if (filters.type) query = query.eq("type", filters.type);
+    // Fetch one extra so the handler distinguishes "exactly at the cap" from
+    // "more exist" and reports truncation (never a silent fetch-all).
+    query = query.limit(filters.limit + 1);
 
     const { data, error } = await query;
     return { data, error: toRepoError(error) };
@@ -94,7 +98,15 @@ export class SupabasePersonRepository implements PersonRepository {
     const { data, error } = await this.supabase
       .from("people")
       .select("id, name")
-      .is("archived_at", null);
+      .is("archived_at", null)
+      // Whole-set seed for the extractor, but explicitly bounded — a silent
+      // full scan is not allowed. Truncation past the cap is logged.
+      .limit(LIST_ACTIVE_HARD_CAP);
+    if (data && data.length === LIST_ACTIVE_HARD_CAP) {
+      console.warn(
+        `listActive(people) hit the ${LIST_ACTIVE_HARD_CAP}-row cap — extractor seed may be truncated`,
+      );
+    }
     return { data, error: toRepoError(error) };
   }
 }

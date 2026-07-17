@@ -91,3 +91,60 @@ Deno.test("create_task and archive_task works", async () => {
     await deleteTasks(created);
   }
 });
+
+// TOOL-10 — reconcile_tasks bounds its open-task set and reports truncation when
+// more than RECONCILE_TASK_LIMIT (100) open tasks exist. Self-owned fixtures:
+// bulk-insert 101 open tasks under a unique project, then delete them.
+Deno.test("reconcile_tasks reports truncation past the cap", async () => {
+  const marker = uniqueName("reconcile-cap");
+  // A dedicated project so the probe is deterministic regardless of seed data.
+  const projectResponse = await fetch(restUrl("projects"), {
+    method: "POST",
+    headers: serviceHeaders({
+      "Content-Type": "application/json",
+      "Prefer": "return=representation",
+    }),
+    body: JSON.stringify({ name: marker, type: "test" }),
+  });
+  const [project] = await projectResponse.json();
+  const projectId = project.id as string;
+  try {
+    const rows = Array.from({ length: 101 }, (_unused, index) => ({
+      content: `${marker}-${index}`,
+      status: "open",
+      project_id: projectId,
+    }));
+    const insertResponse = await fetch(restUrl("tasks"), {
+      method: "POST",
+      headers: serviceHeaders({
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+      }),
+      body: JSON.stringify(rows),
+    });
+    const insertOk = insertResponse.ok;
+    await insertResponse.body?.cancel();
+    assertEquals(insertOk, true, "bulk task insert must succeed");
+
+    const result = await callTool("reconcile_tasks", { project_id: projectId });
+    assertEquals(
+      result.includes("more") && result.includes("Narrow by project_id"),
+      true,
+      `reconcile_tasks must report truncation past the cap. Got: ${result}`,
+    );
+  } finally {
+    const taskDelete = await fetch(
+      restUrl(`tasks?project_id=eq.${projectId}`),
+      {
+        method: "DELETE",
+        headers: serviceHeaders(),
+      },
+    );
+    await taskDelete.body?.cancel();
+    const projectDelete = await fetch(restUrl(`projects?id=eq.${projectId}`), {
+      method: "DELETE",
+      headers: serviceHeaders(),
+    });
+    await projectDelete.body?.cancel();
+  }
+});

@@ -24,7 +24,7 @@ Deno.test("list: orders by name, filters archived + type", async () => {
   const { client, recorded } = makeFakeClient({ data: [] });
   const repo = new SupabasePersonRepository(client);
 
-  await repo.list({ includeArchived: false, type: "human" });
+  await repo.list({ includeArchived: false, type: "human", limit: 20 });
 
   assertEquals(recorded.table, "people");
   assertEquals(recorded.order?.column, "name");

@@ -26,7 +26,12 @@ Deno.test("list: filters archived out and applies parent/type", async () => {
   const { client, recorded } = makeFakeClient({ data: [] });
   const repo = new SupabaseProjectRepository(client);
 
-  await repo.list({ includeArchived: false, parentId: "par", type: "client" });
+  await repo.list({
+    includeArchived: false,
+    parentId: "par",
+    type: "client",
+    limit: 20,
+  });
 
   assertEquals(recorded.table, "projects");
   assertEquals(recorded.op, "select");
@@ -40,13 +45,15 @@ Deno.test("list: filters archived out and applies parent/type", async () => {
     recorded.filters.some((f) => f.column === "type" && f.value === "client"),
     true,
   );
+  // Bounded (REPO-1): fetches `limit + 1` so the handler can report truncation.
+  assertEquals(recorded.limit, 21);
 });
 
 Deno.test("list: includeArchived true does not filter archived_at", async () => {
   const { client, recorded } = makeFakeClient({ data: [] });
   const repo = new SupabaseProjectRepository(client);
 
-  await repo.list({ includeArchived: true });
+  await repo.list({ includeArchived: true, limit: 20 });
 
   assertEquals(
     recorded.filters.some((f) => f.column === "archived_at"),

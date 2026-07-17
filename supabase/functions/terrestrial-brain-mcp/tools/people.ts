@@ -5,6 +5,7 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { PERSON_TYPES } from "../enums.ts";
+import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
@@ -70,21 +71,32 @@ export function register(
         include_archived: z.boolean().optional().default(false).describe(
           "Include archived people",
         ),
+        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional().default(
+          DEFAULT_LIST_LIMIT,
+        ).describe(
+          `Max people to return (1–${MAX_QUERY_LIMIT}, default ${DEFAULT_LIST_LIMIT})`,
+        ),
       },
     },
-    withMcpLogging("list_people", async ({ type, include_archived }) => {
-      const { data, error } = await personRepository.list({
+    withMcpLogging("list_people", async ({ type, include_archived, limit }) => {
+      const { data: rows, error } = await personRepository.list({
         includeArchived: include_archived,
         type,
+        limit,
       });
 
       if (error) {
         return errorResult(`Error: ${error.message}`);
       }
 
-      if (!data || data.length === 0) {
+      if (!rows || rows.length === 0) {
         return textResult("No people found.", { recordsReturned: 0 });
       }
+
+      // The repository fetches `limit + 1` so we can distinguish "exactly full"
+      // from "more exist" and report truncation explicitly.
+      const truncated = rows.length > limit;
+      const data = truncated ? rows.slice(0, limit) : rows;
 
       const lines = data.map((person, index) => {
         const parts = [
@@ -104,9 +116,15 @@ export function register(
         return parts.join("\n");
       });
 
-      return textResult(`${data.length} person(s):\n\n${lines.join("\n\n")}`, {
-        recordsReturned: data.length,
-      });
+      const truncationNote = truncated
+        ? `\n\n⚠️ Showing the first ${limit} people; more exist. ` +
+          `Filter by type or raise \`limit\` (max ${MAX_QUERY_LIMIT}) to see more.`
+        : "";
+
+      return textResult(
+        `${data.length} person(s):\n\n${lines.join("\n\n")}${truncationNote}`,
+        { recordsReturned: data.length },
+      );
     }, logger),
   );
 

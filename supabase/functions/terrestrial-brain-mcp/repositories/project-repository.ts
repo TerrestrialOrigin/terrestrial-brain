@@ -36,6 +36,8 @@ export interface ProjectListFilters {
   includeArchived: boolean;
   parentId?: string;
   type?: string;
+  /** Max rows to render; the impl fetches `limit + 1` to detect truncation. */
+  limit: number;
 }
 
 export interface ProjectRepository {
