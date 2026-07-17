@@ -8,7 +8,7 @@ front-end work can proceed in parallel.
 
 ```
 https://<project-ref>.supabase.co/functions/v1/terrestrial-brain-mcp        (production)
-http://localhost:54321/functions/v1/terrestrial-brain-mcp                   (local stack)
+http://localhost:55421/functions/v1/terrestrial-brain-mcp                   (local stack)
 ```
 
 ## Authentication (change: header-based-auth, 2026-07-04)

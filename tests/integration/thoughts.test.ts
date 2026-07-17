@@ -651,7 +651,7 @@ Deno.test("list_thoughts displays raw UUID for orphaned project references", asy
 
 const TEST_PROJ_ID = "00000000-0000-0000-0000-000000000001";
 const INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note";
+  "http://localhost:55421/functions/v1/terrestrial-brain-mcp/ingest-note";
 
 const TEST_NOTE_ID = `test-ingest-test-proj-${Date.now()}`;
 
@@ -1626,7 +1626,7 @@ Deno.test("cleanup usefulness feedback loop test data", async () => {
 // to delete, the row vanishes entirely and this invariant fails.)
 
 const RECONCILE_INGEST_URL =
-  "http://localhost:54321/functions/v1/terrestrial-brain-mcp/ingest-note";
+  "http://localhost:55421/functions/v1/terrestrial-brain-mcp/ingest-note";
 
 async function fetchThoughtsForNote(
   noteId: string,

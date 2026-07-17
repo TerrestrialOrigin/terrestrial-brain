@@ -7,7 +7,7 @@ import { assertEquals } from "@std/assert";
 // supabase/functions/.env). These are real HTTP requests against the running
 // local stack — no mocks.
 
-const MCP_BASE = "http://localhost:54321/functions/v1/terrestrial-brain-mcp";
+const MCP_BASE = "http://localhost:55421/functions/v1/terrestrial-brain-mcp";
 const VALID_KEY = "dev-test-key-123";
 
 const DISALLOWED_ORIGIN = "https://evil.example";

@@ -98,13 +98,13 @@ describe("isInsecureEndpoint", () => {
     expect(isInsecureEndpoint("http://example.com/functions/v1/terrestrial-brain-mcp")).toBe(true);
   });
   it("returns true for plain http to a LAN address", () => {
-    expect(isInsecureEndpoint("http://192.168.1.10:54321/functions/v1/terrestrial-brain-mcp")).toBe(true);
+    expect(isInsecureEndpoint("http://192.168.1.10:55421/functions/v1/terrestrial-brain-mcp")).toBe(true);
   });
   it("returns false for http://localhost with a port", () => {
-    expect(isInsecureEndpoint("http://localhost:54321/functions/v1/terrestrial-brain-mcp")).toBe(false);
+    expect(isInsecureEndpoint("http://localhost:55421/functions/v1/terrestrial-brain-mcp")).toBe(false);
   });
   it("returns false for http://127.0.0.1 with a port", () => {
-    expect(isInsecureEndpoint("http://127.0.0.1:54321/functions/v1/terrestrial-brain-mcp")).toBe(false);
+    expect(isInsecureEndpoint("http://127.0.0.1:55421/functions/v1/terrestrial-brain-mcp")).toBe(false);
   });
   it("returns false for https endpoints", () => {
     expect(isInsecureEndpoint("https://xxx.supabase.co/functions/v1/terrestrial-brain-mcp")).toBe(false);
@@ -112,7 +112,7 @@ describe("isInsecureEndpoint", () => {
   it("returns false for an empty URL", () => expect(isInsecureEndpoint("")).toBe(false));
   it("is case-insensitive about the scheme and host", () => {
     expect(isInsecureEndpoint("HTTP://Example.com/fn")).toBe(true);
-    expect(isInsecureEndpoint("http://LOCALHOST:54321/fn")).toBe(false);
+    expect(isInsecureEndpoint("http://LOCALHOST:55421/fn")).toBe(false);
   });
 });
 
