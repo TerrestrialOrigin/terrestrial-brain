@@ -12,8 +12,28 @@
  * placed on `ExtractionContext` — never imported as a module-level singleton.
  */
 
+/**
+ * The completion purpose. This is the stable discriminator the deterministic
+ * `FakeAiProvider` dispatches on — NOT a substring of the system prompt, which
+ * drifts silently when a prompt is reworded (CORE-1). Every real call site sets
+ * it; the fake switches on it exhaustively and throws on an unknown value, so a
+ * new call site that forgets to wire a responder fails loudly in tests instead
+ * of degrading to the benign default. The live provider ignores it.
+ */
+export type AiCompletionPurpose =
+  | "extract-metadata"
+  | "split-thoughts"
+  | "reconcile"
+  | "assign-task-projects"
+  | "enrich-tasks"
+  | "project-from-path"
+  | "projects-by-content"
+  | "detect-people";
+
 /** A JSON-mode chat completion request: a system prompt + user content. */
 export interface AiJsonCompletionRequest {
+  /** What this completion is for — the fake's dispatch key (see above). */
+  purpose: AiCompletionPurpose;
   systemPrompt: string;
   userContent: string;
   /** Overrides the default chat model; omit for the provider's default. */

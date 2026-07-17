@@ -71,6 +71,7 @@ export async function extractProjectNameFromPath(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "project-from-path",
         systemPrompt:
           `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
 
@@ -190,6 +191,7 @@ async function detectProjectsByContent(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "projects-by-content",
         systemPrompt:
           `You identify which projects a note is about. You are given a note summary and a list of known projects. Return ONLY project IDs from the list that the note clearly references or relates to. Do not invent new projects. If no projects match, return an empty array.
 

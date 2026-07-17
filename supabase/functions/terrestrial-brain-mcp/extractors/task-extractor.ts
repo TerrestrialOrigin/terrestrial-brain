@@ -464,6 +464,7 @@ async function inferProjectsByContent(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "assign-task-projects",
         systemPrompt:
           `You match tasks to projects. Given a list of tasks and known projects, return which project each task belongs to. Only use project IDs from the list. If a task doesn't clearly belong to any project, omit it.
 
@@ -636,6 +637,7 @@ async function inferTaskEnrichments(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "enrich-tasks",
         systemPrompt:
           `You extract metadata from task descriptions. Today is ${referenceDateStr}.
 

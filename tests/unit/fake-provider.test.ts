@@ -3,10 +3,12 @@ import {
   assertAlmostEquals,
   assertEquals,
   assertInstanceOf,
+  assertRejects,
 } from "@std/assert";
 import { FakeAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/fake-provider.ts";
 import { OpenRouterAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/openrouter-provider.ts";
 import { createAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/factory.ts";
+import type { AiCompletionPurpose } from "../../supabase/functions/terrestrial-brain-mcp/ai/ai-provider.ts";
 
 // Pure, deterministic unit tests pinning the FakeAiProvider itself (Step 22).
 // No DB, no network, no LLM. These are the layer that guarantees the fake's
@@ -81,6 +83,7 @@ const identity = (raw: unknown) => raw;
 Deno.test("completeJson: metadata shape", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "extract-metadata",
       systemPrompt:
         "Extract metadata from the user's captured thought. Return JSON with:",
       userContent: "Gardening notes for spring",
@@ -94,6 +97,7 @@ Deno.test("completeJson: metadata shape", async () => {
 Deno.test("completeJson: note split returns a non-empty thought", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "split-thoughts",
       systemPrompt: "You split notes into discrete, standalone thoughts",
       userContent: "Note title: Ideas\n\nBuild a compost bin this weekend.",
     },
@@ -106,6 +110,7 @@ Deno.test("completeJson: note split returns a non-empty thought", async () => {
 Deno.test("completeJson: reconciliation keeps all existing ids, deletes none", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "reconcile",
       systemPrompt:
         "You reconcile an updated note with its previously captured thoughts",
       userContent: "EXISTING THOUGHTS:\n[ID:aaa] first\n\n[ID:bbb] second",
@@ -120,6 +125,7 @@ Deno.test("completeJson: reconciliation keeps all existing ids, deletes none", a
 Deno.test("completeJson: task→project echoes a mentioned known project", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "assign-task-projects",
       systemPrompt:
         `You match tasks to projects.\n\nKNOWN PROJECTS:\n- "Rabbit Hutch" (id: proj-1)\n- "Taxes" (id: proj-2)`,
       userContent:
@@ -133,6 +139,7 @@ Deno.test("completeJson: task→project echoes a mentioned known project", async
 Deno.test("completeJson: task enrichment assigns a mentioned known person", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "enrich-tasks",
       systemPrompt:
         `You extract metadata from task descriptions. Today is 2026-07-06.\n\nKNOWN PEOPLE:\n- "Alice" (id: person-1)`,
       userContent: `TASKS:\n0: "Ask Alice about the invoice"`,
@@ -152,6 +159,7 @@ Deno.test("completeJson: task enrichment assigns a mentioned known person", asyn
 Deno.test("completeJson: project-name-from-path detects a '<Name> Project' segment", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "project-from-path",
       systemPrompt: "You analyze file paths from an Obsidian vault",
       userContent: "Path: notes/Rabbit Hutch Project.md",
     },
@@ -164,6 +172,7 @@ Deno.test("completeJson: project-name-from-path detects a '<Name> Project' segme
 Deno.test("completeJson: project-by-content echoes a mentioned known project id", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "projects-by-content",
       systemPrompt:
         `You identify which projects a note is about.\n\nKNOWN PROJECTS:\n- "Rabbit Hutch" (id: proj-1)\n- "Taxes" (id: proj-2)`,
       userContent: "Today I worked on the Rabbit Hutch build.",
@@ -176,6 +185,7 @@ Deno.test("completeJson: project-by-content echoes a mentioned known project id"
 Deno.test("completeJson: people detection echoes a known person named in the note", async () => {
   const raw = await fake.completeJson(
     {
+      purpose: "detect-people",
       systemPrompt:
         `You identify people mentioned in a note.\n\nKNOWN PEOPLE:\n- "Alice" (id: person-1)\n- "Bob" (id: person-2)`,
       userContent: "Met with Alice about the plan.",
@@ -185,15 +195,23 @@ Deno.test("completeJson: people detection echoes a known person named in the not
   assertEquals(raw.people, [{ name: "Alice", id: "person-1" }]);
 });
 
-Deno.test("completeJson: unrecognized prompt degrades to an empty object", async () => {
-  const raw = await fake.completeJson(
-    {
-      systemPrompt: "Some brand new prompt we have never seen",
-      userContent: "x",
-    },
-    identity,
+Deno.test("completeJson: an unknown purpose throws (no silent default)", async () => {
+  // A new call site that forgets to wire a fake responder must fail loudly
+  // (CORE-1), not degrade to {} and silently stop exercising the path.
+  await assertRejects(
+    () =>
+      fake.completeJson(
+        {
+          // deliberately outside AiCompletionPurpose — simulates an unwired purpose
+          purpose: "brand-new-unwired" as unknown as AiCompletionPurpose,
+          systemPrompt: "whatever",
+          userContent: "x",
+        },
+        identity,
+      ),
+    Error,
+    "no responder wired",
   );
-  assertEquals(raw, {});
 });
 
 // ---------------------------------------------------------------------------

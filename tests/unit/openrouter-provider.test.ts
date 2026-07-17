@@ -45,7 +45,7 @@ Deno.test("completeJson: returns the parsed value on HTTP 200", async () => {
   await withFetch(okCompletion({ topics: ["a", "b"] }), async () => {
     const provider = new OpenRouterAiProvider();
     const result = await provider.completeJson(
-      { systemPrompt: "sys", userContent: "user" },
+      { purpose: "reconcile", systemPrompt: "sys", userContent: "user" },
       (raw) => raw as { topics: string[] },
     );
     assertEquals(result.topics, ["a", "b"]);
@@ -57,7 +57,7 @@ Deno.test("completeJson: runs the caller's parse callback (allowlist filtering)"
     const provider = new OpenRouterAiProvider();
     const allow = new Set(["keep"]);
     const result = await provider.completeJson(
-      { systemPrompt: "sys", userContent: "user" },
+      { purpose: "reconcile", systemPrompt: "sys", userContent: "user" },
       (raw) => (raw as { ids: string[] }).ids.filter((id) => allow.has(id)),
     );
     assertEquals(result, ["keep"]);
@@ -77,7 +77,7 @@ Deno.test("completeJson: throws AiProviderHttpError with status on non-OK", asyn
     const provider = new OpenRouterAiProvider();
     const error = await assertRejects(() =>
       provider.completeJson(
-        { systemPrompt: "sys", userContent: "user" },
+        { purpose: "reconcile", systemPrompt: "sys", userContent: "user" },
         (raw) => raw,
       )
     );
@@ -99,7 +99,7 @@ Deno.test("completeJson: throws AiProviderParseError on non-JSON content", async
     const provider = new OpenRouterAiProvider();
     const error = await assertRejects(() =>
       provider.completeJson(
-        { systemPrompt: "sys", userContent: "user" },
+        { purpose: "reconcile", systemPrompt: "sys", userContent: "user" },
         (raw) => raw,
       )
     );
@@ -112,7 +112,7 @@ Deno.test("completeJson: parse callback throwing surfaces as AiProviderParseErro
     const provider = new OpenRouterAiProvider();
     const error = await assertRejects(() =>
       provider.completeJson(
-        { systemPrompt: "sys", userContent: "user" },
+        { purpose: "reconcile", systemPrompt: "sys", userContent: "user" },
         () => {
           throw new Error("validation failed");
         },

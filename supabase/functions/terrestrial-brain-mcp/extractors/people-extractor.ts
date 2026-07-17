@@ -52,6 +52,7 @@ async function detectAllPeople(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "detect-people",
         systemPrompt:
           `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
 

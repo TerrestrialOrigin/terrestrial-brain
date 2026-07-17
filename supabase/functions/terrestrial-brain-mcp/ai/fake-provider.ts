@@ -18,7 +18,11 @@
  * production (any `TB_AI_PROVIDER` value other than exactly `fake` → real).
  */
 
-import { AiJsonCompletionRequest, AiProvider } from "./ai-provider.ts";
+import {
+  AiJsonCompletionRequest,
+  AiProvider,
+  AiProviderParseError,
+} from "./ai-provider.ts";
 
 /** Must match the `thoughts.embedding` column: `vector(1536)`. */
 const EMBEDDING_DIMENSIONS = 1536;
@@ -40,8 +44,29 @@ export class FakeAiProvider implements AiProvider {
     request: AiJsonCompletionRequest,
     parse: (raw: unknown) => Parsed,
   ): Promise<Parsed> {
-    const raw = dispatch(request);
-    return Promise.resolve(parse(raw));
+    let raw: unknown;
+    try {
+      raw = dispatch(request);
+    } catch (error) {
+      // An unwired purpose is a programmer error — surface it as a rejected
+      // promise (loud, consistent with the async contract), NOT a parse error.
+      return Promise.reject(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
+    // Honor the seam contract (CORE-8): a throwing `parse` surfaces as
+    // AiProviderParseError, exactly as the live provider does, so callers'
+    // `instanceof AiProviderParseError` fallback branches engage identically.
+    try {
+      return Promise.resolve(parse(raw));
+    } catch (error) {
+      return Promise.reject(
+        new AiProviderParseError(
+          "FakeAiProvider completion",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
   }
 }
 
@@ -104,43 +129,40 @@ function normalize(vector: number[]): number[] {
 // ---------------------------------------------------------------------------
 
 /**
- * One matcher + responder per completion purpose. The system prompts are the
- * only stable discriminator inside the provider (the `model` field is identical
- * across calls), so each responder keys off a distinctive phrase from its
- * prompt. An unmatched prompt returns `{}`, which every caller's `parse`
- * callback degrades to its documented safe default.
+ * One responder per completion purpose, dispatched on the request's stable
+ * `purpose` discriminator (NOT a system-prompt substring, which drifts silently
+ * — CORE-1). An unknown purpose THROWS rather than degrading to `{}`, so a new
+ * call site that forgets to wire a responder fails loudly in tests. The switch
+ * is exhaustive over `AiCompletionPurpose` (the `never` default is a
+ * compile-time guard).
  */
 function dispatch(request: AiJsonCompletionRequest): unknown {
-  const { systemPrompt, userContent } = request;
+  const { purpose, systemPrompt, userContent } = request;
 
-  if (systemPrompt.includes("Extract metadata from the user's captured")) {
-    return fakeMetadata(userContent);
+  switch (purpose) {
+    case "extract-metadata":
+      return fakeMetadata(userContent);
+    case "split-thoughts":
+      return fakeSplitThoughts(userContent);
+    case "reconcile":
+      return fakeReconciliation(userContent);
+    case "assign-task-projects":
+      return fakeTaskProjectAssignments(systemPrompt, userContent);
+    case "enrich-tasks":
+      return fakeTaskEnrichments(systemPrompt, userContent);
+    case "project-from-path":
+      return fakeProjectNameFromPath(userContent);
+    case "projects-by-content":
+      return fakeProjectIdsByContent(systemPrompt, userContent);
+    case "detect-people":
+      return fakePeople(systemPrompt, userContent);
+    default: {
+      const exhaustive: never = purpose;
+      throw new Error(
+        `FakeAiProvider: no responder wired for completion purpose "${exhaustive}"`,
+      );
+    }
   }
-  if (systemPrompt.includes("split notes into discrete")) {
-    return fakeSplitThoughts(userContent);
-  }
-  if (systemPrompt.includes("reconcile an updated note")) {
-    return fakeReconciliation(userContent);
-  }
-  if (systemPrompt.includes("You match tasks to projects")) {
-    return fakeTaskProjectAssignments(systemPrompt, userContent);
-  }
-  if (systemPrompt.includes("You extract metadata from task descriptions")) {
-    return fakeTaskEnrichments(systemPrompt, userContent);
-  }
-  if (systemPrompt.includes("You analyze file paths")) {
-    return fakeProjectNameFromPath(userContent);
-  }
-  if (systemPrompt.includes("You identify which projects a note is about")) {
-    return fakeProjectIdsByContent(systemPrompt, userContent);
-  }
-  if (systemPrompt.includes("You identify people mentioned in a note")) {
-    return fakePeople(systemPrompt, userContent);
-  }
-
-  // Unrecognized prompt: benign default. Each caller's parse maps this to its
-  // safe fallback (empty array / false / uncategorized).
-  return {};
 }
 
 /** A known entity line in a system prompt: `- "Name" (id: uuid)`. */

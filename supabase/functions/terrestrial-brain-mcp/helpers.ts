@@ -126,6 +126,7 @@ export async function extractMetadata(
   try {
     return await aiProvider.completeJson(
       {
+        purpose: "extract-metadata",
         systemPrompt:
           `You are given a single captured thought. Produce a JSON object that summarizes it using exactly these fields:
 - "people": names of any individuals the text refers to; use [] when nobody is named.
@@ -148,6 +149,31 @@ Base every field on what the text actually supports — do not invent details it
   }
 }
 
+/**
+ * Parses the LLM split response into a list of standalone thought strings.
+ * One malformed element (null, wrong type, missing/empty `thought`) is skipped,
+ * never allowed to crash the whole batch (CORE-12).
+ */
+export function parseSplitThoughts(raw: unknown): string[] {
+  const thoughtsValue = typeof raw === "object" && raw !== null
+    ? (raw as { thoughts?: unknown }).thoughts
+    : undefined;
+  const items: unknown[] = Array.isArray(thoughtsValue) ? thoughtsValue : [];
+  const collected: string[] = [];
+  for (const item of items) {
+    if (typeof item === "string") {
+      if (item.trim().length > 0) collected.push(item);
+    } else if (
+      typeof item === "object" && item !== null && "thought" in item &&
+      typeof (item as { thought: unknown }).thought === "string"
+    ) {
+      const thought = (item as { thought: string }).thought;
+      if (thought.trim().length > 0) collected.push(thought);
+    }
+  }
+  return collected;
+}
+
 export async function freshIngest(
   thoughtRepository: ThoughtRepository,
   aiProvider: AiProvider,
@@ -165,6 +191,7 @@ export async function freshIngest(
   try {
     thoughts = await aiProvider.completeJson(
       {
+        purpose: "split-thoughts",
         systemPrompt:
           `You split notes into discrete, standalone thoughts for a personal knowledge base.
 
@@ -181,23 +208,7 @@ RULES:
 Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
         userContent: title ? `Note title: ${title}\n\n${content}` : content,
       },
-      (raw): string[] => {
-        const parsed = raw as { thoughts?: unknown };
-        const collected: string[] = [];
-        if (Array.isArray(parsed.thoughts)) {
-          for (const item of parsed.thoughts) {
-            if (typeof item === "string" && item.trim().length > 0) {
-              collected.push(item);
-            } else if (
-              typeof item === "object" && item.thought &&
-              typeof item.thought === "string" && item.thought.trim().length > 0
-            ) {
-              collected.push(item.thought);
-            }
-          }
-        }
-        return collected;
-      },
+      (raw): string[] => parseSplitThoughts(raw),
     );
   } catch (error) {
     if (error instanceof AiProviderParseError) {

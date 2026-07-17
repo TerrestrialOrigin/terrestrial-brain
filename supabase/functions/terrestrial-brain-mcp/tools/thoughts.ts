@@ -1248,6 +1248,7 @@ export async function requestReconciliationPlan(
   try {
     const rawPlan = await aiProvider.completeJson(
       {
+        purpose: "reconcile",
         systemPrompt:
           `You reconcile an updated note with its previously captured thoughts in a personal knowledge base.
 
