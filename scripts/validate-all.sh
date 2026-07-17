@@ -13,6 +13,9 @@ if ! curl -s -o /dev/null -m 5 http://localhost:54321/functions/v1/terrestrial-b
   exit 1
 fi
 
+echo "==> Running pgTAP database tests (supabase test db)..."
+(cd "$REPO_ROOT" && npx supabase test db)
+
 echo "==> Running Deno test suite (deterministic, TB_AI_PROVIDER=fake)..."
 (cd "$REPO_ROOT" && deno task test)
 

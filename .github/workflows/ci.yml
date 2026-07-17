@@ -39,6 +39,12 @@ jobs:
       - name: Start Supabase stack
         run: supabase start -x studio,realtime,imgproxy,inbucket,storage-api
 
+      # pgTAP database tests: DB-level invariants + RLS denial coverage
+      # (supabase/tests/, incl. rls_denial.test.sql). Runs before the Deno suite
+      # so a broken policy/grant fails the pipeline at the DB layer.
+      - name: pgTAP database tests
+        run: supabase test db
+
       # RED-BY-DESIGN until Step 7 (New-Feature-Plan): `deno task test` now
       # includes the lifecycle verification harness
       # (tests/integration/lifecycle/), whose deterministic tests encode Step 7
