@@ -45,6 +45,15 @@ export class FakeProjectRepository implements ProjectRepository {
   inserted: ProjectIdentity[] = [];
   private nextId = 1;
 
+  /**
+   * Names for which `insert` simulates a unique-violation (23505) — the losing
+   * side of a concurrent auto-create. `findByName` then returns the identity
+   * seeded in `existingByName`, exercising the create-or-get recovery (EXTR-7).
+   */
+  collideOn = new Set<string>();
+  existingByName = new Map<string, ProjectIdentity>();
+  findByNameError: string | null = null;
+
   constructor(private readonly active: ProjectIdentity[] = []) {}
 
   listActive(): Promise<RepoResult<ProjectIdentity[]>> {
@@ -52,9 +61,25 @@ export class FakeProjectRepository implements ProjectRepository {
   }
 
   insert(values: { name: string }): Promise<RepoResult<ProjectIdentity>> {
+    if (this.collideOn.has(values.name)) {
+      return Promise.resolve({
+        data: null,
+        error: { message: "duplicate key value", code: "23505" },
+      });
+    }
     const identity = { id: `new-project-${this.nextId++}`, name: values.name };
     this.inserted.push(identity);
     return ok(identity);
+  }
+
+  findByName(name: string): Promise<RepoResult<ProjectIdentity | null>> {
+    if (this.findByNameError) {
+      return Promise.resolve({
+        data: null,
+        error: { message: this.findByNameError },
+      });
+    }
+    return ok(this.existingByName.get(name) ?? null);
   }
 
   list() {
@@ -91,6 +116,11 @@ export class FakePersonRepository implements PersonRepository {
   inserted: PersonIdentity[] = [];
   private nextId = 1;
 
+  /** Names whose `insert` simulates a unique-violation (23505); see EXTR-7. */
+  collideOn = new Set<string>();
+  existingByName = new Map<string, PersonIdentity>();
+  findByNameError: string | null = null;
+
   constructor(private readonly active: PersonIdentity[] = []) {}
 
   listActive(): Promise<RepoResult<PersonIdentity[]>> {
@@ -98,9 +128,25 @@ export class FakePersonRepository implements PersonRepository {
   }
 
   insert(values: { name: string }): Promise<RepoResult<PersonIdentity>> {
+    if (this.collideOn.has(values.name)) {
+      return Promise.resolve({
+        data: null,
+        error: { message: "duplicate key value", code: "23505" },
+      });
+    }
     const identity = { id: `new-person-${this.nextId++}`, name: values.name };
     this.inserted.push(identity);
     return ok(identity);
+  }
+
+  findByName(name: string): Promise<RepoResult<PersonIdentity | null>> {
+    if (this.findByNameError) {
+      return Promise.resolve({
+        data: null,
+        error: { message: this.findByNameError },
+      });
+    }
+    return ok(this.existingByName.get(name) ?? null);
   }
 
   list() {

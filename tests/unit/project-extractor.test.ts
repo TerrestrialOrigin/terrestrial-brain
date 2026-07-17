@@ -333,3 +333,85 @@ Deno.test("ProjectExtractor: auto-create failure is reported in result.errors", 
   assertStringIncludesExtr6(result.errors[0], "Acme");
   assertStringIncludesExtr6(result.errors[0], "rls denied");
 });
+
+// ---------------------------------------------------------------------------
+// EXTR-7 — a concurrent auto-create that loses the unique active-name race
+// (23505) recovers the winner's id via findByName instead of creating a dup /
+// dropping the reference.
+// ---------------------------------------------------------------------------
+
+function conventionalPathContext(
+  projectRepository: SharedFakeProjectRepository,
+): ExtractionContextExtr6 {
+  return {
+    supabase: {} as unknown as SupabaseClientExtr6,
+    aiProvider: new SharedFakeAiProvider(() => ({})),
+    taskRepository: new SharedFakeTaskRepository(),
+    projectRepository,
+    personRepository: new SharedFakePersonRepository(),
+    knownProjects: [],
+    knownTasks: [],
+    knownPeople: [],
+    newlyCreatedProjects: [],
+    newlyCreatedTasks: [],
+    newlyCreatedPeople: [],
+    accumulatedReferences: {},
+  };
+}
+
+Deno.test("ProjectExtractor: 23505 name collision recovers the existing id", async () => {
+  const note = parseNoteExtr6(
+    "Some content",
+    "Note",
+    "projects/Acme/note.md",
+    "obsidian",
+  );
+  const projectRepository = new SharedFakeProjectRepository();
+  // A concurrent ingest already created active "Acme"; our insert loses.
+  projectRepository.collideOn.add("Acme");
+  projectRepository.existingByName.set("Acme", {
+    id: "existing-acme-id",
+    name: "Acme",
+  });
+
+  const result = await new ProjectExtractor().extract(
+    note,
+    conventionalPathContext(projectRepository),
+  );
+
+  assertEquals(result.ids, ["existing-acme-id"], "recovers the winner's id");
+  assertEquals(result.errors, undefined, "a recovered race is not an error");
+  assertEquals(
+    projectRepository.inserted.length,
+    0,
+    "no duplicate row is created on the losing side",
+  );
+});
+
+Deno.test("ProjectExtractor: 23505 with a failed recovery lookup is reported, not dropped silently", async () => {
+  const note = parseNoteExtr6(
+    "Some content",
+    "Note",
+    "projects/Acme/note.md",
+    "obsidian",
+  );
+  const projectRepository = new SharedFakeProjectRepository();
+  projectRepository.collideOn.add("Acme");
+  projectRepository.findByNameError = "lookup boom";
+
+  const originalError = console.error;
+  console.error = () => {};
+  let result;
+  try {
+    result = await new ProjectExtractor().extract(
+      note,
+      conventionalPathContext(projectRepository),
+    );
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(result.ids, []);
+  assertExistsExtr6(result.errors);
+  assertStringIncludesExtr6(result.errors[0], "Acme");
+});

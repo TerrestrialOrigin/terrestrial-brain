@@ -5,6 +5,7 @@
  */
 
 import type { AppSupabaseClient } from "../supabase-client.ts";
+import { escapeLikePattern } from "../escape-like.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import type {
   NewProjectValues,
@@ -27,6 +28,20 @@ export class SupabaseProjectRepository implements ProjectRepository {
       .insert(values)
       .select("id, name")
       .single();
+    return { data, error: toRepoError(error) };
+  }
+
+  async findByName(name: string): Promise<RepoResult<ProjectIdentity | null>> {
+    // Active project matching case-insensitively — mirrors the unique index
+    // `uq_projects_active_name` on (lower(name)) where archived_at is null, so
+    // a 23505-losing racer recovers the winning row. `maybeSingle` maps a clean
+    // miss to null data (not an error).
+    const { data, error } = await this.supabase
+      .from("projects")
+      .select("id, name")
+      .ilike("name", escapeLikePattern(name))
+      .is("archived_at", null)
+      .maybeSingle();
     return { data, error: toRepoError(error) };
   }
 

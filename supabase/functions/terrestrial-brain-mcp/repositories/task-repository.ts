@@ -40,6 +40,7 @@ export type CreatedTask = Pick<Row<"tasks">, "id" | "content">;
 /** Values for inserting a task. Content + status are required; rest optional. */
 export interface NewTaskValues {
   content: string;
+  content_hash?: string;
   status: string;
   project_id?: string | null;
   parent_id?: string | null;

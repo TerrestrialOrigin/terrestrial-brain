@@ -1244,7 +1244,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 ## Phase B — Security, GDPR & infrastructure
 - [x] 9. DB policy & function hardening (`bug/DbPolicyAndFunctionHardening`) — SQL-1, SQL-4, SQL-8
 - [x] 10. pgTAP denial suite + wiring (`feature/PgTapDenialSuite`) — SQL-5, SQL-6, TEST-8
-- [ ] 11. Dedup indexes & hashes (`bug/DedupIndexesAndHashes`) — SQL-2, EXTR-5, EXTR-7
+- [x] 11. Dedup indexes & hashes (`bug/DedupIndexesAndHashes`) — SQL-2, EXTR-5, EXTR-7
 - [ ] 12. Bounded queries (`feature/BoundedQueries`) — SQL-3, REPO-1, TOOL-10
 - [ ] 13. Prod script secrets & cron verification (`bug/ProdScriptsSecrets`) — SCRIPT-1, SQL-7
 - [ ] 14. Dev stack hygiene (`feature/DevStackHygiene`) — SCRIPT-2..6
