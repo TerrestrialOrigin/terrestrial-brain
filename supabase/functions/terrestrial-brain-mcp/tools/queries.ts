@@ -1,6 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { uuidField } from "../zod-schemas.ts";
+import {
+  MAX_RECENT_ACTIVITY_DAYS,
+  RECENT_ACTIVITY_SECTION_LIMIT,
+} from "../constants.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
@@ -379,7 +383,10 @@ async function fetchRecentActivity(
   queryRepository: QueryRepository,
   days: number,
 ): Promise<RecentActivityData> {
-  const effectiveDays = Math.max(1, days);
+  // Clamp both ends: a nonsensical or huge window is handled gracefully (not
+  // rejected), and the upper bound stops a wide window defeating the per-section
+  // caps by widening the `since` filter (TOOL-10).
+  const effectiveDays = Math.min(MAX_RECENT_ACTIVITY_DAYS, Math.max(1, days));
   const sinceDate = new Date();
   sinceDate.setDate(sinceDate.getDate() - effectiveDays);
   const sinceIso = sinceDate.toISOString();
@@ -456,6 +463,9 @@ function formatRecentActivity(data: RecentActivityData): string {
 
   // Push one "## Header (count)" section, surfacing a failed query as an
   // explicit unavailable marker rather than empty-state prose (finding C9).
+  // Each section is bounded at RECENT_ACTIVITY_SECTION_LIMIT: past the cap the
+  // rows are sliced and the count shows a `(50+)` truncation marker so a cut is
+  // never silent (the repositories fetch `limit + 1` to signal "more exist").
   const pushSection = <Row>(
     title: string,
     result: { data: Row[] | null; error: { message: string } | null },
@@ -463,12 +473,24 @@ function formatRecentActivity(data: RecentActivityData): string {
     renderRows: (rows: Row[]) => string,
     context: string,
   ) => {
-    const count = result.error ? "?" : (result.data?.length ?? 0);
+    let count: string;
+    let shownResult = result;
+    if (result.error) {
+      count = "?";
+    } else {
+      const all = result.data ?? [];
+      const truncated = all.length > RECENT_ACTIVITY_SECTION_LIMIT;
+      const shown = truncated
+        ? all.slice(0, RECENT_ACTIVITY_SECTION_LIMIT)
+        : all;
+      count = truncated ? `${RECENT_ACTIVITY_SECTION_LIMIT}+` : `${all.length}`;
+      shownResult = { data: shown, error: null };
+    }
     sections.push(
       "",
       `## ${title} (${count})`,
       "",
-      renderSectionBody(result, emptyText, renderRows, context),
+      renderSectionBody(shownResult, emptyText, renderRows, context),
     );
   };
 
@@ -640,7 +662,7 @@ export function register(
         // than rejecting out-of-range input. Finding 7.3 scopes the
         // bounded-input requirement to `limit`, not this window param.
         days: z.number().optional().default(7).describe(
-          "Number of days to look back (default 7)",
+          `Number of days to look back (clamped to 1–${MAX_RECENT_ACTIVITY_DAYS}, default 7)`,
         ),
       },
     },

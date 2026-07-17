@@ -16,6 +16,7 @@ import {
   DEFAULT_LIST_LIMIT,
   MAX_GROUPED_TASK_LIMIT,
   MAX_QUERY_LIMIT,
+  RECONCILE_TASK_LIMIT,
 } from "../constants.ts";
 
 /** Resolves a batch of ids to a `Map<id, displayValue>` (injected for testing). */
@@ -619,23 +620,31 @@ export function register(
     },
     withMcpLogging("reconcile_tasks", async ({ project_id }) => {
       const { data, error } = await taskRepository.list({
-        limit: 100,
+        // Fetch one extra so we can report truncation rather than silently
+        // reconciling only the first N.
+        limit: RECONCILE_TASK_LIMIT + 1,
         includeArchived: false,
         overdueOnly: false,
         status: "open",
         ...(project_id ? { projectId: project_id } : {}),
       });
       if (error) return errorResult(`Reconcile query failed: ${error.message}`);
-      const rows = data ?? [];
-      if (rows.length === 0) {
+      const allRows = data ?? [];
+      if (allRows.length === 0) {
         return textResult("No open tasks to reconcile.");
       }
+      const truncated = allRows.length > RECONCILE_TASK_LIMIT;
+      const rows = truncated ? allRows.slice(0, RECONCILE_TASK_LIMIT) : allRows;
       const lines = rows.map((task) => `- ${task.id}: "${task.content}"`);
+      const truncationNote = truncated
+        ? `\n\n⚠️ Showing the first ${RECONCILE_TASK_LIMIT} open tasks; more ` +
+          `exist. Narrow by project_id to reconcile the rest.`
+        : "";
       return textResult(
         `${rows.length} open task(s) to reconcile (confirm with the user before ` +
           `closing any — this tool does not change status):\n${
             lines.join("\n")
-          }`,
+          }${truncationNote}`,
         { recordsReturned: rows.length },
       );
     }, logger),

@@ -6,6 +6,7 @@
  */
 
 import type { AppSupabaseClient } from "../supabase-client.ts";
+import { RECENT_ACTIVITY_SECTION_LIMIT } from "../constants.ts";
 import { type RepoResult, toRepoError } from "./repo-result.ts";
 import { resolveNames } from "./name-resolution.ts";
 import type {
@@ -71,7 +72,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .eq("project_id", projectId)
       .is("archived_at", null)
       .in("status", ["open", "in_progress"])
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -126,7 +128,7 @@ export class SupabaseQueryRepository implements QueryRepository {
       .is("archived_at", null)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -138,7 +140,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .select("content, status, project_id, created_at")
       .is("archived_at", null)
       .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -151,7 +154,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .eq("status", "done")
       .is("archived_at", null)
       .gte("updated_at", sinceIso)
-      .order("updated_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -163,7 +167,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .select("name, type, created_at")
       .is("archived_at", null)
       .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -175,7 +180,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .select("name, type, updated_at")
       .is("archived_at", null)
       .gte("updated_at", sinceIso)
-      .order("updated_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -187,7 +193,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .select("name, type, created_at")
       .is("archived_at", null)
       .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -199,7 +206,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .select("name, type, updated_at")
       .is("archived_at", null)
       .gte("updated_at", sinceIso)
-      .order("updated_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 
@@ -211,7 +219,8 @@ export class SupabaseQueryRepository implements QueryRepository {
       .select("title, file_path, picked_up_at")
       .eq("picked_up", true)
       .gte("picked_up_at", sinceIso)
-      .order("picked_up_at", { ascending: false });
+      .order("picked_up_at", { ascending: false })
+      .limit(RECENT_ACTIVITY_SECTION_LIMIT + 1);
     return { data, error: toRepoError(error) };
   }
 

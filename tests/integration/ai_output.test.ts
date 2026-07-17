@@ -177,6 +177,56 @@ Deno.test("get-pending-ai-output-metadata HTTP: filters out picked-up outputs", 
   );
 });
 
+// SQL-3 — get_pending_ai_output_metadata respects an explicit max_rows bound
+// instead of PostgREST's silent 1000-row truncation. Self-owned fixtures.
+Deno.test("get_pending_ai_output_metadata: caps at max_rows", async () => {
+  const marker = uniqueName("bounded-metadata");
+  const seededIds: string[] = [];
+  try {
+    for (let index = 0; index < 3; index++) {
+      const insertResponse = await fetch(restUrl("ai_output"), {
+        method: "POST",
+        headers: serviceHeaders({
+          "Content-Type": "application/json",
+          "Prefer": "return=representation",
+        }),
+        body: JSON.stringify({
+          title: `${marker}-${index}`,
+          content: "body",
+          file_path: `test/${marker}-${index}.md`,
+          picked_up: false,
+          rejected: false,
+        }),
+      });
+      const [row] = await insertResponse.json();
+      seededIds.push(row.id as string);
+    }
+
+    const rpcResponse = await fetch(
+      restUrl("rpc/get_pending_ai_output_metadata"),
+      {
+        method: "POST",
+        headers: serviceHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ max_rows: 2 }),
+      },
+    );
+    const rows = await rpcResponse.json();
+    assertEquals(rpcResponse.ok, true, JSON.stringify(rows));
+    assertEquals(
+      rows.length <= 2,
+      true,
+      `max_rows=2 must return at most 2 rows, got ${rows.length}`,
+    );
+  } finally {
+    for (const id of seededIds) {
+      await fetch(restUrl(`ai_output?id=eq.${id}`), {
+        method: "DELETE",
+        headers: serviceHeaders(),
+      });
+    }
+  }
+});
+
 // ─── fetch_ai_output_content Tests ────────────────────────────────────────────
 
 let fetchTestOutputId: string;

@@ -129,6 +129,14 @@ Deno.test("get_recent_activity clamps zero days to 1", async () => {
   assertStringIncludes(result, "Activity — Last 1 Day");
 });
 
+// TOOL-10 — a huge window is clamped to the upper bound (366), not rejected, so
+// it cannot defeat the per-section caps by widening `since`.
+Deno.test("get_recent_activity clamps an oversized window to 366 days", async () => {
+  const result = await callTool("get_recent_activity", { days: 100000 });
+  assertExists(result);
+  assertStringIncludes(result, "Activity — Last 366 Days");
+});
+
 Deno.test("get_recent_activity shows tasks with project names", async () => {
   // Create a fresh task linked to Terrestrial Brain so it always appears in the 1-day window
   const TB_PROJECT_ID = "00000000-0000-0000-0000-000000000002";

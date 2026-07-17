@@ -12,6 +12,7 @@ import {
   type ProjectSummaryData,
   type RecentActivityData,
 } from "../../supabase/functions/terrestrial-brain-mcp/tools/queries.ts";
+import { RECENT_ACTIVITY_SECTION_LIMIT } from "../../supabase/functions/terrestrial-brain-mcp/constants.ts";
 
 // ─── dedupeByName ────────────────────────────────────────────────────────────
 
@@ -194,4 +195,53 @@ Deno.test("formatRecentActivity: failed people query renders unavailable marker"
   const out = formatRecentActivity(data);
   assertStringIncludes(out, "## People (?)");
   assertStringIncludes(out, "(section unavailable: people query failed)");
+});
+
+// TOOL-10 — an over-full section (repository returns `limit + 1` rows) is sliced
+// to the section limit and its heading carries a `(50+)` truncation marker.
+Deno.test("formatRecentActivity: an over-cap section is sliced and marked (50+)", () => {
+  const data = baseActivityData();
+  const overCap = RECENT_ACTIVITY_SECTION_LIMIT + 1;
+  data.tasksCreated = {
+    data: Array.from({ length: overCap }, (_unused, index) => ({
+      content: `Task ${index}`,
+      status: "open",
+      project_id: null,
+      created_at: "2026-07-02T00:00:00Z",
+    })),
+    error: null,
+  };
+
+  const out = formatRecentActivity(data);
+  assertStringIncludes(
+    out,
+    `## Tasks Created (${RECENT_ACTIVITY_SECTION_LIMIT}+)`,
+  );
+  // Exactly the limit is rendered — the (limit+1)th row is not present.
+  assertEquals(out.includes(`Task ${RECENT_ACTIVITY_SECTION_LIMIT}`), false);
+  assertStringIncludes(out, `Task ${RECENT_ACTIVITY_SECTION_LIMIT - 1}`);
+});
+
+// Boundary: exactly the limit (no extra probe row) shows the true count, no marker.
+Deno.test("formatRecentActivity: exactly the section limit shows a plain count", () => {
+  const data = baseActivityData();
+  data.tasksCreated = {
+    data: Array.from(
+      { length: RECENT_ACTIVITY_SECTION_LIMIT },
+      (_unused, index) => ({
+        content: `Task ${index}`,
+        status: "open",
+        project_id: null,
+        created_at: "2026-07-02T00:00:00Z",
+      }),
+    ),
+    error: null,
+  };
+
+  const out = formatRecentActivity(data);
+  assertStringIncludes(
+    out,
+    `## Tasks Created (${RECENT_ACTIVITY_SECTION_LIMIT})`,
+  );
+  assertEquals(out.includes(`(${RECENT_ACTIVITY_SECTION_LIMIT}+)`), false);
 });

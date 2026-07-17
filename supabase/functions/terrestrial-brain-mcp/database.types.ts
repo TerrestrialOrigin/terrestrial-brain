@@ -389,7 +389,7 @@ export type Database = {
     }
     Functions: {
       get_pending_ai_output_metadata: {
-        Args: never
+        Args: { max_rows?: number }
         Returns: {
           content_size: number
           created_at: string

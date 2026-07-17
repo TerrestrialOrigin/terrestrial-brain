@@ -46,6 +46,8 @@ export interface NewPersonValues {
 export interface PersonListFilters {
   includeArchived: boolean;
   type?: string;
+  /** Max rows to render; the impl fetches `limit + 1` to detect truncation. */
+  limit: number;
 }
 
 export interface PersonRepository {

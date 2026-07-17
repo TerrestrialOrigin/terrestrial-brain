@@ -7,6 +7,7 @@ import { errorResult, textResult } from "../mcp-response.ts";
 import { hashContent } from "../helpers.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { PROJECT_TYPES } from "../enums.ts";
+import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
@@ -185,24 +186,35 @@ export function register(
         type: z.enum(PROJECT_TYPES).optional().describe(
           "Filter by project type",
         ),
+        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional().default(
+          DEFAULT_LIST_LIMIT,
+        ).describe(
+          `Max projects to return (1–${MAX_QUERY_LIMIT}, default ${DEFAULT_LIST_LIMIT})`,
+        ),
       },
     },
     withMcpLogging(
       "list_projects",
-      async ({ include_archived, parent_id, type }) => {
-        const { data, error } = await projectRepository.list({
+      async ({ include_archived, parent_id, type, limit }) => {
+        const { data: rows, error } = await projectRepository.list({
           includeArchived: include_archived,
           parentId: parent_id,
           type,
+          limit,
         });
 
         if (error) {
           return errorResult(`Error: ${error.message}`);
         }
 
-        if (!data || data.length === 0) {
+        if (!rows || rows.length === 0) {
           return textResult("No projects found.", { recordsReturned: 0 });
         }
+
+        // The repository fetches `limit + 1` so we can distinguish "exactly
+        // full" from "more exist" and report truncation explicitly.
+        const truncated = rows.length > limit;
+        const data = truncated ? rows.slice(0, limit) : rows;
 
         // Get parent names for display (shared batched resolver).
         const parentIds = data
@@ -256,8 +268,15 @@ export function register(
           return parts.join("\n");
         });
 
+        const truncationNote = truncated
+          ? `\n\n⚠️ Showing the first ${limit} projects; more exist. ` +
+            `Filter by type/parent or raise \`limit\` (max ${MAX_QUERY_LIMIT}) to see more.`
+          : "";
+
         return textResult(
-          `${data.length} project(s):\n\n${lines.join("\n\n")}`,
+          `${data.length} project(s):\n\n${
+            lines.join("\n\n")
+          }${truncationNote}`,
           { recordsReturned: data.length },
         );
       },
