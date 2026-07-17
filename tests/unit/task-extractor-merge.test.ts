@@ -1,6 +1,9 @@
 import { assertEquals } from "@std/assert";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { TaskExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
+import {
+  stripMarkersForComparison,
+  TaskExtractor,
+} from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
 import type {
   ExtractionContext,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
@@ -521,4 +524,20 @@ Deno.test("merge: successful extraction reports no errors", async () => {
       true,
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// EXTR-1 — stripMarkersForComparison respects word boundaries (failing-first)
+// ---------------------------------------------------------------------------
+
+Deno.test("stripMarkersForComparison: 'by section 3' is not stripped (marker as word substring / non-month word)", () => {
+  const text = "Review by section 3 of the doc";
+  // "by" is a standalone word here, but "section" is not a month name, so the
+  // natural-date stripping must not fire and turn this into "Review of the doc".
+  assertEquals(stripMarkersForComparison(text), text);
+});
+
+Deno.test("stripMarkersForComparison: real marker-plus-month fragment is still stripped", () => {
+  const text = "Fix bug due March 30";
+  assertEquals(stripMarkersForComparison(text), "Fix bug");
 });

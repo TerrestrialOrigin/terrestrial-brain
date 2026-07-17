@@ -175,6 +175,46 @@ Deno.test("extractDueDate: standalone bare ISO date is still captured", () => {
 });
 
 // ---------------------------------------------------------------------------
+// EXTR-1 — marker word boundaries (failing-first)
+//
+// A due-date marker ("due"/"by"/"deadline"/"before") must only match as a
+// standalone word. A marker that is a substring of an ordinary word must not
+// corrupt the task text or invent a due date.
+// ---------------------------------------------------------------------------
+
+Deno.test("extractDueDate: 'by' inside 'Derby' does not match (no phantom date, text intact)", () => {
+  const text = "Attend Derby March 30";
+  const result = extractDueDate(text, REFERENCE_DATE);
+  assertEquals(result.dueDate, null);
+  assertEquals(result.cleanedText, text);
+});
+
+Deno.test("extractDueDate: 'by' inside 'standby' does not strip an ISO marker fragment", () => {
+  const text = "Test standby 2026-08-01 procedure";
+  const result = extractDueDate(text, REFERENCE_DATE);
+  // The standalone bare-ISO pattern MAY capture the date, but "standby" must
+  // remain intact — the marker-anchored pattern must not strip "by 2026-08-01".
+  assertEquals(result.cleanedText.includes("standby"), true);
+  assertEquals(result.cleanedText.includes("procedure"), true);
+});
+
+Deno.test("extractDueDate: 'by' inside 'Rugby' does not match a weekday date", () => {
+  const text = "Rugby Friday practice";
+  const result = extractDueDate(text, REFERENCE_DATE);
+  assertEquals(result.dueDate, null);
+  assertEquals(result.cleanedText, text);
+});
+
+Deno.test("extractDueDate: marker jammed against value ('by2026-08-01') does not match as a marker date", () => {
+  const text = "Ship by2026-08-01";
+  const result = extractDueDate(text, REFERENCE_DATE);
+  // No whitespace/colon separator between marker and value: the marker-anchored
+  // pattern must not fire, so "by2026-08-01" is left intact.
+  assertEquals(result.dueDate, null);
+  assertEquals(result.cleanedText, text);
+});
+
+// ---------------------------------------------------------------------------
 // Documented behavior and edge cases
 // ---------------------------------------------------------------------------
 

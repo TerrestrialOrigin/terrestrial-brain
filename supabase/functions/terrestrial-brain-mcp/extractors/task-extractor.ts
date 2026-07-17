@@ -28,6 +28,7 @@ import {
 } from "./date-parser.ts";
 import { findPersonInText } from "./name-matching.ts";
 import { ASSIGNMENT_MARKER_PATTERN, DUE_MARKER_PATTERN } from "./markers.ts";
+import { monthPattern } from "./date-parser.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { NewTaskValues } from "../repositories/task-repository.ts";
 
@@ -237,25 +238,30 @@ interface TaskMatch {
  * E.g. "Fix bug (assigned: Alice) (deadline: March 30)" → "Fix bug"
  */
 export function stripMarkersForComparison(text: string): string {
+  // A marker must be a standalone word (leading `\b`), and the bare-form markers
+  // must be separated from their value by a colon or whitespace — never matched
+  // mid-word or against an arbitrary `\w+` (EXTR-1). The month-name alternation
+  // replaces the over-broad `\w+` so "Review by section 3" is left unchanged.
+  const separator = "(?:\\s*:\\s*|\\s+)";
   return text
     .replace(
-      new RegExp(`\\(\\s*${ASSIGNMENT_MARKER_PATTERN}\\s*:[^)]*\\)`, "gi"),
+      new RegExp(`\\(\\s*\\b${ASSIGNMENT_MARKER_PATTERN}\\s*:[^)]*\\)`, "gi"),
       "",
     )
     .replace(
-      new RegExp(`\\(\\s*${DUE_MARKER_PATTERN}\\s*:?[^)]*\\)`, "gi"),
+      new RegExp(`\\(\\s*\\b${DUE_MARKER_PATTERN}\\s*:?[^)]*\\)`, "gi"),
       "",
     )
     .replace(
       new RegExp(
-        `(?:,?\\s*)${DUE_MARKER_PATTERN}\\s*:?\\s*\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}`,
+        `(?:,?\\s*)\\b${DUE_MARKER_PATTERN}${separator}\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}`,
         "gi",
       ),
       "",
     )
     .replace(
       new RegExp(
-        `(?:,?\\s*)${DUE_MARKER_PATTERN}\\s*:?\\s*\\w+\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?`,
+        `(?:,?\\s*)\\b${DUE_MARKER_PATTERN}${separator}(?:${monthPattern})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?`,
         "gi",
       ),
       "",

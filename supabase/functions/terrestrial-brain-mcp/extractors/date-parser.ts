@@ -244,9 +244,21 @@ export function cleanStrippedText(text: string): string {
 
 const allMonthNames = [...Object.keys(MONTH_FULL), ...Object.keys(MONTH_SHORT)];
 const allDayNames = Object.keys(DAY_INDEX);
-const monthPattern = allMonthNames.join("|");
+/**
+ * Non-capturing alternation of every recognized month name (full + abbreviated).
+ * Exported so reconciliation marker-stripping can match a real month name
+ * rather than any `\w+` word (EXTR-1).
+ */
+export const monthPattern = allMonthNames.join("|");
 const dayNamePattern = allDayNames.join("|");
 const markerPattern = DUE_MARKER_PATTERN;
+// A due-date marker must be a standalone word: an ASCII word boundary before the
+// marker stops "by" inside "Derby"/"standby"/"Rugby" from matching (EXTR-1).
+const markerBoundary = "\\b";
+// The marker must be separated from its value by a real separator — a colon
+// (optionally spaced) or at least one whitespace — so "by2026-08-01" jammed
+// inside a token cannot match as a marker date (EXTR-1).
+const markerSeparator = "(?:\\s*:\\s*|\\s+)";
 // Ordinal day: "5th", "1st", "2nd", "23rd"
 const dayNumber = "\\d{1,2}(?:st|nd|rd|th)?";
 
@@ -259,7 +271,7 @@ const DATE_PATTERNS: DatePattern[] = [
   // 1. Marker + ISO date: "(deadline: 2026-04-01)" or "by 2026-04-01"
   {
     regex: new RegExp(
-      `\\(?\\s*${markerPattern}\\s*:?\\s*(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})\\s*\\)?`,
+      `\\(?\\s*${markerBoundary}${markerPattern}${markerSeparator}(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})\\s*\\)?`,
       "i",
     ),
     parse: (match) => {
@@ -284,7 +296,7 @@ const DATE_PATTERNS: DatePattern[] = [
   // 3. Marker + "Month Day(, Year)": "(deadline: August 5th)" or "due March 30"
   {
     regex: new RegExp(
-      `\\(?\\s*${markerPattern}\\s*:?\\s*((?:${monthPattern})\\s+${dayNumber}(?:,?\\s+\\d{4})?)\\s*\\)?`,
+      `\\(?\\s*${markerBoundary}${markerPattern}${markerSeparator}((?:${monthPattern})\\s+${dayNumber}(?:,?\\s+\\d{4})?)\\s*\\)?`,
       "i",
     ),
     parse: (match, today) => parseNaturalDate(match[1], today),
@@ -292,7 +304,7 @@ const DATE_PATTERNS: DatePattern[] = [
   // 4. Marker + "Day Month(, Year)": "(deadline: 5th August)" or "due 30 March"
   {
     regex: new RegExp(
-      `\\(?\\s*${markerPattern}\\s*:?\\s*(${dayNumber}\\s+(?:${monthPattern})(?:,?\\s+\\d{4})?)\\s*\\)?`,
+      `\\(?\\s*${markerBoundary}${markerPattern}${markerSeparator}(${dayNumber}\\s+(?:${monthPattern})(?:,?\\s+\\d{4})?)\\s*\\)?`,
       "i",
     ),
     parse: (match, today) => parseNaturalDate(match[1], today),
@@ -300,7 +312,7 @@ const DATE_PATTERNS: DatePattern[] = [
   // 5. Marker + "tomorrow": "(by tomorrow)" or "by tomorrow"
   {
     regex: new RegExp(
-      `\\(?\\s*${markerPattern}\\s*:?\\s*(tomorrow)\\s*\\)?`,
+      `\\(?\\s*${markerBoundary}${markerPattern}${markerSeparator}(tomorrow)\\s*\\)?`,
       "i",
     ),
     parse: (_match, today) => addDaysToZoned(today, 1),
@@ -311,7 +323,7 @@ const DATE_PATTERNS: DatePattern[] = [
   //    "next" is accepted but not given distinct "+1 week" semantics.
   {
     regex: new RegExp(
-      `\\(?\\s*${markerPattern}\\s*:?\\s*(?:next\\s+)?(${dayNamePattern})\\s*\\)?`,
+      `\\(?\\s*${markerBoundary}${markerPattern}${markerSeparator}(?:next\\s+)?(${dayNamePattern})\\s*\\)?`,
       "i",
     ),
     parse: (match, today) => resolveNextDayOfWeek(match[1], today),
