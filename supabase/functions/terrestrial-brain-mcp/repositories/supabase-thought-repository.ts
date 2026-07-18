@@ -245,10 +245,13 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
   }
 
   async archive(id: string): Promise<RepoResult<void>> {
+    // Claim-style: skip already-archived rows so a retried archive preserves
+    // the original `archived_at`.
     const { error } = await this.supabase
       .from("thoughts")
       .update({ archived_at: new Date().toISOString() })
-      .eq("id", id);
+      .eq("id", id)
+      .is("archived_at", null);
     return { data: null, error: toRepoError(error) };
   }
 

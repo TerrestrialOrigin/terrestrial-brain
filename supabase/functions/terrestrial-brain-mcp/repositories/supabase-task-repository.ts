@@ -101,10 +101,13 @@ export class SupabaseTaskRepository implements TaskRepository {
   }
 
   async archive(id: string): Promise<RepoResult<void>> {
+    // Claim-style: skip already-archived rows so a retried archive preserves
+    // the original `archived_at` (matches `archiveIfActive`).
     const { error } = await this.supabase
       .from("tasks")
       .update({ archived_at: new Date().toISOString() })
-      .eq("id", id);
+      .eq("id", id)
+      .is("archived_at", null);
     return { data: null, error: toRepoError(error) };
   }
 
@@ -149,10 +152,13 @@ export class SupabaseTaskRepository implements TaskRepository {
   }
 
   async archiveMany(ids: string[]): Promise<RepoResult<void>> {
+    // Claim-style: skip already-archived rows so re-running the batch leaves
+    // previously-archived tasks' `archived_at` untouched.
     const { error } = await this.supabase
       .from("tasks")
       .update({ archived_at: new Date().toISOString() })
-      .in("id", ids);
+      .in("id", ids)
+      .is("archived_at", null);
     return { data: null, error: toRepoError(error) };
   }
 

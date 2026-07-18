@@ -176,6 +176,28 @@ async function resolveTaskNames(
 }
 
 /**
+ * Delete the task rows already inserted in a failed `create_tasks_with_output`
+ * call and report the outcome truthfully. Returns a note to append to the error
+ * message: a clean "Rolled back N …" when the compensating delete succeeds, or
+ * a WARNING naming the possibly-orphaned ids when the delete itself fails — it
+ * NEVER claims a rollback on a failed delete. Empty ids → empty note. Shared by
+ * both rollback sites (mid-loop insert failure and post-task ai_output failure)
+ * so their wording cannot drift (finding TOOL-3, Rule of Three).
+ */
+export async function rollbackInsertedTasks(
+  taskRepository: TaskRepository,
+  taskIds: string[],
+): Promise<string> {
+  if (taskIds.length === 0) return "";
+  const { error: rollbackError } = await taskRepository.deleteByIds(taskIds);
+  return rollbackError
+    ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${
+      taskIds.join(", ")
+    }.`
+    : ` Rolled back ${taskIds.length} already-inserted task(s).`;
+}
+
+/**
  * Insert task rows sequentially (so a subtask's parent_index resolves to the
  * already-inserted parent's DB id). On any insert failure, roll back the rows
  * already inserted in THIS call so a mid-loop failure never leaves orphans
@@ -213,17 +235,7 @@ export async function insertTasksAtomically(
     const { data, error } = await taskRepository.insert(insertValues);
 
     if (error || !data) {
-      let rollbackNote = "";
-      if (taskIds.length > 0) {
-        const { error: rollbackError } = await taskRepository.deleteByIds(
-          taskIds,
-        );
-        rollbackNote = rollbackError
-          ? ` WARNING: rollback of ${taskIds.length} already-inserted task(s) failed (${rollbackError.message}); these rows may be orphaned: ${
-            taskIds.join(", ")
-          }.`
-          : ` Rolled back ${taskIds.length} already-inserted task(s).`;
-      }
+      const rollbackNote = await rollbackInsertedTasks(taskRepository, taskIds);
       return {
         error: `Failed to create task "${task.content}": ${
           error?.message || "unknown"
@@ -431,6 +443,34 @@ export function register(
           return errorResult(parentError);
         }
 
+        // Idempotency (runs-twice / crashes-halfway / interleaves), finding
+        // TOOL-3:
+        //  - Runs twice? An at-least-once client retry re-issues this call
+        //    after the tasks were inserted but before the response arrived. We
+        //    refuse when tasks already exist for this file_path, so the retry
+        //    cannot double-insert a second set of rows.
+        //  - Crashes halfway? insertTasksAtomically rolls back a partial task
+        //    insert; a crash after the tasks but before the ai_output insert
+        //    leaves the tasks discoverable here by reference_id, so the retry
+        //    refuses rather than doubling.
+        //  - Interleaves? Two truly-simultaneous first calls for the same
+        //    file_path remain a narrow window (there is no DB unique constraint
+        //    on tasks.reference_id); accepted, because this human-triggered,
+        //    non-proactive tool is not invoked concurrently for one path.
+        const { data: existingForPath, error: existingError } =
+          await taskRepository.findByReference(file_path);
+        if (existingError) {
+          return errorResult(
+            `Failed to check for existing tasks at "${file_path}": ${existingError.message}`,
+          );
+        }
+        if (existingForPath && existingForPath.length > 0) {
+          return errorResult(
+            `Tasks for this file_path already exist (${existingForPath.length} task(s) with reference_id "${file_path}"). ` +
+              `This looks like a retry — delete the existing tasks first or use a different file_path.`,
+          );
+        }
+
         // Resolve display names, then insert the task rows atomically.
         const { projectNameMap, personNameMap } = await resolveTaskNames(
           supabase,
@@ -466,14 +506,17 @@ export function register(
             });
 
         if (outputError || !outputData) {
-          // Roll back orphaned task rows
-          if (taskIds.length > 0) {
-            await taskRepository.deleteByIds(taskIds);
-          }
+          // Roll back the inserted task rows and report the outcome truthfully
+          // — a failed rollback is a WARNING with the orphaned ids, never a
+          // false "rolled back" claim (finding TOOL-3).
+          const rollbackNote = await rollbackInsertedTasks(
+            taskRepository,
+            taskIds,
+          );
           return errorResult(
-            `Failed to create AI output (tasks rolled back): ${
+            `Failed to create AI output: ${
               outputError?.message || "unknown"
-            }`,
+            }.${rollbackNote}`,
           );
         }
 

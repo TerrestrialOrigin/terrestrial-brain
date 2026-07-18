@@ -72,18 +72,25 @@ export class SupabaseAiOutputRepository implements AiOutputRepository {
   }
 
   async markPickedUp(ids: string[]): Promise<RepoResult<void>> {
+    // Claim-style: only stamp rows not already picked up, so an at-least-once
+    // client retry is a no-op and never advances `picked_up_at` (which would
+    // re-surface an already-reported delivery in `get_recent_activity`).
     const { error } = await this.supabase
       .from("ai_output")
       .update({ picked_up: true, picked_up_at: new Date().toISOString() })
-      .in("id", ids);
+      .in("id", ids)
+      .eq("picked_up", false);
     return { data: null, error: toRepoError(error) };
   }
 
   async reject(ids: string[]): Promise<RepoResult<void>> {
+    // Claim-style: only stamp rows not already rejected, so a retried rejection
+    // does not re-stamp `rejected_at`.
     const { error } = await this.supabase
       .from("ai_output")
       .update({ rejected: true, rejected_at: new Date().toISOString() })
-      .in("id", ids);
+      .in("id", ids)
+      .eq("rejected", false);
     return { data: null, error: toRepoError(error) };
   }
 }

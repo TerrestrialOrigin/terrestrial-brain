@@ -1251,7 +1251,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - [x] Archived-rows retention & erasure — SQL-9 (`feature/ArchiveRetentionAndPurge`): 365-day retention cron + count/purge RPCs + confirm-gated `purge_archived` MCP tool + `scripts/purge-archived.sh`
 
 ## Phase C — Error honesty & concurrency (server)
-- [ ] 15. Rollback & idempotency (`bug/RollbackAndIdempotency`) — TOOL-3, REPO-5
+- [x] 15. Rollback & idempotency (`bug/RollbackAndIdempotency`) — TOOL-3, REPO-5
 - [ ] 16. Error surfacing sweep (`bug/ErrorSurfacingSweep`) — TOOL-4, TOOL-5, TOOL-12, TOOL-13, REPO-7
 - [ ] 17. update_thought concurrency (`bug/UpdateThoughtConcurrency`) — TOOL-6
 - [ ] 18. HTTP route validation (`feature/HttpRouteValidation`) — CORE-5, CORE-6, CORE-14, CORE-17, TOOL-15
