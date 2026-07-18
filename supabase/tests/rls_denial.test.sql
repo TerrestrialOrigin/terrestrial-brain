@@ -20,7 +20,7 @@
 --   WHERE n.nspname='public' ORDER BY p.proname;
 
 BEGIN;
-SELECT plan(47);
+SELECT plan(51);
 
 -- ─── Meta-assertion: every public policy is scoped to service_role ───────────
 SELECT is(
@@ -86,6 +86,8 @@ SELECT throws_ok('SELECT public.increment_usefulness_weighted(NULL::uuid[], NULL
 SELECT throws_ok('SELECT public.purge_function_call_logs(NULL::int)',         '42501', NULL, 'anon cannot EXECUTE purge_function_call_logs');
 SELECT throws_ok('SELECT public.get_pending_ai_output_metadata()',           '42501', NULL, 'anon cannot EXECUTE get_pending_ai_output_metadata');
 SELECT throws_ok('SELECT public.normalize_thought_project_refs(NULL::uuid)',  '42501', NULL, 'anon cannot EXECUTE normalize_thought_project_refs');
+SELECT throws_ok('SELECT public.count_archived_rows(NULL::text, NULL::date)', '42501', NULL, 'anon cannot EXECUTE count_archived_rows');
+SELECT throws_ok('SELECT public.purge_archived_rows(NULL::text, NULL::date)', '42501', NULL, 'anon cannot EXECUTE purge_archived_rows');
 
 RESET ROLE;
 
@@ -101,6 +103,8 @@ SELECT throws_ok('SELECT public.increment_usefulness_weighted(NULL::uuid[], NULL
 SELECT throws_ok('SELECT public.purge_function_call_logs(NULL::int)',         '42501', NULL, 'authenticated cannot EXECUTE purge_function_call_logs');
 SELECT throws_ok('SELECT public.get_pending_ai_output_metadata()',           '42501', NULL, 'authenticated cannot EXECUTE get_pending_ai_output_metadata');
 SELECT throws_ok('SELECT public.normalize_thought_project_refs(NULL::uuid)',  '42501', NULL, 'authenticated cannot EXECUTE normalize_thought_project_refs');
+SELECT throws_ok('SELECT public.count_archived_rows(NULL::text, NULL::date)', '42501', NULL, 'authenticated cannot EXECUTE count_archived_rows');
+SELECT throws_ok('SELECT public.purge_archived_rows(NULL::text, NULL::date)', '42501', NULL, 'authenticated cannot EXECUTE purge_archived_rows');
 
 RESET ROLE;
 

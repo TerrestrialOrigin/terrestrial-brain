@@ -388,6 +388,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      count_archived_rows: {
+        Args: { archived_on_or_before?: string; target_table?: string }
+        Returns: {
+          row_count: number
+          table_name: string
+        }[]
+      }
       get_pending_ai_output_metadata: {
         Args: { max_rows?: number }
         Returns: {
@@ -406,6 +413,13 @@ export type Database = {
       normalize_thought_project_refs: {
         Args: { target_id: string }
         Returns: undefined
+      }
+      purge_archived_rows: {
+        Args: { archived_on_or_before?: string; target_table?: string }
+        Returns: {
+          deleted_count: number
+          table_name: string
+        }[]
       }
       purge_function_call_logs: {
         Args: { retention_days?: number }
