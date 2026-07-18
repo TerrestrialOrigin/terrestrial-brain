@@ -1248,7 +1248,7 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - [x] 12. Bounded queries (`feature/BoundedQueries`) — SQL-3, REPO-1, TOOL-10
 - [x] 13. Prod script secrets & cron verification (`bug/ProdScriptsSecrets`) — SCRIPT-1, SQL-7
 - [x] 14. Dev stack hygiene (`feature/DevStackHygiene`) — SCRIPT-2..6
-- [ ] (decision needed) Archived-rows retention policy — SQL-9 (requires a user decision on the retention window before an opsx change is scoped)
+- [x] Archived-rows retention & erasure — SQL-9 (`feature/ArchiveRetentionAndPurge`): 365-day retention cron + count/purge RPCs + confirm-gated `purge_archived` MCP tool + `scripts/purge-archived.sh`
 
 ## Phase C — Error honesty & concurrency (server)
 - [ ] 15. Rollback & idempotency (`bug/RollbackAndIdempotency`) — TOOL-3, REPO-5

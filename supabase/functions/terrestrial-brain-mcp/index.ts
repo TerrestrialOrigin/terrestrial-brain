@@ -22,6 +22,7 @@ import {
 import { register as registerQueries } from "./tools/queries.ts";
 import { register as registerPeople } from "./tools/people.ts";
 import { register as registerDocuments } from "./tools/documents.ts";
+import { register as registerArchive } from "./tools/archive.ts";
 import {
   forgetNote,
   formatForgetOutcome,
@@ -57,6 +58,7 @@ import type { PersonRepository } from "./repositories/person-repository.ts";
 import type { DocumentRepository } from "./repositories/document-repository.ts";
 import type { AiOutputRepository } from "./repositories/ai-output-repository.ts";
 import type { NoteSnapshotRepository } from "./repositories/note-snapshot-repository.ts";
+import type { ArchiveMaintenanceRepository } from "./repositories/archive-maintenance-repository.ts";
 import type { QueryRepository } from "./repositories/query-repository.ts";
 import { SupabaseThoughtRepository } from "./repositories/supabase-thought-repository.ts";
 import { SupabaseTaskRepository } from "./repositories/supabase-task-repository.ts";
@@ -66,6 +68,7 @@ import { SupabaseDocumentRepository } from "./repositories/supabase-document-rep
 import { SupabaseAiOutputRepository } from "./repositories/supabase-ai-output-repository.ts";
 import { SupabaseNoteSnapshotRepository } from "./repositories/supabase-note-snapshot-repository.ts";
 import { SupabaseQueryRepository } from "./repositories/supabase-query-repository.ts";
+import { SupabaseArchiveMaintenanceRepository } from "./repositories/supabase-archive-maintenance-repository.ts";
 
 // Composition-root secrets: validated at cold start so a missing var fails the
 // boot loudly (named in the error) rather than surfacing later as broken auth or
@@ -102,6 +105,9 @@ const documentRepository = new SupabaseDocumentRepository(supabase);
 const aiOutputRepository = new SupabaseAiOutputRepository(supabase);
 const noteSnapshotRepository = new SupabaseNoteSnapshotRepository(supabase);
 const queryRepository = new SupabaseQueryRepository(supabase);
+const archiveMaintenanceRepository = new SupabaseArchiveMaintenanceRepository(
+  supabase,
+);
 // The single AiProvider seam (fix-plan Step 15). Constructed once here and
 // injected into consumers; the provider is stateless, so one instance is safe to
 // share across requests. The factory selects the live OpenRouter provider or the
@@ -140,6 +146,7 @@ function createMcpServer(
     aiOutput: AiOutputRepository;
     query: QueryRepository;
     noteSnapshot: NoteSnapshotRepository;
+    archiveMaintenance: ArchiveMaintenanceRepository;
   },
 ): McpServer {
   const server = new McpServer({
@@ -195,6 +202,7 @@ function createMcpServer(
     repos.noteSnapshot,
     repos.thought,
   );
+  registerArchive(server, callLogger, repos.archiveMaintenance);
 
   return server;
 }
@@ -534,6 +542,7 @@ app.all("*", async (context) => {
       aiOutput: aiOutputRepository,
       query: queryRepository,
       noteSnapshot: noteSnapshotRepository,
+      archiveMaintenance: archiveMaintenanceRepository,
     });
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
