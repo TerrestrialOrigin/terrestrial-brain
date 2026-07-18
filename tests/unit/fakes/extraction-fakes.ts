@@ -219,7 +219,7 @@ export class FakeTaskRepository implements TaskRepository {
   archiveMany() {
     return notImplemented("archiveMany");
   }
-  deleteByIds() {
+  deleteByIds(_ids: string[]): Promise<RepoResult<void>> {
     return notImplemented("deleteByIds");
   }
 }
