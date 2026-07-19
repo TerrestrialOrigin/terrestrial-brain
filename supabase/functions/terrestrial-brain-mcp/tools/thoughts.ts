@@ -11,11 +11,7 @@ import {
   resolveDedup,
 } from "../helpers.ts";
 import { parseNote } from "../parser.ts";
-import {
-  createDefaultExtractors,
-  partialExtractionWarning,
-  runExtractionPipeline,
-} from "../extractors/pipeline.ts";
+import { runExtractionForTool } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { AiQuotaGate, withAiQuota } from "../ai-quota.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
@@ -56,6 +52,24 @@ const RUBBER_STAMP_RATIO = 0.75;
 /** ISO timestamp `days` before now. */
 function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Advances the retrieval-recency signal for the given thoughts. Best-effort by
+ * design — a touch failure must never break the read that triggered it — but
+ * never silent: a failure is logged with the calling site so a broken
+ * `last_retrieved_at` update (which would slowly poison the stale/archival
+ * review queues) is diagnosable (TOOL-5). Shared by the three retrieval sites.
+ */
+export async function touchRetrievedLogged(
+  thoughtRepository: ThoughtRepository,
+  thoughtIds: string[],
+  contextLabel: string,
+): Promise<void> {
+  const { error } = await thoughtRepository.touchRetrieved(thoughtIds);
+  if (error) {
+    console.error(`${contextLabel} touchRetrieved error: ${error.message}`);
+  }
 }
 
 interface ThoughtUpdateFields {
@@ -309,7 +323,11 @@ export function register(
           // adjacent to where the model resumes generating.
           // Advance the retrieval-recency signal (best-effort; a touch failure
           // never breaks the read). Independent of usefulness recording.
-          await thoughtRepository.touchRetrieved(thoughtIds);
+          await touchRetrievedLogged(
+            thoughtRepository,
+            thoughtIds,
+            "search_thoughts",
+          );
 
           const header = buildUsefulnessHeader(thoughtIds, "hard");
           const footer = buildUsefulnessReminder(thoughtIds, "hard");
@@ -464,7 +482,11 @@ export function register(
 
         const thoughtIds = data.map((thought: { id: string }) => thought.id);
         // Advance retrieval recency (best-effort, non-fatal).
-        await thoughtRepository.touchRetrieved(thoughtIds);
+        await touchRetrievedLogged(
+          thoughtRepository,
+          thoughtIds,
+          "list_thoughts",
+        );
         const header = buildUsefulnessHeader(thoughtIds, "soft");
         const footer = buildUsefulnessReminder(thoughtIds, "soft");
 
@@ -565,7 +587,11 @@ export function register(
 
       // Advance retrieval recency (best-effort, non-fatal) — independent of the
       // usefulness auto-record below.
-      await thoughtRepository.touchRetrieved([data.id]);
+      await touchRetrievedLogged(
+        thoughtRepository,
+        [data.id],
+        "get_thought_by_id",
+      );
 
       // A fetch by ID implies the caller found the thought useful — auto-record
       // so the model doesn't need to make a separate record_useful_thoughts call.
@@ -668,40 +694,30 @@ export function register(
       withAiQuota(
         quotaGate,
         async ({ content, author, project_ids, document_ids, builds_on }) => {
-          // Run structural parser + extractor pipeline
-          let references: Record<string, string[]> = {};
-          let extractionWarning = "";
-          try {
-            const parsedNote = parseNote(content, null, null, "mcp");
-            const outcome = await runExtractionPipeline(
-              parsedNote,
-              createDefaultExtractors(),
+          // Run structural parser + extractor pipeline (shared wrapper owns
+          // the try/abort/warn logic — TOOL-12).
+          const extractionRun = await runExtractionForTool({
+            parse: () => parseNote(content, null, null, "mcp"),
+            deps: {
               supabase,
               aiProvider,
               taskRepository,
               projectRepository,
               personRepository,
-            );
-            if (!outcome.ok) {
-              // A seed read failed: proceeding would risk duplicate task/project
-              // writes, so abort and write nothing (EXTR-2).
-              return errorResult(
-                `Capture aborted — could not read existing references ` +
-                  `(${outcome.error}). No thought was written to avoid ` +
-                  `duplicates; please retry.`,
-              );
-            }
-            references = outcome.references;
-            if (outcome.errors.length > 0) {
-              extractionWarning = partialExtractionWarning(outcome.errors);
-            }
-          } catch (pipelineError) {
-            console.error(
-              `capture_thought pipeline error: ${
-                (pipelineError as Error).message
-              }`,
+            },
+            site: "capture_thought",
+          });
+          if (extractionRun.status === "aborted") {
+            // A seed read failed: proceeding would risk duplicate task/project
+            // writes, so abort and write nothing (EXTR-2).
+            return errorResult(
+              `Capture aborted — could not read existing references ` +
+                `(${extractionRun.reason}). No thought was written to avoid ` +
+                `duplicates; please retry.`,
             );
           }
+          let references = extractionRun.references;
+          const extractionWarning = extractionRun.warning;
 
           // Merge explicit project_ids with pipeline-detected projects (union, deduplicated)
           if (project_ids && project_ids.length > 0) {
@@ -1420,6 +1436,13 @@ export async function executeReconciliationPlan(
   }
 
   const results = await Promise.allSettled(ops);
+  // Log every rejection reason (ids + error messages only, never note content)
+  // so a recurring "N failed" sync is diagnosable from logs (TOOL-13).
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error(`reconciliation op failure: ${String(result.reason)}`);
+    }
+  }
   const failures =
     results.filter((result) => result.status === "rejected").length;
   return { updated, added, deleted, failures, opsLength: ops.length };
@@ -1502,42 +1525,30 @@ export async function handleIngestNote(
       content,
     );
 
-    const parsedNote = parseNote(
-      content,
-      title || null,
-      note_id || null,
-      "obsidian",
-    );
-
-    let references: Record<string, string[]> = {};
-    let extractionWarning = "";
-    try {
-      const outcome = await runExtractionPipeline(
-        parsedNote,
-        createDefaultExtractors(),
+    const extractionRun = await runExtractionForTool({
+      parse: () =>
+        parseNote(content, title || null, note_id || null, "obsidian"),
+      deps: {
         supabase,
         aiProvider,
         taskRepository,
         projectRepository,
         personRepository,
-      );
-      if (!outcome.ok) {
-        // A seed read failed: aborting avoids duplicate task/project writes on a
-        // transient DB error during re-ingest (EXTR-2). Nothing has been written.
-        return {
-          success: false,
-          error:
-            `Sync aborted — could not read existing references (${outcome.error}). ` +
-            `No thoughts or tasks were written to avoid duplicates; please retry.`,
-        };
-      }
-      references = outcome.references;
-      extractionWarning = partialExtractionWarning(outcome.errors);
-    } catch (pipelineError) {
-      console.error(
-        `Extractor pipeline error: ${(pipelineError as Error).message}`,
-      );
+      },
+      site: "ingest_note",
+    });
+    if (extractionRun.status === "aborted") {
+      // A seed read failed: aborting avoids duplicate task/project writes on a
+      // transient DB error during re-ingest (EXTR-2). Nothing has been written.
+      return {
+        success: false,
+        error:
+          `Sync aborted — could not read existing references (${extractionRun.reason}). ` +
+          `No thoughts or tasks were written to avoid duplicates; please retry.`,
+      };
     }
+    const references = extractionRun.references;
+    const extractionWarning = extractionRun.warning;
 
     // Fresh split + insert, used for both "no existing thoughts" and the
     // unparseable-plan fallback below.

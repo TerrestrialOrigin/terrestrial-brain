@@ -6,6 +6,7 @@ import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { hashContent } from "../helpers.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import { UNAVAILABLE_MARKER } from "./section-format.ts";
 import { PROJECT_TYPES } from "../enums.ts";
 import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import type { ProjectRepository } from "../repositories/project-repository.ts";
@@ -117,6 +118,218 @@ export async function wouldCreateProjectCycle(
   return { cycle: false };
 }
 
+/** Arguments accepted by `handleListProjects` (mirrors the tool schema —
+ * `include_archived` and `limit` carry zod defaults, so they always arrive). */
+export interface ListProjectsArgs {
+  include_archived: boolean;
+  parent_id?: string;
+  type?: (typeof PROJECT_TYPES)[number];
+  limit: number;
+}
+
+/**
+ * list_projects handler, extracted so it can run against fake repositories and
+ * a fake name resolver — no database, no network (TOOL-4).
+ */
+export async function handleListProjects(
+  projectRepository: ProjectRepository,
+  resolveParentNames: (ids: string[]) => Promise<Map<string, string>>,
+  { include_archived, parent_id, type, limit }: ListProjectsArgs,
+) {
+  const { data: rows, error } = await projectRepository.list({
+    includeArchived: include_archived,
+    parentId: parent_id,
+    type,
+    limit,
+  });
+
+  if (error) {
+    return errorResult(`Error: ${error.message}`);
+  }
+
+  if (!rows || rows.length === 0) {
+    return textResult("No projects found.", { recordsReturned: 0 });
+  }
+
+  // The repository fetches `limit + 1` so we can distinguish "exactly
+  // full" from "more exist" and report truncation explicitly.
+  const truncated = rows.length > limit;
+  const data = truncated ? rows.slice(0, limit) : rows;
+
+  // Get parent names for display (shared batched resolver).
+  const parentIds = data
+    .filter((project) => project.parent_id)
+    .map((project) => project.parent_id as string);
+  const parentMap = parentIds.length > 0
+    ? await resolveParentNames(parentIds)
+    : new Map<string, string>();
+
+  // Get child counts. A failed lookup keeps the listing usable but must be
+  // visible — silently-missing child counts would read as "no children"
+  // (TOOL-4).
+  const projectIds = data.map((project) => project.id);
+  const { data: children, error: childrenError } = await projectRepository
+    .listChildParentIds(projectIds);
+  if (childrenError) {
+    console.error(
+      `list_projects listChildParentIds error: ${childrenError.message}`,
+    );
+  }
+  const childCounts: Record<string, number> = {};
+  for (const child of children || []) {
+    // The query filters on `parent_id IN (…)`, so it is never null here;
+    // the guard satisfies the schema-nullable type.
+    if (child.parent_id) {
+      childCounts[child.parent_id] = (childCounts[child.parent_id] || 0) +
+        1;
+    }
+  }
+
+  const lines = data.map((project, i) => {
+    const parts = [
+      `${i + 1}. ${project.name}`,
+      `   ID: ${project.id}`,
+      `   Type: ${project.type || "—"}`,
+    ];
+    if (project.parent_id && parentMap.get(project.parent_id)) {
+      parts.push(`   Parent: ${parentMap.get(project.parent_id)}`);
+    }
+    if (childCounts[project.id]) {
+      parts.push(`   Children: ${childCounts[project.id]}`);
+    }
+    parts.push(
+      `   Created: ${
+        project.created_at
+          ? new Date(project.created_at).toLocaleDateString()
+          : "—"
+      }`,
+    );
+    if (project.archived_at) {
+      parts.push(
+        `   Archived: ${new Date(project.archived_at).toLocaleDateString()}`,
+      );
+    }
+    return parts.join("\n");
+  });
+
+  const truncationNote = truncated
+    ? `\n\n⚠️ Showing the first ${limit} projects; more exist. ` +
+      `Filter by type/parent or raise \`limit\` (max ${MAX_QUERY_LIMIT}) to see more.`
+    : "";
+
+  const childCountNote = childrenError
+    ? `\n\n⚠️ Child counts unavailable (lookup failed).`
+    : "";
+
+  return textResult(
+    `${data.length} project(s):\n\n${
+      lines.join("\n\n")
+    }${truncationNote}${childCountNote}`,
+    { recordsReturned: data.length },
+  );
+}
+
+/**
+ * get_project handler, extracted so it can run against fake repositories —
+ * no database, no network (TOOL-4).
+ */
+export async function handleGetProject(
+  projectRepository: ProjectRepository,
+  taskRepository: TaskRepository,
+  id: string,
+) {
+  const { data: project, error } = await projectRepository.findById(id);
+
+  // Unified not-found convention: a missing row on a read is data, not a
+  // tool failure. `findById` uses `.single()`, so a miss surfaces as the
+  // PGRST116 "no rows" code (mirrors get_thought_by_id / get_document).
+  if (error && error.code !== "PGRST116") {
+    return errorResult(`Error: ${error.message}`);
+  }
+  if (!project) {
+    return textResult(`No project found with ID "${id}".`, {
+      recordsReturned: 0,
+    });
+  }
+
+  // Auxiliary lookups: the project itself loaded fine, so a failed sub-lookup
+  // renders an explicit unavailable marker instead of masquerading as an empty
+  // value — a failed count must never read as 0 (TOOL-4).
+  let parentName = null;
+  let parentUnavailable = false;
+  if (project.parent_id) {
+    const { data: parent, error: parentError } = await projectRepository
+      .findName(project.parent_id);
+    if (parentError) {
+      console.error(`get_project findName error: ${parentError.message}`);
+      parentUnavailable = true;
+    }
+    parentName = parent?.name;
+  }
+
+  const { data: children, error: childrenError } = await projectRepository
+    .listChildrenBasic(id);
+  if (childrenError) {
+    console.error(
+      `get_project listChildrenBasic error: ${childrenError.message}`,
+    );
+  }
+
+  const { data: taskCount, error: taskCountError } = await taskRepository
+    .countOpenByProject(id);
+  if (taskCountError) {
+    console.error(
+      `get_project countOpenByProject error: ${taskCountError.message}`,
+    );
+  }
+
+  const lines = [
+    `Name: ${project.name}`,
+    `ID: ${project.id}`,
+    `Type: ${project.type || "—"}`,
+    `Description: ${project.description || "—"}`,
+  ];
+  if (parentUnavailable) {
+    lines.push(`Parent: ${UNAVAILABLE_MARKER}`);
+  } else if (parentName) {
+    lines.push(`Parent: ${parentName} (${project.parent_id})`);
+  }
+  if (childrenError) {
+    lines.push(`Children: ${UNAVAILABLE_MARKER}`);
+  } else if (children && children.length > 0) {
+    lines.push(
+      `Children: ${
+        children.map((child) => `${child.name} (${child.type || "—"})`)
+          .join(", ")
+      }`,
+    );
+  }
+  lines.push(
+    `Open tasks: ${taskCountError ? UNAVAILABLE_MARKER : taskCount ?? 0}`,
+  );
+  lines.push(
+    `Created: ${
+      project.created_at
+        ? new Date(project.created_at).toLocaleDateString()
+        : "—"
+    }`,
+  );
+  lines.push(
+    `Updated: ${
+      project.updated_at
+        ? new Date(project.updated_at).toLocaleDateString()
+        : "—"
+    }`,
+  );
+  if (project.archived_at) {
+    lines.push(
+      `Archived: ${new Date(project.archived_at).toLocaleDateString()}`,
+    );
+  }
+
+  return textResult(lines.join("\n"), { recordsReturned: 1 });
+}
+
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
@@ -195,91 +408,12 @@ export function register(
     },
     withMcpLogging(
       "list_projects",
-      async ({ include_archived, parent_id, type, limit }) => {
-        const { data: rows, error } = await projectRepository.list({
-          includeArchived: include_archived,
-          parentId: parent_id,
-          type,
-          limit,
-        });
-
-        if (error) {
-          return errorResult(`Error: ${error.message}`);
-        }
-
-        if (!rows || rows.length === 0) {
-          return textResult("No projects found.", { recordsReturned: 0 });
-        }
-
-        // The repository fetches `limit + 1` so we can distinguish "exactly
-        // full" from "more exist" and report truncation explicitly.
-        const truncated = rows.length > limit;
-        const data = truncated ? rows.slice(0, limit) : rows;
-
-        // Get parent names for display (shared batched resolver).
-        const parentIds = data
-          .filter((project) => project.parent_id)
-          .map((project) => project.parent_id as string);
-        const parentMap = parentIds.length > 0
-          ? await resolveNames(supabase, "projects", parentIds)
-          : new Map<string, string>();
-
-        // Get child counts
-        const projectIds = data.map((project) => project.id);
-        const { data: children } = await projectRepository.listChildParentIds(
-          projectIds,
-        );
-        const childCounts: Record<string, number> = {};
-        for (const child of children || []) {
-          // The query filters on `parent_id IN (…)`, so it is never null here;
-          // the guard satisfies the schema-nullable type.
-          if (child.parent_id) {
-            childCounts[child.parent_id] = (childCounts[child.parent_id] || 0) +
-              1;
-          }
-        }
-
-        const lines = data.map((project, i) => {
-          const parts = [
-            `${i + 1}. ${project.name}`,
-            `   ID: ${project.id}`,
-            `   Type: ${project.type || "—"}`,
-          ];
-          if (project.parent_id && parentMap.get(project.parent_id)) {
-            parts.push(`   Parent: ${parentMap.get(project.parent_id)}`);
-          }
-          if (childCounts[project.id]) {
-            parts.push(`   Children: ${childCounts[project.id]}`);
-          }
-          parts.push(
-            `   Created: ${
-              project.created_at
-                ? new Date(project.created_at).toLocaleDateString()
-                : "—"
-            }`,
-          );
-          if (project.archived_at) {
-            parts.push(
-              `   Archived: ${
-                new Date(project.archived_at).toLocaleDateString()
-              }`,
-            );
-          }
-          return parts.join("\n");
-        });
-
-        const truncationNote = truncated
-          ? `\n\n⚠️ Showing the first ${limit} projects; more exist. ` +
-            `Filter by type/parent or raise \`limit\` (max ${MAX_QUERY_LIMIT}) to see more.`
-          : "";
-
-        return textResult(
-          `${data.length} project(s):\n\n${
-            lines.join("\n\n")
-          }${truncationNote}`,
-          { recordsReturned: data.length },
-        );
-      },
+      (args) =>
+        handleListProjects(
+          projectRepository,
+          (ids) => resolveNames(supabase, "projects", ids),
+          args,
+        ),
       logger,
     ),
   );
@@ -296,76 +430,11 @@ export function register(
         id: uuidField().describe("Project UUID"),
       },
     },
-    withMcpLogging("get_project", async ({ id }) => {
-      const { data: project, error } = await projectRepository.findById(id);
-
-      // Unified not-found convention: a missing row on a read is data, not a
-      // tool failure. `findById` uses `.single()`, so a miss surfaces as the
-      // PGRST116 "no rows" code (mirrors get_thought_by_id / get_document).
-      if (error && error.code !== "PGRST116") {
-        return errorResult(`Error: ${error.message}`);
-      }
-      if (!project) {
-        return textResult(`No project found with ID "${id}".`, {
-          recordsReturned: 0,
-        });
-      }
-
-      // Get parent name
-      let parentName = null;
-      if (project.parent_id) {
-        const { data: parent } = await projectRepository.findName(
-          project.parent_id,
-        );
-        parentName = parent?.name;
-      }
-
-      // Get children
-      const { data: children } = await projectRepository.listChildrenBasic(id);
-
-      // Get open task count
-      const { data: taskCount } = await taskRepository.countOpenByProject(id);
-
-      const lines = [
-        `Name: ${project.name}`,
-        `ID: ${project.id}`,
-        `Type: ${project.type || "—"}`,
-        `Description: ${project.description || "—"}`,
-      ];
-      if (parentName) {
-        lines.push(`Parent: ${parentName} (${project.parent_id})`);
-      }
-      if (children && children.length > 0) {
-        lines.push(
-          `Children: ${
-            children.map((child) => `${child.name} (${child.type || "—"})`)
-              .join(", ")
-          }`,
-        );
-      }
-      lines.push(`Open tasks: ${taskCount || 0}`);
-      lines.push(
-        `Created: ${
-          project.created_at
-            ? new Date(project.created_at).toLocaleDateString()
-            : "—"
-        }`,
-      );
-      lines.push(
-        `Updated: ${
-          project.updated_at
-            ? new Date(project.updated_at).toLocaleDateString()
-            : "—"
-        }`,
-      );
-      if (project.archived_at) {
-        lines.push(
-          `Archived: ${new Date(project.archived_at).toLocaleDateString()}`,
-        );
-      }
-
-      return textResult(lines.join("\n"), { recordsReturned: 1 });
-    }, logger),
+    withMcpLogging(
+      "get_project",
+      ({ id }) => handleGetProject(projectRepository, taskRepository, id),
+      logger,
+    ),
   );
 
   server.registerTool(

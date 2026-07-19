@@ -5,6 +5,14 @@
 // differently: a failed query is logged and shown as an explicit unavailable
 // marker; a successful-empty query shows its normal empty-state prose.
 
+/**
+ * Inline marker for a single failed auxiliary value (a count, a name) inside an
+ * otherwise-successful entity read — the value-level sibling of the
+ * `(section unavailable: …)` section marker. A failed count must never render
+ * as `0` (TOOL-4).
+ */
+export const UNAVAILABLE_MARKER = "? (lookup failed)";
+
 /** The `{ data, error }` shape returned by a supabase-js query. */
 export interface SupabaseResult<Row> {
   data: Row[] | null;

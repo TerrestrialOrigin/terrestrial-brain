@@ -3,11 +3,7 @@ import { z } from "zod";
 import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { parseNote } from "../parser.ts";
-import {
-  createDefaultExtractors,
-  partialExtractionWarning,
-  runExtractionPipeline,
-} from "../extractors/pipeline.ts";
+import { runExtractionForTool } from "../extractors/pipeline.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { hashContent } from "../helpers.ts";
@@ -75,36 +71,30 @@ export function register(
         let extractionWarning = "";
 
         // Auto-extract references using the existing extraction pipeline
+        // (shared wrapper owns the try/abort/warn logic — TOOL-12).
         if (!references) {
-          try {
-            const parsedNote = parseNote(content, title, null, "mcp");
-            const outcome = await runExtractionPipeline(
-              parsedNote,
-              createDefaultExtractors(),
+          const extractionRun = await runExtractionForTool({
+            parse: () => parseNote(content, title, null, "mcp"),
+            deps: {
               supabase,
               aiProvider,
               taskRepository,
               projectRepository,
               personRepository,
+            },
+            site: "write_document",
+            thrownReferences: { people: [], tasks: [] },
+          });
+          if (extractionRun.status === "aborted") {
+            // Seed read failed: abort rather than store a document whose
+            // extraction may have created duplicate tasks/projects (EXTR-2).
+            return errorResult(
+              `Document not stored — reference extraction could not read ` +
+                `existing state (${extractionRun.reason}). Please retry.`,
             );
-            if (!outcome.ok) {
-              // Seed read failed: abort rather than store a document whose
-              // extraction may have created duplicate tasks/projects (EXTR-2).
-              return errorResult(
-                `Document not stored — reference extraction could not read ` +
-                  `existing state (${outcome.error}). Please retry.`,
-              );
-            }
-            resolvedReferences = outcome.references;
-            extractionWarning = partialExtractionWarning(outcome.errors);
-          } catch (pipelineError) {
-            console.error(
-              `write_document extraction pipeline error: ${
-                (pipelineError as Error).message
-              }`,
-            );
-            resolvedReferences = { people: [], tasks: [] };
           }
+          resolvedReferences = extractionRun.references;
+          extractionWarning = extractionRun.warning;
         }
 
         const { data, error } = await documentRepository.insert({
@@ -354,37 +344,30 @@ export function register(
         let contentWarning = "";
         if (content !== undefined) {
           const effectiveTitle = title ?? existing.title;
-          try {
-            const parsedNote = parseNote(content, effectiveTitle, null, "mcp");
-            const outcome = await runExtractionPipeline(
-              parsedNote,
-              createDefaultExtractors(),
+          const extractionRun = await runExtractionForTool({
+            parse: () => parseNote(content, effectiveTitle, null, "mcp"),
+            deps: {
               supabase,
               aiProvider,
               taskRepository,
               projectRepository,
               personRepository,
+            },
+            site: "update_document",
+            thrownReferences: { people: [], tasks: [] },
+            thrownWarning:
+              " (warning: reference extraction failed — references reset to empty)",
+          });
+          if (extractionRun.status === "aborted") {
+            // Seed read failed: abort BEFORE the update so we neither store
+            // wrong references nor risk duplicate task/project writes (EXTR-2).
+            return errorResult(
+              `Update aborted — reference extraction could not read existing ` +
+                `state (${extractionRun.reason}). The document was not changed; retry.`,
             );
-            if (!outcome.ok) {
-              // Seed read failed: abort BEFORE the update so we neither store
-              // wrong references nor risk duplicate task/project writes (EXTR-2).
-              return errorResult(
-                `Update aborted — reference extraction could not read existing ` +
-                  `state (${outcome.error}). The document was not changed; retry.`,
-              );
-            }
-            updates.references = outcome.references;
-            contentWarning = partialExtractionWarning(outcome.errors);
-          } catch (pipelineError) {
-            console.error(
-              `update_document extraction pipeline error: ${
-                (pipelineError as Error).message
-              }`,
-            );
-            updates.references = { people: [], tasks: [] };
-            contentWarning =
-              " (warning: reference extraction failed — references reset to empty)";
           }
+          updates.references = extractionRun.references;
+          contentWarning = extractionRun.warning;
         }
 
         // Perform the update FIRST — before touching any thoughts.

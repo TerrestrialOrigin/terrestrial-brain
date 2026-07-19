@@ -276,6 +276,16 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
     }),
   );
 
+  // Log every rejection reason (error messages only, never note content) so a
+  // recurring ingest failure is diagnosable from logs (TOOL-13).
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error(
+        `freshIngest thought-insert failure: ${String(result.reason)}`,
+      );
+    }
+  }
+
   const succeeded =
     results.filter((result) => result.status === "fulfilled").length;
   const failed =

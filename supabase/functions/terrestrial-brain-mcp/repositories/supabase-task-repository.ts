@@ -126,7 +126,11 @@ export class SupabaseTaskRepository implements TaskRepository {
       .select("*", { count: "exact", head: true })
       .eq("project_id", projectId)
       .in("status", ["open", "in_progress"]);
-    return { data: count ?? 0, error: toRepoError(error) };
+    // A failed count must keep `data` null — `data: 0` alongside an error would
+    // make "broken" indistinguishable from "genuinely zero" (REPO-7).
+    return error
+      ? { data: null, error: toRepoError(error) }
+      : { data: count ?? 0, error: null };
   }
 
   async countOpenByAssignee(personId: string): Promise<RepoResult<number>> {
@@ -136,7 +140,10 @@ export class SupabaseTaskRepository implements TaskRepository {
       .eq("assigned_to", personId)
       .in("status", ["open", "in_progress"])
       .is("archived_at", null);
-    return { data: count ?? 0, error: toRepoError(error) };
+    // Same broken-vs-zero rule as countOpenByProject (REPO-7).
+    return error
+      ? { data: null, error: toRepoError(error) }
+      : { data: count ?? 0, error: null };
   }
 
   async findOpenIdsByProjects(
