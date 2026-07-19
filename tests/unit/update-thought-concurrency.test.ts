@@ -3,14 +3,13 @@ import { handleUpdateThought } from "../../supabase/functions/terrestrial-brain-
 import { SupabaseThoughtRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-thought-repository.ts";
 import { FakeAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/fake-provider.ts";
 import { makeFakeClient } from "./fake-supabase-client.ts";
+import { fakeThoughtRepository } from "./fakes/repository-fakes.ts";
 import type { ThoughtRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/thought-repository.ts";
 
 // Step 17 (update-thought-concurrency, TOOL-6): update_thought's
 // read-modify-write must carry an optimistic-concurrency guard so an
 // interleaved edit is rejected with a retryable error instead of silently
 // losing the first writer's fields. Fakes sit only on the repository seam.
-
-const notImpl = () => Promise.reject(new Error("not implemented"));
 
 const READ_UPDATED_AT = "2026-07-19T10:00:00.123456+00:00";
 
@@ -32,20 +31,8 @@ function fakeRepoForHandler(
     metadata: {},
     updated_at: READ_UPDATED_AT,
   };
-  const repo: ThoughtRepository = {
-    matchByEmbedding: notImpl,
-    list: notImpl,
-    stats: notImpl,
-    findById: notImpl,
+  const repo: ThoughtRepository = fakeThoughtRepository({
     findForUpdate: () => Promise.resolve({ data: forUpdateRow, error: null }),
-    findActiveById: notImpl,
-    findByReference: notImpl,
-    findByContentHash: notImpl,
-    findStale: notImpl,
-    findArchivalCandidates: notImpl,
-    setSupersededBy: notImpl,
-    touchRetrieved: notImpl,
-    insert: notImpl,
     update: (
       id: string,
       payload: Record<string, unknown>,
@@ -54,12 +41,7 @@ function fakeRepoForHandler(
       updates.push({ id, payload, options });
       return Promise.resolve({ data: updateResult, error: null });
     },
-    archive: notImpl,
-    archiveByDocumentReference: notImpl,
-    incrementUsefulness: notImpl,
-    incrementUsefulnessWeighted: notImpl,
-    deleteByNoteSnapshot: notImpl,
-  };
+  });
   return { repo, updates };
 }
 

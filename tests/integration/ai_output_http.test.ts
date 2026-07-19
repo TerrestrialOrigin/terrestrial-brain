@@ -177,6 +177,41 @@ Deno.test("HTTP: /fetch-ai-output-content returns empty for rejected IDs", async
 });
 
 // ---------------------------------------------------------------------------
+// Request-envelope validation (Step 18 — CORE-5/CORE-6)
+// ---------------------------------------------------------------------------
+
+Deno.test("HTTP: retried pickup reports 0 outputs updated, not the request size", async () => {
+  // httpTestOutputId was already marked picked up above; the claim-style
+  // filter updates nothing on a retry and the message must say so.
+  const { status, body } = await callHTTP("mark-ai-output-picked-up", {
+    ids: [httpTestOutputId],
+  });
+  assertEquals(status, 200);
+  assertEquals(body.success, true);
+  assertEquals(body.message, "Marked 0 outputs as picked up.");
+});
+
+Deno.test("HTTP: a non-UUID ids element returns 400", async () => {
+  const { status, body } = await callHTTP("fetch-ai-output-content", {
+    ids: ["not-a-uuid"],
+  });
+  assertEquals(status, 400);
+  assertEquals(body.success, false);
+});
+
+Deno.test("HTTP: malformed JSON returns 400, not 500", async () => {
+  const { httpUrl } = await import("../helpers/mcp-client.ts");
+  const response = await fetch(httpUrl("ingest-note"), {
+    method: "POST",
+    headers: mcpHeaders({ "Content-Type": "application/json" }),
+    body: "{not json",
+  });
+  assertEquals(response.status, 400);
+  const body = await response.json();
+  assertEquals(body.error, "Invalid JSON body");
+});
+
+// ---------------------------------------------------------------------------
 // Auth tests for HTTP endpoints
 // ---------------------------------------------------------------------------
 

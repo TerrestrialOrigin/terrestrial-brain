@@ -38,6 +38,19 @@ All are `POST`, JSON in/out, and share the auth above. Success responses are
 | `/mark-ai-output-picked-up` | `{ ids: string[] }` | `{ success, message }` |
 | `/reject-ai-output` | `{ ids: string[] }` | `{ success, message }` |
 
+Request bodies are schema-validated at the dispatcher (Step 18):
+
+- Malformed JSON returns `400 { "success": false, "error": "Invalid JSON body" }` (previously a 500).
+- `ids` must be 1–100 UUID strings; a missing/non-array value keeps the legacy
+  `"ids array is required"` message, and non-UUID elements or an oversized array
+  are rejected with 400 before any database call.
+- Routes are matched only at exactly `<function-base>/<route>`; nested paths fall
+  through to the MCP transport.
+- `mark-ai-output-picked-up` / `reject-ai-output` messages count the rows
+  **actually updated** — a retried (already-processed) pickup reports
+  `"Marked 0 outputs as picked up."` rather than echoing the request size. Treat
+  a 200 with a 0-count as "already done", not as an error.
+
 ## MCP endpoint
 
 `POST` to the base URL with a JSON-RPC 2.0 body (`Accept: application/json, text/event-stream`).
