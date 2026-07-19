@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import type { NoteSnapshotRepository } from "../repositories/note-snapshot-repository.ts";
 import type { ThoughtRepository } from "../repositories/thought-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 // ─── forget_note — GDPR right-to-erasure pathway (fix-plan Step 25, X7) ───────
 // Permanently erases a note's backend footprint: the derived thoughts first,
@@ -75,10 +76,12 @@ export function formatForgetOutcome(
 
 export function register(
   server: McpServer,
-  logger: FunctionCallLogger,
-  noteSnapshotRepository: NoteSnapshotRepository,
-  thoughtRepository: ThoughtRepository,
+  deps: Pick<
+    ToolDeps,
+    "logger" | "noteSnapshotRepository" | "thoughtRepository"
+  >,
 ) {
+  const { logger, noteSnapshotRepository, thoughtRepository } = deps;
   server.registerTool(
     "forget_note",
     {

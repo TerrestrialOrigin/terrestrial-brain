@@ -1,12 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
+import { computeSimilarity } from "../../supabase/functions/terrestrial-brain-mcp/extractors/similarity.ts";
 import {
-  computeSimilarity,
-  extractAssignment,
   greedyMatch,
   reconcileCheckboxesForTest,
   type ScoredPair,
   stripMarkersForComparison,
-} from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
+} from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-reconciliation.ts";
+import { extractAssignment } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
 
 // Pure, deterministic reconciliation-helper unit tests. No DB, no network, no
 // LLM. Covers the exported greedyMatch assignment helper, the LCS prefilter

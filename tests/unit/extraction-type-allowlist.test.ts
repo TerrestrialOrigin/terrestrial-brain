@@ -6,10 +6,13 @@
 // test is real. `coerceThoughtType` (helpers.ts) now validates the model's type
 // against the `THOUGHT_TYPES` allowlist and degrades out-of-allowlist / missing
 // types to the documented `observation` fallback — these assert that behavior.
+//
+// Moved from tests/integration/lifecycle/ (TEST-14): everything runs in-process
+// against fakes — nothing touches the running stack — so it is a unit test.
 
 import { assertEquals } from "@std/assert";
-import { extractMetadata } from "../../../supabase/functions/terrestrial-brain-mcp/helpers.ts";
-import { FakeAiProvider } from "../../unit/fakes/extraction-fakes.ts";
+import { extractMetadata } from "../../supabase/functions/terrestrial-brain-mcp/helpers.ts";
+import { FakeAiProvider } from "./fakes/extraction-fakes.ts";
 
 function providerReturning(raw: unknown): FakeAiProvider {
   return new FakeAiProvider(() => raw);

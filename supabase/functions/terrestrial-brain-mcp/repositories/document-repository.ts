@@ -4,7 +4,7 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
-import type { Row } from "../supabase-client.ts";
+import type { Row, UpdateRow } from "../supabase-client.ts";
 
 /** The identity returned by an insert. */
 export type DocumentInsertRow = Pick<
@@ -42,6 +42,14 @@ export interface NewDocumentValues {
   references: Record<string, string[]>;
 }
 
+/**
+ * A partial update payload for a document, derived from the generated schema so
+ * a misspelled column is a compile error (REPO-4). The jsonb `references`
+ * column accepts the caller-built `Record<string, string[]>` directly (it is a
+ * valid `Json` object shape).
+ */
+export type DocumentUpdate = Partial<UpdateRow<"documents">>;
+
 export interface DocumentListFilters {
   limit: number;
   projectId?: string;
@@ -65,6 +73,6 @@ export interface DocumentRepository {
   /** Apply a partial update to a document. */
   update(
     id: string,
-    updates: Record<string, unknown>,
+    updates: DocumentUpdate,
   ): Promise<RepoResult<void>>;
 }

@@ -19,13 +19,9 @@ import {
   HttpRouteDeps,
   matchHttpRoute,
 } from "./http-routes.ts";
-import {
-  createFunctionCallLogger,
-  extractIpAddress,
-  FunctionCallLogger,
-} from "./logger.ts";
+import { createFunctionCallLogger, extractIpAddress } from "./logger.ts";
 import { runWithRequestContext } from "./requestContext.ts";
-import { requireEnv } from "./env.ts";
+import { getConfiguredTimeZone, requireEnv } from "./env.ts";
 import {
   buildCorsOptions,
   isKeyInQueryAllowed,
@@ -33,8 +29,6 @@ import {
   resolveProvidedKey,
 } from "./security-config.ts";
 import type { Database } from "./database.types.ts";
-import type { AppSupabaseClient } from "./supabase-client.ts";
-import type { AiProvider } from "./ai/ai-provider.ts";
 import { createAiProvider } from "./ai/factory.ts";
 import {
   AI_METERED_FUNCTIONS,
@@ -42,15 +36,9 @@ import {
 } from "./metering-config.ts";
 import { SupabaseUsageMeter } from "./usage-meter.ts";
 import { AiQuotaGate } from "./ai-quota.ts";
-import type { ThoughtRepository } from "./repositories/thought-repository.ts";
-import type { TaskRepository } from "./repositories/task-repository.ts";
-import type { ProjectRepository } from "./repositories/project-repository.ts";
-import type { PersonRepository } from "./repositories/person-repository.ts";
-import type { DocumentRepository } from "./repositories/document-repository.ts";
-import type { AiOutputRepository } from "./repositories/ai-output-repository.ts";
-import type { NoteSnapshotRepository } from "./repositories/note-snapshot-repository.ts";
-import type { ArchiveMaintenanceRepository } from "./repositories/archive-maintenance-repository.ts";
-import type { QueryRepository } from "./repositories/query-repository.ts";
+import { createDefaultExtractors } from "./extractors/pipeline.ts";
+
+import type { ToolDeps } from "./tools/tool-deps.ts";
 import { SupabaseThoughtRepository } from "./repositories/supabase-thought-repository.ts";
 import { SupabaseTaskRepository } from "./repositories/supabase-task-repository.ts";
 import { SupabaseProjectRepository } from "./repositories/supabase-project-repository.ts";
@@ -115,6 +103,32 @@ const aiMonthlyLimit = parseAiMonthlyLimit(Deno.env.get("TB_AI_MONTHLY_LIMIT"));
 const usageMeter = new SupabaseUsageMeter(supabase, AI_METERED_FUNCTIONS);
 const quotaGate = new AiQuotaGate(aiMonthlyLimit, usageMeter);
 
+// Extractor set + user timezone: built/read ONCE here and injected through the
+// tool deps (TOOL-14, EXTR-11) — handlers never construct extractors inline or
+// read env mid-extraction.
+const extractors = createDefaultExtractors();
+const timeZone = getConfiguredTimeZone();
+
+// The one shared dependency surface for the tool modules (CORE-7 / TOOL-11).
+// Each register receives a Pick of exactly the fields it uses.
+const toolDeps: ToolDeps = {
+  supabase,
+  logger,
+  aiProvider,
+  quotaGate,
+  thoughtRepository,
+  taskRepository,
+  projectRepository,
+  personRepository,
+  documentRepository,
+  aiOutputRepository,
+  noteSnapshotRepository,
+  archiveMaintenanceRepository,
+  queryRepository,
+  extractors,
+  timeZone,
+};
+
 // ─── MCP Server factory ─────────────────────────────────────────────────────
 // A fresh server is built per request (see the MCP branch below), following the
 // MCP SDK's stateless-transport guidance: one server + transport per request
@@ -123,77 +137,24 @@ const quotaGate = new AiQuotaGate(aiMonthlyLimit, usageMeter);
 // request. `supabase` and `logger` are stateless singletons, so per-request
 // construction adds only in-memory wiring, not a DB reconnect.
 
-function createMcpServer(
-  supabaseClient: AppSupabaseClient,
-  callLogger: FunctionCallLogger,
-  provider: AiProvider,
-  gate: AiQuotaGate,
-  repos: {
-    thought: ThoughtRepository;
-    task: TaskRepository;
-    project: ProjectRepository;
-    person: PersonRepository;
-    document: DocumentRepository;
-    aiOutput: AiOutputRepository;
-    query: QueryRepository;
-    noteSnapshot: NoteSnapshotRepository;
-    archiveMaintenance: ArchiveMaintenanceRepository;
-  },
-): McpServer {
+function createMcpServer(deps: ToolDeps): McpServer {
   const server = new McpServer({
     name: "terrestrial-brain",
     version: "1.0.0",
   });
 
-  // Each tool module receives exactly the seams it uses; only thoughts +
-  // documents run the extraction pipeline / embeddings and so receive the
-  // AiProvider plus the project/person repositories the pipeline seeds through.
-  registerThoughts(
-    server,
-    supabaseClient,
-    callLogger,
-    provider,
-    repos.thought,
-    repos.task,
-    repos.project,
-    repos.person,
-    gate,
-  );
-  registerProjects(
-    server,
-    supabaseClient,
-    callLogger,
-    repos.project,
-    repos.task,
-  );
-  registerTasks(server, supabaseClient, callLogger, repos.task);
-  registerAIOutput(
-    server,
-    supabaseClient,
-    callLogger,
-    repos.aiOutput,
-    repos.task,
-  );
-  registerQueries(server, supabaseClient, callLogger, repos.query);
-  registerPeople(server, supabaseClient, callLogger, repos.person, repos.task);
-  registerDocuments(
-    server,
-    supabaseClient,
-    callLogger,
-    provider,
-    repos.task,
-    repos.project,
-    repos.person,
-    repos.document,
-    repos.thought,
-  );
-  registerForgetNote(
-    server,
-    callLogger,
-    repos.noteSnapshot,
-    repos.thought,
-  );
-  registerArchive(server, callLogger, repos.archiveMaintenance);
+  // Each tool module receives exactly the seams it uses (its Pick<ToolDeps>);
+  // only thoughts + documents run the extraction pipeline / embeddings and so
+  // receive the AiProvider plus the repositories the pipeline seeds through.
+  registerThoughts(server, deps);
+  registerProjects(server, deps);
+  registerTasks(server, deps);
+  registerAIOutput(server, deps);
+  registerQueries(server, deps);
+  registerPeople(server, deps);
+  registerDocuments(server, deps);
+  registerForgetNote(server, deps);
+  registerArchive(server, deps);
 
   return server;
 }
@@ -236,6 +197,8 @@ const httpRouteDeps: HttpRouteDeps = {
   aiOutputRepository,
   quotaGate,
   logger,
+  extractors,
+  timeZone,
   now: Date.now,
 };
 
@@ -292,17 +255,7 @@ app.all("*", async (context) => {
   // context so tool handlers read THIS request's IP (finding C8), and a fresh
   // server + transport are built per request per the SDK's stateless pattern.
   return runWithRequestContext({ ipAddress }, async () => {
-    const server = createMcpServer(supabase, logger, aiProvider, quotaGate, {
-      thought: thoughtRepository,
-      task: taskRepository,
-      project: projectRepository,
-      person: personRepository,
-      document: documentRepository,
-      aiOutput: aiOutputRepository,
-      query: queryRepository,
-      noteSnapshot: noteSnapshotRepository,
-      archiveMaintenance: archiveMaintenanceRepository,
-    });
+    const server = createMcpServer(toolDeps);
     const transport = new StreamableHTTPTransport();
     await server.connect(transport);
     return transport.handleRequest(context);

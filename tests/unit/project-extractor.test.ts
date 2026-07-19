@@ -284,7 +284,6 @@ import {
 import { ProjectExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts";
 import { parseNote as parseNoteExtr6 } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
 import type { ExtractionContext as ExtractionContextExtr6 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
-import type { SupabaseClient as SupabaseClientExtr6 } from "@supabase/supabase-js";
 import {
   FakeAiProvider as SharedFakeAiProvider,
   FakePersonRepository as SharedFakePersonRepository,
@@ -305,11 +304,11 @@ Deno.test("ProjectExtractor: auto-create failure is reported in result.errors", 
     Promise.resolve({ data: null, error: { message: "rls denied" } });
 
   const context: ExtractionContextExtr6 = {
-    supabase: {} as unknown as SupabaseClientExtr6,
     aiProvider: new SharedFakeAiProvider(() => ({})),
     taskRepository: new SharedFakeTaskRepository(),
     projectRepository,
     personRepository: new SharedFakePersonRepository(),
+    timeZone: "UTC",
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],
@@ -344,11 +343,11 @@ function conventionalPathContext(
   projectRepository: SharedFakeProjectRepository,
 ): ExtractionContextExtr6 {
   return {
-    supabase: {} as unknown as SupabaseClientExtr6,
     aiProvider: new SharedFakeAiProvider(() => ({})),
     taskRepository: new SharedFakeTaskRepository(),
     projectRepository,
     personRepository: new SharedFakePersonRepository(),
+    timeZone: "UTC",
     knownProjects: [],
     knownTasks: [],
     knownPeople: [],

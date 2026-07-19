@@ -94,6 +94,42 @@ export async function callToolRaw(
   return await postTool(name, args);
 }
 
+// ─── Tool-list helpers ───────────────────────────────────────────────────────
+
+/**
+ * Fetches the running MCP server's registered tools (name + description) via
+ * `tools/list`. The single shared implementation (TEST-12) — no test file
+ * re-parses the SSE tools/list response inline.
+ */
+export async function listTools(): Promise<
+  { name: string; description: string }[]
+> {
+  const response = await fetch(MCP_BASE, {
+    method: "POST",
+    headers: mcpHeaders({
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+    }),
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  const text = await response.text();
+  const parsed =
+    (text.startsWith("event:") ? parseSse(text) : JSON.parse(text)) as {
+      result?: { tools?: { name: string; description: string }[] };
+    };
+  return parsed.result?.tools ?? [];
+}
+
+/** The set of tool names the running MCP server currently registers. */
+export async function toolNames(): Promise<string[]> {
+  return (await listTools()).map((tool) => tool.name);
+}
+
 // ─── HTTP sub-route callers ──────────────────────────────────────────────────
 
 /** POST to a named HTTP sub-route; returns the parsed JSON body. */

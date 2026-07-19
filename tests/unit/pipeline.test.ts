@@ -8,7 +8,6 @@ import {
   runExtractionPipeline,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import { parseNote } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   FakeAiProvider,
   FakePersonRepository,
@@ -22,7 +21,6 @@ import {
 
 // The runner only touches `supabase` if an extractor does; our fake extractors
 // never do, so a trivial placeholder is safe here.
-const fakeSupabase = {} as unknown as SupabaseClient;
 const fakeAiProvider = new FakeAiProvider(() => ({}));
 
 /**
@@ -65,15 +63,13 @@ function runWith(
   },
 ) {
   const note = parseNote("- [ ] a task", "Note", null, "obsidian");
-  return runExtractionPipeline(
-    note,
-    extractors,
-    fakeSupabase,
-    fakeAiProvider,
-    repos?.task ?? new FakeTaskRepository(),
-    repos?.project ?? new FakeProjectRepository(),
-    repos?.person ?? new FakePersonRepository(),
-  );
+  return runExtractionPipeline(note, extractors, {
+    aiProvider: fakeAiProvider,
+    taskRepository: repos?.task ?? new FakeTaskRepository(),
+    projectRepository: repos?.project ?? new FakeProjectRepository(),
+    personRepository: repos?.person ?? new FakePersonRepository(),
+    timeZone: "UTC",
+  });
 }
 
 /** Narrow a PipelineOutcome to its success branch or throw with a clear message. */
@@ -221,11 +217,13 @@ Deno.test("pipeline: aborts (no writes) when the known-tasks seed read fails", a
   const outcome = await runExtractionPipeline(
     note,
     [new RecordingExtractor("tasks", ["t1"], runLog, observed)],
-    fakeSupabase,
-    fakeAiProvider,
-    failingTasks,
-    new FakeProjectRepository(),
-    new FakePersonRepository(),
+    {
+      aiProvider: fakeAiProvider,
+      taskRepository: failingTasks,
+      projectRepository: new FakeProjectRepository(),
+      personRepository: new FakePersonRepository(),
+      timeZone: "UTC",
+    },
   );
 
   assertEquals(outcome.ok, false);
@@ -265,6 +263,73 @@ Deno.test("pipeline: aborts when the active-people seed read fails", async () =>
   assertEquals(outcome.ok, false);
   assertEquals(runLog, []);
   assertEquals(failingPeople.inserted.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Moved from tests/integration/extractors.test.ts (TEST-14): these fake the
+// extractors on the pipeline↔extractor path, so they are unit tests. The
+// order/composition variants that duplicated "runs extractors in list order"
+// and "collects each extractor's ids under its reference key" were merged into
+// those existing tests; the scenarios below are the distinct remainders.
+// ---------------------------------------------------------------------------
+
+Deno.test("pipeline: single extractor returns correct references", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  const outcome = expectOk(
+    await runWith([
+      new RecordingExtractor(
+        "projects",
+        ["uuid-1", "uuid-2"],
+        runLog,
+        observed,
+      ),
+    ]),
+  );
+
+  assertEquals(outcome.references, { projects: ["uuid-1", "uuid-2"] });
+});
+
+Deno.test("pipeline: context enrichment visible to downstream extractors", async () => {
+  let downstreamSawProject = false;
+
+  const enrichingExtractor: Extractor = {
+    referenceKey: "projects",
+    extract: (_note, context) => {
+      context.newlyCreatedProjects.push({ id: "new-proj-id", name: "NewProj" });
+      return Promise.resolve({
+        referenceKey: "projects",
+        ids: ["new-proj-id"],
+      });
+    },
+  };
+
+  const observingExtractor: Extractor = {
+    referenceKey: "tasks",
+    extract: (_note, context) => {
+      downstreamSawProject = context.newlyCreatedProjects.some(
+        (project) => project.id === "new-proj-id",
+      );
+      return Promise.resolve({ referenceKey: "tasks", ids: [] });
+    },
+  };
+
+  await runWith([enrichingExtractor, observingExtractor]);
+
+  assertEquals(downstreamSawProject, true);
+});
+
+Deno.test("pipeline: extractor returning empty ids includes key in result", async () => {
+  const runLog: string[] = [];
+  const observed: Record<string, string[]> = {};
+  const outcome = expectOk(
+    await runWith([
+      new RecordingExtractor("projects", [], runLog, observed),
+    ]),
+  );
+
+  assertEquals("projects" in outcome.references, true);
+  assertEquals(outcome.references.projects, []);
 });
 
 Deno.test("createDefaultExtractors: returns the three concrete extractors in order", () => {

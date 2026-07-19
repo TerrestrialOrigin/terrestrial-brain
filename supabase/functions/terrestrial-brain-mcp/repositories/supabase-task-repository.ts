@@ -1,11 +1,18 @@
 /**
  * SupabaseTaskRepository — the sole implementation of `TaskRepository`
  * (fix-plan Step 16). Every `tasks` table query formerly inline in
- * `tools/tasks.ts` / `extractors/task-extractor.ts` lives here.
+ * `tools/tasks.ts` / `extractors/task-extractor.ts` lives here. Each method
+ * delegates its await-then-wrap to the shared `runQuery` / `runWrite` /
+ * `runCount` helpers (REPO-3).
  */
 
 import type { AppSupabaseClient, InsertRow } from "../supabase-client.ts";
-import { type RepoResult, toRepoError } from "./repo-result.ts";
+import {
+  type RepoResult,
+  runCount,
+  runQuery,
+  runWrite,
+} from "./repo-result.ts";
 import type {
   CreatedTask,
   IncompleteTasksFilters,
@@ -15,24 +22,26 @@ import type {
   TaskListRow,
   TaskReferenceRow,
   TaskRepository,
+  TaskUpdate,
 } from "./task-repository.ts";
 
 export class SupabaseTaskRepository implements TaskRepository {
   constructor(private readonly supabase: AppSupabaseClient) {}
 
-  async insert(values: NewTaskValues): Promise<RepoResult<CreatedTask>> {
+  insert(values: NewTaskValues): Promise<RepoResult<CreatedTask>> {
     // `metadata` is jsonb, which typegen types as `Json`; the plain object we
     // build is a trusted internal payload. Documented narrow assertion.
     const insertRow = values as unknown as InsertRow<"tasks">;
-    const { data, error } = await this.supabase
-      .from("tasks")
-      .insert(insertRow)
-      .select("id, content")
-      .single();
-    return { data, error: toRepoError(error) };
+    return runQuery(
+      this.supabase
+        .from("tasks")
+        .insert(insertRow)
+        .select("id, content")
+        .single(),
+    );
   }
 
-  async list(filters: TaskListFilters): Promise<RepoResult<TaskListRow[]>> {
+  list(filters: TaskListFilters): Promise<RepoResult<TaskListRow[]>> {
     let query = this.supabase
       .from("tasks")
       .select(
@@ -50,140 +59,146 @@ export class SupabaseTaskRepository implements TaskRepository {
         .neq("status", "done");
     }
 
-    const { data, error } = await query;
-    return { data, error: toRepoError(error) };
+    return runQuery(query);
   }
 
-  async listIncompleteUnarchived(
+  listIncompleteUnarchived(
     filters: IncompleteTasksFilters,
   ): Promise<RepoResult<TaskListRow[]>> {
     // Exclude done (always) and — when the caller opts out — deferred. The
     // remaining statuses are the "incomplete" set. NOT IN keeps the query a
     // single round-trip regardless of how many statuses are excluded.
     const excluded = filters.includeDeferred ? ["done"] : ["done", "deferred"];
-    const { data, error } = await this.supabase
-      .from("tasks")
-      .select(
-        "id, content, status, due_by, project_id, assigned_to, archived_at, created_at",
-      )
-      .is("archived_at", null)
-      .not("status", "in", `(${excluded.join(",")})`)
-      // Overdue/soonest due first, undated last, then oldest-created first.
-      .order("due_by", { ascending: true, nullsFirst: false })
-      .order("created_at", { ascending: true })
-      // Fetch one extra so the handler can tell "exactly at the cap" from
-      // "more exist" and report truncation.
-      .limit(filters.limit + 1);
-    return { data, error: toRepoError(error) };
+    return runQuery(
+      this.supabase
+        .from("tasks")
+        .select(
+          "id, content, status, due_by, project_id, assigned_to, archived_at, created_at",
+        )
+        .is("archived_at", null)
+        .not("status", "in", `(${excluded.join(",")})`)
+        // Overdue/soonest due first, undated last, then oldest-created first.
+        .order("due_by", { ascending: true, nullsFirst: false })
+        .order("created_at", { ascending: true })
+        // Fetch one extra so the handler can tell "exactly at the cap" from
+        // "more exist" and report truncation.
+        .limit(filters.limit + 1),
+    );
   }
 
-  async findByIds(ids: string[]): Promise<RepoResult<TaskDetailRow[]>> {
-    const { data, error } = await this.supabase
-      .from("tasks")
-      .select(
-        "id, content, status, due_by, project_id, parent_id, assigned_to, archived_at, created_at",
-      )
-      .in("id", ids);
-    return { data, error: toRepoError(error) };
+  findByIds(ids: string[]): Promise<RepoResult<TaskDetailRow[]>> {
+    return runQuery(
+      this.supabase
+        .from("tasks")
+        .select(
+          "id, content, status, due_by, project_id, parent_id, assigned_to, archived_at, created_at",
+        )
+        .in("id", ids),
+    );
   }
 
-  async update(
+  update(
     id: string,
-    updates: Record<string, unknown>,
+    updates: TaskUpdate,
   ): Promise<RepoResult<{ id: string }>> {
-    const { data, error } = await this.supabase
-      .from("tasks")
-      .update(updates)
-      .eq("id", id)
-      .select("id")
-      .maybeSingle();
-    return { data, error: toRepoError(error) };
+    return runQuery(
+      this.supabase
+        .from("tasks")
+        .update(updates)
+        .eq("id", id)
+        .select("id")
+        .maybeSingle(),
+    );
   }
 
-  async archive(id: string): Promise<RepoResult<void>> {
+  archive(id: string): Promise<RepoResult<void>> {
     // Claim-style: skip already-archived rows so a retried archive preserves
     // the original `archived_at` (matches `archiveIfActive`).
-    const { error } = await this.supabase
-      .from("tasks")
-      .update({ archived_at: new Date().toISOString() })
-      .eq("id", id)
-      .is("archived_at", null);
-    return { data: null, error: toRepoError(error) };
+    return runWrite(
+      this.supabase
+        .from("tasks")
+        .update({ archived_at: new Date().toISOString() })
+        .eq("id", id)
+        .is("archived_at", null),
+    );
   }
 
-  async archiveIfActive(id: string): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
-      .from("tasks")
-      .update({ archived_at: new Date().toISOString(), status: "done" })
-      .eq("id", id)
-      .is("archived_at", null);
-    return { data: null, error: toRepoError(error) };
+  archiveIfActive(id: string): Promise<RepoResult<void>> {
+    return runWrite(
+      this.supabase
+        .from("tasks")
+        .update({ archived_at: new Date().toISOString(), status: "done" })
+        .eq("id", id)
+        .is("archived_at", null),
+    );
   }
 
-  async countOpenByProject(projectId: string): Promise<RepoResult<number>> {
-    const { count, error } = await this.supabase
-      .from("tasks")
-      .select("*", { count: "exact", head: true })
-      .eq("project_id", projectId)
-      .in("status", ["open", "in_progress"]);
-    // A failed count must keep `data` null — `data: 0` alongside an error would
-    // make "broken" indistinguishable from "genuinely zero" (REPO-7).
-    return error
-      ? { data: null, error: toRepoError(error) }
-      : { data: count ?? 0, error: null };
+  countOpenByProject(projectId: string): Promise<RepoResult<number>> {
+    // runCount keeps `data` null on failure — "broken" stays distinguishable
+    // from "genuinely zero" (REPO-7).
+    return runCount(
+      this.supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("project_id", projectId)
+        .in("status", ["open", "in_progress"]),
+    );
   }
 
-  async countOpenByAssignee(personId: string): Promise<RepoResult<number>> {
-    const { count, error } = await this.supabase
-      .from("tasks")
-      .select("*", { count: "exact", head: true })
-      .eq("assigned_to", personId)
-      .in("status", ["open", "in_progress"])
-      .is("archived_at", null);
+  countOpenByAssignee(personId: string): Promise<RepoResult<number>> {
     // Same broken-vs-zero rule as countOpenByProject (REPO-7).
-    return error
-      ? { data: null, error: toRepoError(error) }
-      : { data: count ?? 0, error: null };
+    return runCount(
+      this.supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .eq("assigned_to", personId)
+        .in("status", ["open", "in_progress"])
+        .is("archived_at", null),
+    );
   }
 
-  async findOpenIdsByProjects(
+  findOpenIdsByProjects(
     projectIds: string[],
   ): Promise<RepoResult<{ id: string }[]>> {
-    const { data, error } = await this.supabase
-      .from("tasks")
-      .select("id")
-      .in("project_id", projectIds)
-      .is("archived_at", null)
-      .in("status", ["open", "in_progress"]);
-    return { data, error: toRepoError(error) };
+    return runQuery(
+      this.supabase
+        .from("tasks")
+        .select("id")
+        .in("project_id", projectIds)
+        .is("archived_at", null)
+        .in("status", ["open", "in_progress"]),
+    );
   }
 
-  async archiveMany(ids: string[]): Promise<RepoResult<void>> {
+  archiveMany(ids: string[]): Promise<RepoResult<void>> {
     // Claim-style: skip already-archived rows so re-running the batch leaves
     // previously-archived tasks' `archived_at` untouched.
-    const { error } = await this.supabase
-      .from("tasks")
-      .update({ archived_at: new Date().toISOString() })
-      .in("id", ids)
-      .is("archived_at", null);
-    return { data: null, error: toRepoError(error) };
+    return runWrite(
+      this.supabase
+        .from("tasks")
+        .update({ archived_at: new Date().toISOString() })
+        .in("id", ids)
+        .is("archived_at", null),
+    );
   }
 
-  async deleteByIds(ids: string[]): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
-      .from("tasks")
-      .delete()
-      .in("id", ids);
-    return { data: null, error: toRepoError(error) };
+  deleteByIds(ids: string[]): Promise<RepoResult<void>> {
+    return runWrite(
+      this.supabase
+        .from("tasks")
+        .delete()
+        .in("id", ids),
+    );
   }
 
-  async findByReference(
+  findByReference(
     referenceId: string,
   ): Promise<RepoResult<TaskReferenceRow[]>> {
-    const { data, error } = await this.supabase
-      .from("tasks")
-      .select("id, content, reference_id")
-      .eq("reference_id", referenceId);
-    return { data, error: toRepoError(error) };
+    return runQuery(
+      this.supabase
+        .from("tasks")
+        .select("id, content, reference_id")
+        .eq("reference_id", referenceId),
+    );
   }
 }

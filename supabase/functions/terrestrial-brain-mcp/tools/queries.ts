@@ -5,16 +5,17 @@ import {
   MAX_RECENT_ACTIVITY_DAYS,
   RECENT_ACTIVITY_SECTION_LIMIT,
 } from "../constants.ts";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { renderSectionBody } from "./section-format.ts";
+import { isTaskOverdue, taskStatusIcon } from "./tasks.ts";
 import { buildUsefulnessReminder } from "./usefulness-reminder.ts";
 import type { RepoError, RepoResult } from "../repositories/repo-result.ts";
 import type {
   CreatedNamedRow,
   DeliveredAiOutputRow,
-  QueryRepository,
+  ProjectSummaryReads,
+  RecentActivityReads,
   RecentTaskCompletedRow,
   RecentTaskCreatedRow,
   RecentThoughtRow,
@@ -24,6 +25,7 @@ import type {
   SummaryThoughtRow,
   UpdatedNamedRow,
 } from "../repositories/query-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 /** Max thoughts shown in a project summary, most recent first. */
 const MAX_PROJECT_THOUGHTS = 25;
@@ -105,7 +107,7 @@ interface ProjectSummaryData {
  * carried through so the formatter can surface it as an "unavailable" section.
  */
 async function fetchProjectSummary(
-  queryRepository: QueryRepository,
+  queryRepository: ProjectSummaryReads,
   id: string,
 ): Promise<{ data: ProjectSummaryData } | { error: string }> {
   const { data: project, error: projectError } = await queryRepository
@@ -180,7 +182,7 @@ async function fetchProjectSummary(
 
 /** Resolve source-note snapshots for the thoughts that carry a snapshot id. */
 async function fetchSnapshotMap(
-  queryRepository: QueryRepository,
+  queryRepository: ProjectSummaryReads,
   thoughts: SummaryThoughtRow[],
 ): Promise<Record<string, { title: string | null; reference_id: string }>> {
   const snapshotIds = [
@@ -209,7 +211,7 @@ async function fetchSnapshotMap(
 
 /** Resolve assigned-person names for the given tasks (shared batched resolver). */
 async function fetchTaskPersonMap(
-  queryRepository: QueryRepository,
+  queryRepository: ProjectSummaryReads,
   tasks: SummaryTaskRow[] | null,
 ): Promise<Map<string, string>> {
   const taskPersonIds = [
@@ -285,10 +287,12 @@ function formatProjectSummary(data: ProjectSummaryData): string {
     (rows) =>
       rows
         .map((task) => {
-          const statusIcon = task.status === "in_progress" ? "[~]" : "[ ]";
+          // Shared status-icon + overdue logic (TOOL-8): a done task is never
+          // marked OVERDUE, matching every other task renderer.
+          const statusIcon = taskStatusIcon(task.status);
           const duePart = task.due_by
             ? ` — due ${formatDate(task.due_by)}${
-              new Date(task.due_by) < new Date() ? " (OVERDUE)" : ""
+              isTaskOverdue(task.due_by, task.status) ? " (OVERDUE)" : ""
             }`
             : "";
           const assigneePart =
@@ -380,7 +384,7 @@ interface RecentActivityData {
 
 /** Gather all cross-table recent-activity data for the last `days` days. */
 async function fetchRecentActivity(
-  queryRepository: QueryRepository,
+  queryRepository: RecentActivityReads,
   days: number,
 ): Promise<RecentActivityData> {
   // Clamp both ends: a nonsensical or huge window is handled gracefully (not
@@ -616,10 +620,9 @@ function formatRecentActivity(data: RecentActivityData): string {
 
 export function register(
   server: McpServer,
-  _supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  queryRepository: QueryRepository,
+  deps: Pick<ToolDeps, "logger" | "queryRepository">,
 ) {
+  const { logger, queryRepository } = deps;
   // ─── get_project_summary ─────────────────────────────────────────────────
 
   server.registerTool(

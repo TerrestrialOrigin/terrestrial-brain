@@ -7,36 +7,13 @@
 // exist" — which Step 7 flips to green by adding the capability.
 
 import {
-  MCP_BASE,
-  mcpHeaders,
   restUrl,
   serviceHeaders,
+  toolNames,
 } from "../../helpers/mcp-client.ts";
 
-/** The set of tool names the running MCP server currently registers. */
-export async function toolNames(): Promise<string[]> {
-  const response = await fetch(MCP_BASE, {
-    method: "POST",
-    headers: mcpHeaders({
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-    }),
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method: "tools/list",
-      params: {},
-    }),
-  });
-  const text = await response.text();
-  const dataLine = text.startsWith("event:")
-    ? text.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim()
-    : text;
-  const parsed = JSON.parse(dataLine ?? "{}") as {
-    result?: { tools?: { name: string }[] };
-  };
-  return (parsed.result?.tools ?? []).map((tool) => tool.name);
-}
+// The tools/list fetch lives in the shared helper module (TEST-12).
+export { toolNames };
 
 /** True if the MCP server registers a tool by this exact name. */
 export async function hasTool(name: string): Promise<boolean> {

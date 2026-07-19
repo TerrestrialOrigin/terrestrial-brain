@@ -8,6 +8,12 @@
  * - Metadata with extraction context (source, section_heading)
  * - Due date extraction: regex fast path + AI fallback
  * - People assignment: explicit pattern fast path + AI fallback
+ *
+ * Split into cohesive modules (EXTR-12): similarity scoring lives in
+ * similarity.ts, checkbox↔task matching in task-reconciliation.ts, and the LLM
+ * inference calls in task-inference.ts. This file keeps the extractor class and
+ * the re-ingest merge policy, and re-exports the moved symbols so existing
+ * import paths keep working.
  */
 
 import type { ParsedCheckbox, ParsedNote } from "../parser.ts";
@@ -16,411 +22,32 @@ import type {
   ExtractionResult,
   Extractor,
   KnownProject,
-  KnownTask,
 } from "./pipeline.ts";
-import { isRecord, REFERENCE_KEYS } from "./pipeline.ts";
+import { REFERENCE_KEYS } from "./pipeline.ts";
 import type { KnownPerson } from "./name-matching.ts";
-import {
-  cleanStrippedText,
-  extractDueDate,
-  getConfiguredTimeZone,
-  getZonedDate,
-} from "./date-parser.ts";
+import { cleanStrippedText, extractDueDate } from "./date-parser.ts";
 import { findPersonByName, findPersonInText } from "./name-matching.ts";
-import { ASSIGNMENT_MARKER_PATTERN, DUE_MARKER_PATTERN } from "./markers.ts";
-import { monthPattern } from "./date-parser.ts";
-import type { AiProvider } from "../ai/ai-provider.ts";
-import type { NewTaskValues } from "../repositories/task-repository.ts";
+import { ASSIGNMENT_MARKER_PATTERN } from "./markers.ts";
+import type {
+  NewTaskValues,
+  TaskUpdate,
+} from "../repositories/task-repository.ts";
 import { hashContent } from "../helpers.ts";
+import { reconcileCheckboxes, type TaskMatch } from "./task-reconciliation.ts";
+import {
+  inferProjectsByContent,
+  inferTaskEnrichments,
+} from "./task-inference.ts";
 
-// ---------------------------------------------------------------------------
-// Content similarity
-// ---------------------------------------------------------------------------
-
-function normalizeText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-export function computeSimilarity(textA: string, textB: string): number {
-  const normalizedA = normalizeText(textA);
-  const normalizedB = normalizeText(textB);
-
-  if (normalizedA === normalizedB) return 1.0;
-  if (normalizedA.length === 0 || normalizedB.length === 0) return 0.0;
-
-  const maxLength = Math.max(normalizedA.length, normalizedB.length);
-  const lcsLength = longestCommonSubsequenceLength(normalizedA, normalizedB);
-
-  return lcsLength / maxLength;
-}
-
-function longestCommonSubsequenceLength(
-  textA: string,
-  textB: string,
-): number {
-  const lengthA = textA.length;
-  const lengthB = textB.length;
-
-  let previousRow = new Array(lengthB + 1).fill(0);
-  let currentRow = new Array(lengthB + 1).fill(0);
-
-  for (let indexA = 1; indexA <= lengthA; indexA++) {
-    for (let indexB = 1; indexB <= lengthB; indexB++) {
-      if (textA[indexA - 1] === textB[indexB - 1]) {
-        currentRow[indexB] = previousRow[indexB - 1] + 1;
-      } else {
-        currentRow[indexB] = Math.max(
-          previousRow[indexB],
-          currentRow[indexB - 1],
-        );
-      }
-    }
-    [previousRow, currentRow] = [currentRow, previousRow];
-    currentRow.fill(0);
-  }
-
-  return previousRow[lengthB];
-}
-
-const SIMILARITY_THRESHOLD = 0.8;
-const CONTAINMENT_THRESHOLD = 0.85;
-const MIN_CONTAINMENT_LENGTH = 10;
-
-// ---------------------------------------------------------------------------
-// Greedy one-to-one assignment (shared by both reconciliation passes)
-// ---------------------------------------------------------------------------
-
-export interface ScoredPair {
-  checkboxIndex: number;
-  taskId: string;
-  score: number;
-}
-
-/**
- * Accepts scored checkbox↔task candidate pairs greedily in descending score
- * order, skipping any pair below `threshold` and any pair whose checkbox index
- * or task id has already been taken. The result is strictly one-to-one: no
- * checkbox and no task appears in more than one accepted pair. Both the
- * similarity and containment reconciliation passes use this single helper.
- */
-export function greedyMatch(
-  pairs: ScoredPair[],
-  threshold: number,
-): ScoredPair[] {
-  const ranked = pairs
-    .filter((pair) => pair.score >= threshold)
-    .sort((pairA, pairB) => pairB.score - pairA.score);
-
-  const takenCheckboxIndices = new Set<number>();
-  const takenTaskIds = new Set<string>();
-  const accepted: ScoredPair[] = [];
-
-  for (const pair of ranked) {
-    if (
-      takenCheckboxIndices.has(pair.checkboxIndex) ||
-      takenTaskIds.has(pair.taskId)
-    ) continue;
-    accepted.push(pair);
-    takenCheckboxIndices.add(pair.checkboxIndex);
-    takenTaskIds.add(pair.taskId);
-  }
-
-  return accepted;
-}
-
-// ---------------------------------------------------------------------------
-// LCS prefilters — cheap necessary conditions that gate the O(len²) DP
-// ---------------------------------------------------------------------------
-
-/**
- * Character-multiset overlap: Σ min(count_A(c), count_B(c)). The longest common
- * subsequence can never exceed this (every matched character must appear in
- * both strings), so it is a rigorous upper bound on LCS length — and therefore
- * a safe basis for pruning pairs that provably cannot clear a score threshold.
- * O(len) instead of the O(lenA × lenB) DP.
- */
-function characterMultisetOverlap(textA: string, textB: string): number {
-  const remaining = new Map<string, number>();
-  for (const character of textA) {
-    remaining.set(character, (remaining.get(character) ?? 0) + 1);
-  }
-  let overlap = 0;
-  for (const character of textB) {
-    const available = remaining.get(character) ?? 0;
-    if (available > 0) {
-      overlap++;
-      remaining.set(character, available - 1);
-    }
-  }
-  return overlap;
-}
-
-/**
- * Similarity score (LCS / maxLength) with prefilters. Returns null when the
- * pair provably cannot reach SIMILARITY_THRESHOLD, so the DP is skipped. Each
- * gate is a necessary condition, so the accepted set is identical to running
- * the full LCS on every pair.
- */
-function scoreSimilarityPair(
-  cleanedCheckboxText: string,
-  taskContent: string,
-  usePrefilter: boolean,
-): number | null {
-  const normalizedCheckbox = normalizeText(cleanedCheckboxText);
-  const normalizedTask = normalizeText(taskContent);
-  if (normalizedCheckbox.length === 0 || normalizedTask.length === 0) {
-    return null;
-  }
-  if (normalizedCheckbox === normalizedTask) return 1.0; // exact-match fast accept
-
-  if (usePrefilter) {
-    const maxLength = Math.max(
-      normalizedCheckbox.length,
-      normalizedTask.length,
-    );
-    // LCS ≤ min(len) and LCS ≤ characterMultisetOverlap → similarity upper bound.
-    const lcsUpperBound = Math.min(
-      Math.min(normalizedCheckbox.length, normalizedTask.length),
-      characterMultisetOverlap(normalizedCheckbox, normalizedTask),
-    );
-    if (lcsUpperBound / maxLength < SIMILARITY_THRESHOLD) return null;
-  }
-
-  return computeSimilarity(cleanedCheckboxText, taskContent);
-}
-
-/**
- * Containment score (LCS / minLength) with prefilters. Returns null when the
- * shorter text is below MIN_CONTAINMENT_LENGTH, or when the pair provably
- * cannot reach CONTAINMENT_THRESHOLD.
- */
-function scoreContainmentPair(
-  cleanedCheckboxText: string,
-  taskContent: string,
-  usePrefilter: boolean,
-): number | null {
-  const normalizedCheckbox = normalizeText(cleanedCheckboxText);
-  const normalizedTask = normalizeText(taskContent);
-  const minLength = Math.min(
-    normalizedCheckbox.length,
-    normalizedTask.length,
-  );
-  if (minLength < MIN_CONTAINMENT_LENGTH) return null;
-
-  if (usePrefilter) {
-    // LCS ≤ characterMultisetOverlap → containment upper bound.
-    const lcsUpperBound = characterMultisetOverlap(
-      normalizedCheckbox,
-      normalizedTask,
-    );
-    if (lcsUpperBound / minLength < CONTAINMENT_THRESHOLD) return null;
-  }
-
-  const lcsLength = longestCommonSubsequenceLength(
-    normalizedCheckbox,
-    normalizedTask,
-  );
-  return lcsLength / minLength;
-}
-
-// ---------------------------------------------------------------------------
-// Task reconciliation (two-pass: similarity + containment fallback)
-// ---------------------------------------------------------------------------
-
-interface TaskMatch {
-  existingTaskId: string;
-  checkboxIndex: number;
-  similarity: number;
-}
-
-/**
- * Strips common metadata markers from checkbox text so reconciliation
- * compares apples-to-apples against stored (already-cleaned) content.
- * E.g. "Fix bug (assigned: Alice) (deadline: March 30)" → "Fix bug"
- */
-export function stripMarkersForComparison(text: string): string {
-  // A marker must be a standalone word (leading `\b`), and the bare-form markers
-  // must be separated from their value by a colon or whitespace — never matched
-  // mid-word or against an arbitrary `\w+` (EXTR-1). The month-name alternation
-  // replaces the over-broad `\w+` so "Review by section 3" is left unchanged.
-  const separator = "(?:\\s*:\\s*|\\s+)";
-  return text
-    .replace(
-      new RegExp(`\\(\\s*\\b${ASSIGNMENT_MARKER_PATTERN}\\s*:[^)]*\\)`, "gi"),
-      "",
-    )
-    .replace(
-      new RegExp(`\\(\\s*\\b${DUE_MARKER_PATTERN}\\s*:?[^)]*\\)`, "gi"),
-      "",
-    )
-    .replace(
-      new RegExp(
-        `(?:,?\\s*)\\b${DUE_MARKER_PATTERN}${separator}\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}`,
-        "gi",
-      ),
-      "",
-    )
-    .replace(
-      new RegExp(
-        `(?:,?\\s*)\\b${DUE_MARKER_PATTERN}${separator}(?:${monthPattern})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?`,
-        "gi",
-      ),
-      "",
-    )
-    .replace(/\(\s*\)/g, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
-interface ReconcileResult {
-  matched: TaskMatch[];
-  unmatchedCheckboxIndices: number[];
-  unmatchedTaskIds: string[];
-}
-
-/** Pass 1: high-similarity matches (LCS/maxLength >= SIMILARITY_THRESHOLD). */
-function matchBySimilarity(
-  cleanedCheckboxTexts: string[],
-  knownTasks: KnownTask[],
-  usePrefilter: boolean,
-): ScoredPair[] {
-  const pairs: ScoredPair[] = [];
-  for (
-    let checkboxIndex = 0;
-    checkboxIndex < cleanedCheckboxTexts.length;
-    checkboxIndex++
-  ) {
-    for (const task of knownTasks) {
-      const score = scoreSimilarityPair(
-        cleanedCheckboxTexts[checkboxIndex],
-        task.content,
-        usePrefilter,
-      );
-      if (score !== null && score >= SIMILARITY_THRESHOLD) {
-        pairs.push({ checkboxIndex, taskId: task.id, score });
-      }
-    }
-  }
-  return greedyMatch(pairs, SIMILARITY_THRESHOLD);
-}
-
-/**
- * Pass 2: containment fallback (LCS/minLength >= CONTAINMENT_THRESHOLD).
- * Catches edits where the user adds metadata like "(assigned: Alice)" to an
- * existing task — the original text is fully contained in the new text.
- */
-function matchByContainment(
-  cleanedCheckboxTexts: string[],
-  remainingCheckboxIndices: number[],
-  remainingTasks: KnownTask[],
-  usePrefilter: boolean,
-): ScoredPair[] {
-  const pairs: ScoredPair[] = [];
-  for (const checkboxIndex of remainingCheckboxIndices) {
-    for (const task of remainingTasks) {
-      const score = scoreContainmentPair(
-        cleanedCheckboxTexts[checkboxIndex],
-        task.content,
-        usePrefilter,
-      );
-      if (score !== null && score >= CONTAINMENT_THRESHOLD) {
-        pairs.push({ checkboxIndex, taskId: task.id, score });
-      }
-    }
-  }
-  return greedyMatch(pairs, CONTAINMENT_THRESHOLD);
-}
-
-function reconcileCheckboxes(
-  checkboxes: ParsedCheckbox[],
-  knownTasks: KnownTask[],
-  usePrefilter = true,
-): ReconcileResult {
-  if (knownTasks.length === 0) {
-    return {
-      matched: [],
-      unmatchedCheckboxIndices: checkboxes.map((_, index) => index),
-      unmatchedTaskIds: [],
-    };
-  }
-
-  // Pre-clean checkbox text for comparison: strip metadata markers so
-  // similarity is computed against core task content, not annotations.
-  // Stored task content is already cleaned, so we clean checkbox text to match.
-  const cleanedCheckboxTexts = checkboxes.map(
-    (checkbox) => stripMarkersForComparison(checkbox.text),
-  );
-
-  const matchedCheckboxIndices = new Set<number>();
-  const matchedTaskIds = new Set<string>();
-  const matched: TaskMatch[] = [];
-
-  const record = (pair: ScoredPair) => {
-    matched.push({
-      existingTaskId: pair.taskId,
-      checkboxIndex: pair.checkboxIndex,
-      similarity: pair.score,
-    });
-    matchedCheckboxIndices.add(pair.checkboxIndex);
-    matchedTaskIds.add(pair.taskId);
-  };
-
-  for (
-    const pair of matchBySimilarity(
-      cleanedCheckboxTexts,
-      knownTasks,
-      usePrefilter,
-    )
-  ) record(pair);
-
-  const remainingCheckboxIndices = checkboxes
-    .map((_, index) => index)
-    .filter((index) => !matchedCheckboxIndices.has(index));
-  const remainingTasks = knownTasks
-    .filter((task) => !matchedTaskIds.has(task.id));
-
-  if (remainingCheckboxIndices.length > 0 && remainingTasks.length > 0) {
-    for (
-      const pair of matchByContainment(
-        cleanedCheckboxTexts,
-        remainingCheckboxIndices,
-        remainingTasks,
-        usePrefilter,
-      )
-    ) record(pair);
-  }
-
-  return {
-    matched,
-    unmatchedCheckboxIndices: checkboxes
-      .map((_, index) => index)
-      .filter((index) => !matchedCheckboxIndices.has(index)),
-    unmatchedTaskIds: knownTasks
-      .map((task) => task.id)
-      .filter((taskId) => !matchedTaskIds.has(taskId)),
-  };
-}
-
-/**
- * Test-only seam: reconcile from bare checkbox text strings with the prefilter
- * toggle exposed, so a unit test can assert the prefiltered result equals the
- * brute-force (full-LCS) result. Not used in production code paths.
- */
-export function reconcileCheckboxesForTest(
-  checkboxTexts: string[],
-  knownTasks: KnownTask[],
-  usePrefilter: boolean,
-): ReconcileResult {
-  const checkboxes: ParsedCheckbox[] = checkboxTexts.map((text, index) => ({
-    text,
-    checked: false,
-    depth: 0,
-    lineNumber: index,
-    parentIndex: null,
-    sectionHeading: null,
-  }));
-  return reconcileCheckboxes(checkboxes, knownTasks, usePrefilter);
-}
+// Re-exports for the symbols moved out in the EXTR-12 split, so existing
+// imports of this module keep working unchanged.
+export { computeSimilarity } from "./similarity.ts";
+export {
+  greedyMatch,
+  reconcileCheckboxesForTest,
+  type ScoredPair,
+  stripMarkersForComparison,
+} from "./task-reconciliation.ts";
 
 // ---------------------------------------------------------------------------
 // Project association
@@ -438,76 +65,6 @@ function matchProjectByHeading(
   return null;
 }
 
-interface TaskProjectAssignment {
-  taskIndex: number;
-  projectId: string;
-}
-
-async function inferProjectsByContent(
-  taskTexts: { index: number; text: string }[],
-  knownProjects: KnownProject[],
-  aiProvider: AiProvider,
-): Promise<{ ok: boolean; assignments: TaskProjectAssignment[] }> {
-  if (taskTexts.length === 0 || knownProjects.length === 0) {
-    return { ok: true, assignments: [] };
-  }
-
-  const projectList = knownProjects
-    .map((project) => `- "${project.name}" (id: ${project.id})`)
-    .join("\n");
-  const taskList = taskTexts
-    .map((task) => `${task.index}: "${task.text}"`)
-    .join("\n");
-  const validIds = new Set(knownProjects.map((project) => project.id));
-
-  // A transport/parse failure returns { ok: false } so the caller keeps existing
-  // project assignments untouched; a well-formed-but-empty response is { ok: true }.
-  try {
-    return await aiProvider.completeJson(
-      {
-        purpose: "assign-task-projects",
-        systemPrompt:
-          `You match tasks to projects. Given a list of tasks and known projects, return which project each task belongs to. Only use project IDs from the list. If a task doesn't clearly belong to any project, omit it.
-
-Return JSON: {"assignments": [{"task_index": 0, "project_id": "uuid"}, ...]}
-
-KNOWN PROJECTS:
-${projectList}`,
-        userContent: `TASKS:\n${taskList}`,
-      },
-      (raw): { ok: true; assignments: TaskProjectAssignment[] } => {
-        const parsed: { assignments?: unknown } = isRecord(raw) ? raw : {};
-        if (!Array.isArray(parsed.assignments)) {
-          return { ok: true, assignments: [] };
-        }
-        // One malformed element is skipped, never allowed to throw and drop
-        // the whole batch (EXTR-8).
-        const assignments = parsed.assignments
-          .filter(
-            (assignment): assignment is {
-              task_index: number;
-              project_id: string;
-            } =>
-              isRecord(assignment) &&
-              typeof assignment.task_index === "number" &&
-              typeof assignment.project_id === "string" &&
-              validIds.has(assignment.project_id),
-          )
-          .map((assignment) => ({
-            taskIndex: assignment.task_index,
-            projectId: assignment.project_id,
-          }));
-        return { ok: true, assignments };
-      },
-    );
-  } catch (error) {
-    console.error(
-      `TaskExtractor LLM project inference error: ${(error as Error).message}`,
-    );
-    return { ok: false, assignments: [] };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Re-ingest merge policy (finding C6 / fix-plan Step 8)
 // ---------------------------------------------------------------------------
@@ -523,8 +80,8 @@ ${projectList}`,
  * This is what stops an LLM outage from nulling an existing association.
  */
 function applyMergeField(
-  updates: Record<string, unknown>,
-  column: string,
+  updates: TaskUpdate,
+  column: "project_id" | "assigned_to" | "due_by",
   value: string | null,
   unavailable: boolean,
 ): void {
@@ -582,129 +139,6 @@ export function extractAssignment(
   }
 
   return { personId: null, cleanedText: text };
-}
-
-// ---------------------------------------------------------------------------
-// AI enrichment: combined date + person extraction for unresolved tasks
-// ---------------------------------------------------------------------------
-
-interface TaskEnrichment {
-  taskIndex: number;
-  assignedToId: string | null;
-  dueDate: string | null;
-  cleanedText: string;
-}
-
-/**
- * Single batch LLM call that extracts both due dates and person assignment
- * from task text + context. Handles implicit patterns like:
- * - "# Matt's tasks" → assigned to Matt
- * - "finish by end of month" → due date
- * - "Bob should review this" → assigned to Bob
- */
-async function inferTaskEnrichments(
-  tasks: { index: number; text: string; sectionHeading: string | null }[],
-  knownPeople: KnownPerson[],
-  aiProvider: AiProvider,
-  referenceDate: Date = new Date(),
-  timeZone: string = "UTC",
-): Promise<{ ok: boolean; enrichments: TaskEnrichment[] }> {
-  if (tasks.length === 0) return { ok: true, enrichments: [] };
-
-  // Reference "today" for the LLM must be the user-zone calendar date, matching
-  // the regex path — otherwise the model resolves relatives off the UTC day.
-  const today = getZonedDate(referenceDate, timeZone);
-  const referenceDateStr = `${today.year}-${
-    String(today.month + 1).padStart(2, "0")
-  }-${String(today.day).padStart(2, "0")}`;
-
-  const peopleList = knownPeople.length > 0
-    ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join(
-      "\n",
-    )
-    : "(no known people)";
-
-  const validPeopleIds = new Set(knownPeople.map((person) => person.id));
-
-  const taskList = tasks
-    .map((task) => {
-      const heading = task.sectionHeading
-        ? ` [under heading: "${task.sectionHeading}"]`
-        : "";
-      return `${task.index}: "${task.text}"${heading}`;
-    })
-    .join("\n");
-
-  // A transport/parse failure returns { ok: false } so the caller falls back to
-  // the regex-derived dates/assignments; a well-formed-but-empty response is ok.
-  try {
-    return await aiProvider.completeJson(
-      {
-        purpose: "enrich-tasks",
-        systemPrompt:
-          `You extract metadata from task descriptions. Today is ${referenceDateStr}.
-
-For each task, determine:
-1. **assigned_to_id**: Who is this task assigned to? Look for:
-   - Explicit markers: "(assigned: X)", "(owner: X)"
-   - Names in the task text: "Ask Alice about..."
-   - Section heading context: heading "Matt's tasks" means tasks under it are Matt's
-   - Only use person IDs from the KNOWN PEOPLE list. If no match, use null.
-
-2. **due_date**: When is this task due? Look for:
-   - Explicit dates: "by March 30", "deadline: April 1st", "2026-04-01"
-   - Relative dates: "by Friday", "tomorrow", "next week", "end of month"
-   - Resolve relative dates from today (${referenceDateStr}). Return ISO format.
-   - If no date found, use null.
-
-3. **cleaned_text**: The task description with assignment markers and date markers REMOVED. Keep the core task description intact. Remove patterns like "(assigned: X)", "(owner: X)", "(deadline: Y)", "by DATE", "due DATE" etc.
-
-Return JSON: {"enrichments": [{"task_index": 0, "assigned_to_id": "uuid"|null, "due_date": "2026-04-01T00:00:00.000Z"|null, "cleaned_text": "task without markers"}]}
-
-KNOWN PEOPLE:
-${peopleList}`,
-        userContent: `TASKS:\n${taskList}`,
-      },
-      (raw): { ok: true; enrichments: TaskEnrichment[] } => {
-        const parsed: { enrichments?: unknown } = isRecord(raw) ? raw : {};
-        if (!Array.isArray(parsed.enrichments)) {
-          return { ok: true, enrichments: [] };
-        }
-        // One malformed element is skipped, never allowed to throw and drop
-        // the whole batch (EXTR-8).
-        const enrichments = parsed.enrichments
-          .filter(
-            (entry): entry is {
-              task_index: number;
-              assigned_to_id?: string | null;
-              due_date?: string | null;
-              cleaned_text: string;
-            } =>
-              isRecord(entry) &&
-              typeof entry.task_index === "number" &&
-              typeof entry.cleaned_text === "string",
-          )
-          .map((
-            entry,
-          ) => ({
-            taskIndex: entry.task_index,
-            assignedToId: typeof entry.assigned_to_id === "string" &&
-                validPeopleIds.has(entry.assigned_to_id)
-              ? entry.assigned_to_id
-              : null,
-            dueDate: typeof entry.due_date === "string" &&
-                !isNaN(new Date(entry.due_date).getTime())
-              ? new Date(entry.due_date).toISOString()
-              : null,
-            cleanedText: entry.cleaned_text,
-          }));
-        return { ok: true, enrichments };
-      },
-    );
-  } catch (error) {
-    console.error(`Task enrichment LLM error: ${(error as Error).message}`);
-    return { ok: false, enrichments: [] };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -838,8 +272,10 @@ export class TaskExtractor implements Extractor {
       ]),
       // Relative dates resolve against this instant in the configured user
       // timezone (default UTC), not the server's UTC clock (Step 9 / C7).
+      // The timezone is injected through the pipeline deps (EXTR-11), never
+      // read from env mid-extraction.
       referenceDate: new Date(),
-      userTimeZone: getConfiguredTimeZone(),
+      userTimeZone: context.timeZone,
       taskIdByCheckboxIndex: new Map(),
       parentLinkWritten: new Set(),
       allTaskIds: [],
@@ -1068,7 +504,8 @@ export class TaskExtractor implements Extractor {
       const state = run.enriched[match.checkboxIndex];
       const newStatus = checkbox.checked ? "done" : "open";
 
-      const updates: Record<string, unknown> = {
+      // Schema-typed payload (REPO-4): a misspelled column is a compile error.
+      const updates: TaskUpdate = {
         content: state.content,
         // INVARIANT 1: re-hash on every content edit (the extractor is part of
         // the one server-side update path). A stale hash is worse than none —

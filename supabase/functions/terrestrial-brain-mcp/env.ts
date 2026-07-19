@@ -23,3 +23,12 @@ export function requireEnv(name: string): string {
   }
   return value;
 }
+
+/**
+ * Reads the configured user timezone (IANA name), defaulting to UTC. A
+ * composition-root read (EXTR-11): the value is injected into the extraction
+ * pipeline deps — extraction logic never reads env mid-run.
+ */
+export function getConfiguredTimeZone(): string {
+  return Deno.env.get("TB_USER_TIMEZONE") ?? "UTC";
+}

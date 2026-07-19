@@ -245,3 +245,24 @@ Deno.test("formatRecentActivity: exactly the section limit shows a plain count",
   );
   assertEquals(out.includes(`(${RECENT_ACTIVITY_SECTION_LIMIT}+)`), false);
 });
+
+Deno.test("formatProjectSummary: a done task past its due date is never marked OVERDUE (TOOL-8)", () => {
+  const data = baseProjectData();
+  data.tasks = {
+    data: [
+      {
+        id: "t-done",
+        content: "Shipped feature",
+        status: "done",
+        due_by: "2000-01-01T00:00:00Z",
+        assigned_to: null,
+        created_at: "2026-01-02T00:00:00Z",
+      },
+    ],
+    error: null,
+  };
+
+  const out = formatProjectSummary(data);
+  assertStringIncludes(out, "Shipped feature");
+  assertEquals(out.includes("(OVERDUE)"), false);
+});

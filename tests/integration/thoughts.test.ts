@@ -3,9 +3,24 @@ import {
   callTool,
   callToolRaw,
   mcpHeaders,
-  SUPABASE_SERVICE_KEY,
-  SUPABASE_URL,
+  restUrl,
+  serviceHeaders,
+  uniqueName,
 } from "../helpers/mcp-client.ts";
+
+/**
+ * Hard-deletes every thought whose content CONTAINS the given unique marker
+ * (service-role REST delete). Used by tests that clean up in `finally` by the
+ * marker they embedded in their fixture content, so cleanup succeeds even when
+ * an assertion failed before any id was captured (TEST-16).
+ */
+async function deleteThoughtsByMarker(marker: string): Promise<void> {
+  const response = await fetch(
+    restUrl(`thoughts?content=like.*${encodeURIComponent(marker)}*`),
+    { method: "DELETE", headers: serviceHeaders() },
+  );
+  await response.body?.cancel();
+}
 
 // ─── Thoughts Tests ──────────────────────────────────────────────────────────
 
@@ -65,15 +80,10 @@ Deno.test("search_thoughts shows full ISO 8601 timestamps", async () => {
 
   // Cleanup
   await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }`,
+    restUrl(`thoughts?content=eq.${encodeURIComponent(uniqueContent)}`),
     {
       method: "DELETE",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
 });
@@ -85,14 +95,11 @@ Deno.test("get_thought_by_id shows full ISO 8601 timestamps", async () => {
 
   // Get the thought ID from DB
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id`,
+    restUrl(
+      `thoughts?content=eq.${encodeURIComponent(uniqueContent)}&select=id`,
+    ),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true);
@@ -112,13 +119,10 @@ Deno.test("get_thought_by_id shows full ISO 8601 timestamps", async () => {
 
   // Cleanup
   await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+    restUrl(`thoughts?id=eq.${thoughtId}`),
     {
       method: "DELETE",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
 });
@@ -316,63 +320,48 @@ Deno.test("list_thoughts with mismatched author and project_id returns no though
 const SEARCH_FILTER_CLEANUP_IDS: string[] = [];
 
 Deno.test("search_thoughts with author filter narrows results", async () => {
-  // Capture two thoughts with different authors and similar content
-  const baseContent = `search filter test: database optimization ${Date.now()}`;
-  await callTool("capture_thought", {
-    content: `${baseContent} — from model A`,
-    author: "test-model-alpha",
-  });
-  await callTool("capture_thought", {
-    content: `${baseContent} — from model B`,
-    author: "test-model-beta",
-  });
+  // Capture two thoughts with different authors and similar content. Cleanup
+  // happens in `finally` by the unique marker — previously registration was
+  // guarded by `if (response.ok)`, silently leaking rows on failure (TEST-16).
+  const baseContent = uniqueName("search filter test: database optimization");
+  try {
+    await callTool("capture_thought", {
+      content: `${baseContent} — from model A`,
+      author: "test-model-alpha",
+    });
+    await callTool("capture_thought", {
+      content: `${baseContent} — from model B`,
+      author: "test-model-beta",
+    });
 
-  // Search with author filter
-  const result = await callTool("search_thoughts", {
-    query: baseContent,
-    author: "test-model-alpha",
-    limit: 10,
-    threshold: 0.3,
-  });
-  assertExists(result);
+    // Search with author filter
+    const result = await callTool("search_thoughts", {
+      query: baseContent,
+      author: "test-model-alpha",
+      limit: 10,
+      threshold: 0.3,
+    });
+    assertExists(result);
 
-  // Query shares all its words with the captured thoughts, so the deterministic
-  // fake embedding matches — a hard assertion, not skipped when empty.
-  assertEquals(
-    result.includes("No thoughts found"),
-    false,
-    `Expected the author-filtered match. Got: ${result.substring(0, 500)}`,
-  );
-  assertEquals(
-    result.includes("Author: test-model-alpha"),
-    true,
-    `Should contain model-alpha. Got: ${result.substring(0, 500)}`,
-  );
-  assertEquals(
-    result.includes("Author: test-model-beta"),
-    false,
-    `Should NOT contain model-beta. Got: ${result.substring(0, 500)}`,
-  );
-
-  // Cleanup
-  for (const suffix of ["— from model A", "— from model B"]) {
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/thoughts?content=like.*${
-        encodeURIComponent(suffix)
-      }&select=id`,
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
-      },
+    // Query shares all its words with the captured thoughts, so the deterministic
+    // fake embedding matches — a hard assertion, not skipped when empty.
+    assertEquals(
+      result.includes("No thoughts found"),
+      false,
+      `Expected the author-filtered match. Got: ${result.substring(0, 500)}`,
     );
-    if (response.ok) {
-      const thoughts: { id: string }[] = await response.json();
-      for (const thought of thoughts) {
-        SEARCH_FILTER_CLEANUP_IDS.push(thought.id);
-      }
-    }
+    assertEquals(
+      result.includes("Author: test-model-alpha"),
+      true,
+      `Should contain model-alpha. Got: ${result.substring(0, 500)}`,
+    );
+    assertEquals(
+      result.includes("Author: test-model-beta"),
+      false,
+      `Should NOT contain model-beta. Got: ${result.substring(0, 500)}`,
+    );
+  } finally {
+    await deleteThoughtsByMarker(baseContent);
   }
 });
 
@@ -393,14 +382,9 @@ Deno.test("search_thoughts with reliability filter narrows results", async () =>
 
   // Fetch thought B's ID so we can patch its reliability
   const fetchResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(contentB)
-    }&select=id`,
+    restUrl(`thoughts?content=eq.${encodeURIComponent(contentB)}&select=id`),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(fetchResponse.ok, true, "DB fetch should succeed");
@@ -410,14 +394,9 @@ Deno.test("search_thoughts with reliability filter narrows results", async () =>
 
   // Also fetch thought A for cleanup
   const fetchResponseA = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(contentA)
-    }&select=id`,
+    restUrl(`thoughts?content=eq.${encodeURIComponent(contentA)}&select=id`),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(fetchResponseA.ok, true);
@@ -428,14 +407,10 @@ Deno.test("search_thoughts with reliability filter narrows results", async () =>
 
   // Update thought B to 'less reliable' via direct DB patch
   const patchResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtsB[0].id}`,
+    restUrl(`thoughts?id=eq.${thoughtsB[0].id}`),
     {
       method: "PATCH",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: serviceHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ reliability: "less reliable" }),
     },
   );
@@ -479,13 +454,10 @@ Deno.test("search_thoughts with reliability filter narrows results", async () =>
 Deno.test("cleanup search filter test data", async () => {
   for (const thoughtId of SEARCH_FILTER_CLEANUP_IDS) {
     const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      restUrl(`thoughts?id=eq.${thoughtId}`),
       {
         method: "DELETE",
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
+        headers: serviceHeaders(),
       },
     );
     assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
@@ -575,15 +547,10 @@ Deno.test("search_thoughts output includes reliability and author when present",
 
   // Cleanup
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }`,
+    restUrl(`thoughts?content=eq.${encodeURIComponent(uniqueContent)}`),
     {
       method: "DELETE",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true, "Cleanup should succeed");
@@ -597,15 +564,13 @@ Deno.test("list_thoughts displays raw UUID for orphaned project references", asy
 
   // Insert a thought directly with an orphaned project UUID
   const insertResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts`,
+    restUrl(`thoughts`),
     {
       method: "POST",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      headers: serviceHeaders({
         "Content-Type": "application/json",
         Prefer: "return=representation",
-      },
+      }),
       body: JSON.stringify({
         content: uniqueContent,
         metadata: {
@@ -635,13 +600,10 @@ Deno.test("list_thoughts displays raw UUID for orphaned project references", asy
 
   // Cleanup
   const cleanupResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${inserted[0].id}`,
+    restUrl(`thoughts?id=eq.${inserted[0].id}`),
     {
       method: "DELETE",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(cleanupResponse.ok, true, "Cleanup should succeed");
@@ -679,12 +641,9 @@ Test Proj Backend API should expose a cache-invalidation webhook so the record d
 
   // Query the DB directly to verify project_id was set in metadata
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?reference_id=eq.${TEST_NOTE_ID}&select=content,metadata`,
+    restUrl(`thoughts?reference_id=eq.${TEST_NOTE_ID}&select=content,metadata`),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true, "DB query should succeed");
@@ -735,14 +694,13 @@ Deno.test("capture_thought sets reliability to 'reliable'", async () => {
 
   // Query DB to verify reliability
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id,reliability,author`,
+    restUrl(
+      `thoughts?content=eq.${
+        encodeURIComponent(uniqueContent)
+      }&select=id,reliability,author`,
+    ),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true, "DB query should succeed");
@@ -769,14 +727,13 @@ Deno.test("capture_thought stores author when provided", async () => {
   assertExists(result);
 
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id,reliability,author`,
+    restUrl(
+      `thoughts?content=eq.${
+        encodeURIComponent(uniqueContent)
+      }&select=id,reliability,author`,
+    ),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true);
@@ -805,14 +762,13 @@ Deno.test("capture_thought leaves author null when omitted", async () => {
   assertExists(result);
 
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id,reliability,author`,
+    restUrl(
+      `thoughts?content=eq.${
+        encodeURIComponent(uniqueContent)
+      }&select=id,reliability,author`,
+    ),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true);
@@ -842,14 +798,13 @@ Deno.test("capture_thought merges explicit project_ids with pipeline-detected pr
   assertExists(result);
 
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id,metadata`,
+    restUrl(
+      `thoughts?content=eq.${
+        encodeURIComponent(uniqueContent)
+      }&select=id,metadata`,
+    ),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true);
@@ -878,13 +833,10 @@ Deno.test("capture_thought merges explicit project_ids with pipeline-detected pr
 Deno.test("cleanup capture_thought provenance test data", async () => {
   for (const thoughtId of CAPTURE_THOUGHT_CLEANUP_IDS) {
     const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      restUrl(`thoughts?id=eq.${thoughtId}`),
       {
         method: "DELETE",
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
+        headers: serviceHeaders(),
       },
     );
     assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
@@ -894,214 +846,197 @@ Deno.test("cleanup capture_thought provenance test data", async () => {
 // Cleanup: remove test thoughts after the test
 Deno.test("cleanup ingest_note test data", async () => {
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?reference_id=eq.${TEST_NOTE_ID}`,
+    restUrl(`thoughts?reference_id=eq.${TEST_NOTE_ID}`),
     {
       method: "DELETE",
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true, "Cleanup should succeed");
+
+  // TEST-16: ingest with a note_id also writes a note_snapshots row — delete
+  // it too, or every run accumulates one snapshot per ingest.
+  const snapshotResponse = await fetch(
+    restUrl(`note_snapshots?reference_id=eq.${TEST_NOTE_ID}`),
+    {
+      method: "DELETE",
+      headers: serviceHeaders(),
+    },
+  );
+  assertEquals(snapshotResponse.ok, true, "Snapshot cleanup should succeed");
 });
 
 // ─── archive_thought Tests ─────────────────────────────────────────────────
+//
+// TEST-9: every test in this section owns its whole fixture lifecycle —
+// it captures its own uniquely-marked thought, archives it itself, asserts,
+// and hard-deletes by its marker in `finally`. No test consumes a thought
+// archived by an earlier test, so the tests are order-independent.
 
-const ARCHIVE_THOUGHT_CLEANUP_IDS: string[] = [];
-
-Deno.test("archive_thought archives a thought", async () => {
-  const uniqueContent = `Archive test thought ${Date.now()}`;
-  await callTool("capture_thought", {
-    content: uniqueContent,
-    author: "test-archive",
-  });
-
-  // Get the thought ID
+/** Captures a thought via the tool and returns its DB id (looked up by content). */
+async function captureThoughtAndGetId(
+  content: string,
+  author: string,
+): Promise<string> {
+  await callTool("capture_thought", { content, author });
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id`,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
-    },
+    restUrl(`thoughts?content=eq.${encodeURIComponent(content)}&select=id`),
+    { headers: serviceHeaders() },
   );
   assertEquals(response.ok, true);
   const thoughts: { id: string }[] = await response.json();
   assertEquals(thoughts.length, 1);
-  const thoughtId = thoughts[0].id;
-  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+  return thoughts[0].id;
+}
 
-  const result = await callTool("archive_thought", { id: thoughtId });
-  assertExists(result);
-  assertEquals(
-    result.includes("Archived thought:"),
-    true,
-    `Should confirm archiving. Got: ${result}`,
-  );
+Deno.test("archive_thought archives a thought", async () => {
+  const uniqueContent = uniqueName("Archive test thought");
+  try {
+    const thoughtId = await captureThoughtAndGetId(
+      uniqueContent,
+      "test-archive",
+    );
 
-  // Verify archived_at is set in DB
-  const verifyResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=archived_at`,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
-  assertEquals(verifyResponse.ok, true);
-  const verified: { archived_at: string | null }[] = await verifyResponse
-    .json();
-  assertEquals(verified.length, 1);
-  assertExists(verified[0].archived_at, "archived_at should be set");
+    const result = await callTool("archive_thought", { id: thoughtId });
+    assertExists(result);
+    assertEquals(
+      result.includes("Archived thought:"),
+      true,
+      `Should confirm archiving. Got: ${result}`,
+    );
+
+    // Verify archived_at is set in DB
+    const verifyResponse = await fetch(
+      restUrl(`thoughts?id=eq.${thoughtId}&select=archived_at`),
+      { headers: serviceHeaders() },
+    );
+    assertEquals(verifyResponse.ok, true);
+    const verified: { archived_at: string | null }[] = await verifyResponse
+      .json();
+    assertEquals(verified.length, 1);
+    assertExists(verified[0].archived_at, "archived_at should be set");
+  } finally {
+    await deleteThoughtsByMarker(uniqueContent);
+  }
 });
 
 Deno.test("archive_thought on already-archived thought returns error", async () => {
   // Self-contained: create and archive our own thought, then archive it again.
-  const uniqueContent = `Already-archived test thought ${Date.now()}`;
-  await callTool("capture_thought", {
-    content: uniqueContent,
-    author: "test-archive-twice",
-  });
+  const uniqueContent = uniqueName("Already-archived test thought");
+  try {
+    const thoughtId = await captureThoughtAndGetId(
+      uniqueContent,
+      "test-archive-twice",
+    );
 
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id`,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
-  assertEquals(response.ok, true);
-  const thoughts: { id: string }[] = await response.json();
-  assertEquals(thoughts.length, 1);
-  const thoughtId = thoughts[0].id;
-  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+    // First archive succeeds.
+    await callTool("archive_thought", { id: thoughtId });
 
-  // First archive succeeds.
-  await callTool("archive_thought", { id: thoughtId });
+    // Second archive on the now-archived thought must return an error.
+    const { text: resultText, isError } = await callToolRaw("archive_thought", {
+      id: thoughtId,
+    });
 
-  // Second archive on the now-archived thought must return an error.
-  const { text: resultText, isError } = await callToolRaw("archive_thought", {
-    id: thoughtId,
-  });
-
-  assertEquals(
-    isError,
-    true,
-    `Should return error for already-archived thought. Got: ${resultText}`,
-  );
-  assertEquals(
-    resultText.includes("already archived") || resultText.includes("not found"),
-    true,
-    `Error message should mention already archived or not found. Got: ${resultText}`,
-  );
+    assertEquals(
+      isError,
+      true,
+      `Should return error for already-archived thought. Got: ${resultText}`,
+    );
+    assertEquals(
+      resultText.includes("already archived") ||
+        resultText.includes("not found"),
+      true,
+      `Error message should mention already archived or not found. Got: ${resultText}`,
+    );
+  } finally {
+    await deleteThoughtsByMarker(uniqueContent);
+  }
 });
 
 Deno.test("list_thoughts excludes archived thoughts by default", async () => {
   // Capture a new thought and archive it
-  const uniqueContent = `Archived list exclusion test ${Date.now()}`;
-  await callTool("capture_thought", {
-    content: uniqueContent,
-    author: "test-archive-list",
-  });
+  const uniqueContent = uniqueName("Archived list exclusion test");
+  try {
+    const thoughtId = await captureThoughtAndGetId(
+      uniqueContent,
+      "test-archive-list",
+    );
 
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id`,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
-  const thoughts: { id: string }[] = await response.json();
-  assertEquals(thoughts.length, 1);
-  const thoughtId = thoughts[0].id;
-  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+    // Archive it
+    await callTool("archive_thought", { id: thoughtId });
 
-  // Archive it
-  await callTool("archive_thought", { id: thoughtId });
-
-  // list_thoughts should NOT include it
-  const listResult = await callTool("list_thoughts", { limit: 100 });
-  assertEquals(
-    listResult.includes(uniqueContent),
-    false,
-    `Archived thought should not appear in list_thoughts. Got: ${
-      listResult.substring(0, 500)
-    }`,
-  );
+    // list_thoughts should NOT include it
+    const listResult = await callTool("list_thoughts", { limit: 100 });
+    assertEquals(
+      listResult.includes(uniqueContent),
+      false,
+      `Archived thought should not appear in list_thoughts. Got: ${
+        listResult.substring(0, 500)
+      }`,
+    );
+  } finally {
+    await deleteThoughtsByMarker(uniqueContent);
+  }
 });
 
 Deno.test("list_thoughts with include_archived shows archived thoughts", async () => {
-  // The thought archived in the previous test should appear with include_archived
-  const listResult = await callTool("list_thoughts", {
-    limit: 100,
-    include_archived: true,
-  });
-  assertExists(listResult);
-  // At least one archived thought should now be present
-  assertEquals(
-    listResult.includes("test-archive-list") ||
-      listResult.includes("Archived list exclusion test"),
-    true,
-    `Archived thought should appear when include_archived=true. Got: ${
-      listResult.substring(0, 500)
-    }`,
-  );
+  // Self-owned fixture (TEST-9): capture and archive our OWN thought, then
+  // verify include_archived surfaces it — no reliance on an earlier test.
+  const uniqueContent = uniqueName("Include-archived visibility test");
+  try {
+    const thoughtId = await captureThoughtAndGetId(
+      uniqueContent,
+      "test-archive-include",
+    );
+    await callTool("archive_thought", { id: thoughtId });
+
+    const listResult = await callTool("list_thoughts", {
+      limit: 100,
+      include_archived: true,
+    });
+    assertExists(listResult);
+    assertEquals(
+      listResult.includes(uniqueContent),
+      true,
+      `Archived thought should appear when include_archived=true. Got: ${
+        listResult.substring(0, 500)
+      }`,
+    );
+  } finally {
+    await deleteThoughtsByMarker(uniqueContent);
+  }
 });
 
 Deno.test("search_thoughts excludes archived thoughts", async () => {
   // Capture a thought with very specific content, archive it, then search for it
-  const uniqueContent =
-    `Archived search exclusion zylophone quantum ${Date.now()}`;
-  await callTool("capture_thought", {
-    content: uniqueContent,
-    author: "test-archive-search",
-  });
-
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(uniqueContent)
-    }&select=id`,
-    {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
-    },
+  const uniqueContent = uniqueName(
+    "Archived search exclusion zylophone quantum",
   );
-  const thoughts: { id: string }[] = await response.json();
-  assertEquals(thoughts.length, 1);
-  const thoughtId = thoughts[0].id;
-  ARCHIVE_THOUGHT_CLEANUP_IDS.push(thoughtId);
+  try {
+    const thoughtId = await captureThoughtAndGetId(
+      uniqueContent,
+      "test-archive-search",
+    );
 
-  // Archive it
-  await callTool("archive_thought", { id: thoughtId });
+    // Archive it
+    await callTool("archive_thought", { id: thoughtId });
 
-  // Search should not find it — either "No thoughts found" or results that don't include the archived thought's ID
-  const searchResult = await callTool("search_thoughts", {
-    query: uniqueContent,
-    limit: 10,
-    threshold: 0.3,
-  });
-  assertEquals(
-    searchResult.includes(thoughtId),
-    false,
-    `Archived thought ID should not appear in search_thoughts results. Got: ${
-      searchResult.substring(0, 500)
-    }`,
-  );
+    // Search should not find it — either "No thoughts found" or results that don't include the archived thought's ID
+    const searchResult = await callTool("search_thoughts", {
+      query: uniqueContent,
+      limit: 10,
+      threshold: 0.3,
+    });
+    assertEquals(
+      searchResult.includes(thoughtId),
+      false,
+      `Archived thought ID should not appear in search_thoughts results. Got: ${
+        searchResult.substring(0, 500)
+      }`,
+    );
+  } finally {
+    await deleteThoughtsByMarker(uniqueContent);
+  }
 });
 
 Deno.test("thought_stats excludes archived thoughts from counts", async () => {
@@ -1113,13 +1048,9 @@ Deno.test("thought_stats excludes archived thoughts from counts", async () => {
 
   // Verify by checking the DB directly for non-archived count
   const dbResponse = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?archived_at=is.null&select=id`,
+    restUrl(`thoughts?archived_at=is.null&select=id`),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        Prefer: "count=exact",
-      },
+      headers: serviceHeaders({ Prefer: "count=exact" }),
     },
   );
   // Consume the response body to avoid resource leak
@@ -1132,22 +1063,6 @@ Deno.test("thought_stats excludes archived thoughts from counts", async () => {
     dbCount,
     `thought_stats count (${totalCount}) should match non-archived DB count (${dbCount})`,
   );
-});
-
-Deno.test("cleanup archive_thought test data", async () => {
-  for (const thoughtId of ARCHIVE_THOUGHT_CLEANUP_IDS) {
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
-      {
-        method: "DELETE",
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
-      },
-    );
-    assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
-  }
 });
 
 // ─── Usefulness Feedback Loop Tests ─────────────────────────────────────────
@@ -1164,14 +1079,9 @@ async function captureAndGetId(
 
 async function lookupThoughtId(content: string): Promise<string> {
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?content=eq.${
-      encodeURIComponent(content)
-    }&select=id`,
+    restUrl(`thoughts?content=eq.${encodeURIComponent(content)}&select=id`),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true);
@@ -1186,12 +1096,9 @@ async function lookupThoughtId(content: string): Promise<string> {
 
 async function getUsefulnessScore(thoughtId: string): Promise<number> {
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}&select=usefulness_score`,
+    restUrl(`thoughts?id=eq.${thoughtId}&select=usefulness_score`),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true);
@@ -1600,13 +1507,10 @@ Deno.test("get_thought_by_id for unknown UUID does not increment any score", asy
 Deno.test("cleanup usefulness feedback loop test data", async () => {
   for (const thoughtId of USEFULNESS_CLEANUP_IDS) {
     const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/thoughts?id=eq.${thoughtId}`,
+      restUrl(`thoughts?id=eq.${thoughtId}`),
       {
         method: "DELETE",
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
+        headers: serviceHeaders(),
       },
     );
     assertEquals(response.ok, true, `Cleanup of ${thoughtId} should succeed`);
@@ -1633,14 +1537,13 @@ async function fetchThoughtsForNote(
 ): Promise<{ id: string; content: string; archived_at: string | null }[]> {
   // Deliberately NO archived_at filter — we want to see archived rows too.
   const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/thoughts?reference_id=eq.${
-      encodeURIComponent(noteId)
-    }&select=id,content,archived_at`,
+    restUrl(
+      `thoughts?reference_id=eq.${
+        encodeURIComponent(noteId)
+      }&select=id,content,archived_at`,
+    ),
     {
-      headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
+      headers: serviceHeaders(),
     },
   );
   assertEquals(response.ok, true, "Direct thoughts query should succeed");
@@ -1716,27 +1619,17 @@ The Q3 marketing campaign will focus on social media advertising and paid influe
   } finally {
     // Self-contained cleanup: hard-delete everything for this test note_id.
     await fetch(
-      `${SUPABASE_URL}/rest/v1/thoughts?reference_id=eq.${
-        encodeURIComponent(noteId)
-      }`,
+      restUrl(`thoughts?reference_id=eq.${encodeURIComponent(noteId)}`),
       {
         method: "DELETE",
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
+        headers: serviceHeaders(),
       },
     );
     await fetch(
-      `${SUPABASE_URL}/rest/v1/note_snapshots?reference_id=eq.${
-        encodeURIComponent(noteId)
-      }`,
+      restUrl(`note_snapshots?reference_id=eq.${encodeURIComponent(noteId)}`),
       {
         method: "DELETE",
-        headers: {
-          apikey: SUPABASE_SERVICE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-        },
+        headers: serviceHeaders(),
       },
     );
   }

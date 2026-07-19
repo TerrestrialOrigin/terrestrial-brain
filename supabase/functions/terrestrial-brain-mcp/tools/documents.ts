@@ -1,32 +1,44 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { uuidField } from "../zod-schemas.ts";
-import { SupabaseClient } from "@supabase/supabase-js";
 import { parseNote } from "../parser.ts";
 import { runExtractionForTool } from "../extractors/pipeline.ts";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { hashContent } from "../helpers.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
+import type { DocumentUpdate } from "../repositories/document-repository.ts";
 import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
-import type { AiProvider } from "../ai/ai-provider.ts";
-import type { TaskRepository } from "../repositories/task-repository.ts";
-import type { ProjectRepository } from "../repositories/project-repository.ts";
-import type { PersonRepository } from "../repositories/person-repository.ts";
-import type { DocumentRepository } from "../repositories/document-repository.ts";
-import type { ThoughtRepository } from "../repositories/thought-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  aiProvider: AiProvider,
-  taskRepository: TaskRepository,
-  projectRepository: ProjectRepository,
-  personRepository: PersonRepository,
-  documentRepository: DocumentRepository,
-  thoughtRepository: ThoughtRepository,
+  deps: Pick<
+    ToolDeps,
+    | "supabase"
+    | "logger"
+    | "aiProvider"
+    | "taskRepository"
+    | "projectRepository"
+    | "personRepository"
+    | "documentRepository"
+    | "thoughtRepository"
+    | "extractors"
+    | "timeZone"
+  >,
 ) {
+  const {
+    supabase,
+    logger,
+    aiProvider,
+    taskRepository,
+    projectRepository,
+    personRepository,
+    documentRepository,
+    thoughtRepository,
+    extractors,
+    timeZone,
+  } = deps;
   // ─── write_document ───────────────────────────────────────────────────────────
 
   server.registerTool(
@@ -76,11 +88,12 @@ export function register(
           const extractionRun = await runExtractionForTool({
             parse: () => parseNote(content, title, null, "mcp"),
             deps: {
-              supabase,
               aiProvider,
               taskRepository,
               projectRepository,
               personRepository,
+              extractors,
+              timeZone,
             },
             site: "write_document",
             thrownReferences: { people: [], tasks: [] },
@@ -327,8 +340,9 @@ export function register(
           return errorResult("Document not found.");
         }
 
-        // Build update payload
-        const updates: Record<string, unknown> = {};
+        // Build update payload — schema-typed (REPO-4): a misspelled column is
+        // a compile error.
+        const updates: DocumentUpdate = {};
         if (title !== undefined) updates.title = title;
         if (content !== undefined) {
           updates.content = content;
@@ -347,11 +361,12 @@ export function register(
           const extractionRun = await runExtractionForTool({
             parse: () => parseNote(content, effectiveTitle, null, "mcp"),
             deps: {
-              supabase,
               aiProvider,
               taskRepository,
               projectRepository,
               personRepository,
+              extractors,
+              timeZone,
             },
             site: "update_document",
             thrownReferences: { people: [], tasks: [] },

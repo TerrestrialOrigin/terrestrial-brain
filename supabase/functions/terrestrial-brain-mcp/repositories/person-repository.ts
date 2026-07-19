@@ -5,6 +5,7 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { UpdateRow } from "../supabase-client.ts";
 
 /** The identity of a freshly-inserted / matched person. */
 export interface PersonIdentity {
@@ -43,6 +44,12 @@ export interface NewPersonValues {
   description?: string | null;
 }
 
+/**
+ * A partial update payload for a person, derived from the generated schema so a
+ * misspelled column is a compile error (REPO-4).
+ */
+export type PersonUpdate = Partial<UpdateRow<"people">>;
+
 export interface PersonListFilters {
   includeArchived: boolean;
   type?: string;
@@ -76,7 +83,7 @@ export interface PersonRepository {
    */
   update(
     id: string,
-    updates: Record<string, unknown>,
+    updates: PersonUpdate,
   ): Promise<RepoResult<{ id: string }>>;
 
   /** Soft-archive a person (sets `archived_at`). */

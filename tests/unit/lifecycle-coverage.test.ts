@@ -72,8 +72,10 @@ Deno.test("coverage: every spec scenario maps to exactly one manifest entry", as
   const specKeys = new Set(specScenarios.map(key));
   const manifestKeys = new Set(COVERAGE_MANIFEST.map(key));
 
-  const uncovered = [...specKeys].filter((k) => !manifestKeys.has(k));
-  const stale = [...manifestKeys].filter((k) => !specKeys.has(k));
+  const uncovered = [...specKeys].filter((specKey) =>
+    !manifestKeys.has(specKey)
+  );
+  const stale = [...manifestKeys].filter((specKey) => !specKeys.has(specKey));
 
   assertEquals(
     uncovered,
@@ -96,7 +98,9 @@ Deno.test("coverage: every spec scenario maps to exactly one manifest entry", as
 
 Deno.test("coverage: manifest tags match the spec tags", async () => {
   const specScenarios = await parseSpecScenarios();
-  const tagByKey = new Map(specScenarios.map((s) => [key(s), s.tag]));
+  const tagByKey = new Map(
+    specScenarios.map((scenario) => [key(scenario), scenario.tag]),
+  );
   for (const entry of COVERAGE_MANIFEST) {
     assertEquals(
       entry.tag,

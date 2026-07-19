@@ -5,7 +5,6 @@
  * runner that orchestrates sequential extraction from parsed notes.
  */
 
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ParsedNote } from "../parser.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
@@ -59,7 +58,6 @@ export type { KnownPerson };
 // ---------------------------------------------------------------------------
 
 export interface ExtractionContext {
-  supabase: SupabaseClient;
   /** Injected LLM/embedding seam — extractors call this instead of fetch. */
   aiProvider: AiProvider;
   /** Injected tasks-table seam — TaskExtractor writes through this, not supabase. */
@@ -68,6 +66,8 @@ export interface ExtractionContext {
   projectRepository: ProjectRepository;
   /** Injected people-table seam — PeopleExtractor writes through this. */
   personRepository: PersonRepository;
+  /** Configured user timezone (EXTR-11) — injected, never read from env here. */
+  timeZone: string;
   knownProjects: KnownProject[];
   knownTasks: KnownTask[];
   knownPeople: KnownPerson[];
@@ -157,6 +157,16 @@ export function partialExtractionWarning(errors: string[]): string {
   })`;
 }
 
+/** The seams the extraction pipeline runs against (EXTR-9: one deps object). */
+export interface ExtractionPipelineDeps {
+  aiProvider: AiProvider;
+  taskRepository: TaskRepository;
+  projectRepository: ProjectRepository;
+  personRepository: PersonRepository;
+  /** Configured user timezone (EXTR-11), read once at the composition root. */
+  timeZone: string;
+}
+
 /**
  * Runs extractors sequentially against a parsed note, collecting results
  * into a reference map. Each extractor may enrich the shared context for
@@ -165,12 +175,15 @@ export function partialExtractionWarning(errors: string[]): string {
 export async function runExtractionPipeline(
   note: ParsedNote,
   extractors: Extractor[],
-  supabase: SupabaseClient,
-  aiProvider: AiProvider,
-  taskRepository: TaskRepository,
-  projectRepository: ProjectRepository,
-  personRepository: PersonRepository,
+  deps: ExtractionPipelineDeps,
 ): Promise<PipelineOutcome> {
+  const {
+    aiProvider,
+    taskRepository,
+    projectRepository,
+    personRepository,
+    timeZone,
+  } = deps;
   // Initialize context — fetch known projects and people through the repos.
   const [activeProjectsResult, activePeopleResult] = await Promise.all([
     projectRepository.listActive(),
@@ -222,11 +235,11 @@ export async function runExtractionPipeline(
   }
 
   const context: ExtractionContext = {
-    supabase,
     aiProvider,
     taskRepository,
     projectRepository,
     personRepository,
+    timeZone,
     knownProjects: (activeProjects || []).map(
       (project: { id: string; name: string }) => ({
         id: project.id,
@@ -282,13 +295,14 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 // Shared tool-facing wrapper
 // ---------------------------------------------------------------------------
 
-/** The repository/provider seams the extraction pipeline runs against. */
-export interface ToolExtractionDeps {
-  supabase: SupabaseClient;
-  aiProvider: AiProvider;
-  taskRepository: TaskRepository;
-  projectRepository: ProjectRepository;
-  personRepository: PersonRepository;
+/**
+ * The seams a tool handler passes into `runExtractionForTool` — the pipeline
+ * deps plus the injected extractor set (TOOL-14: the set is built once at the
+ * composition root and threaded through the tool deps, never constructed
+ * inline in a handler).
+ */
+export interface ToolExtractionDeps extends ExtractionPipelineDeps {
+  extractors: Extractor[];
 }
 
 /**
@@ -333,7 +347,6 @@ export async function runExtractionForTool(options: {
   thrownReferences?: Record<string, string[]>;
   /** Site-specific wording override for the thrown-pipeline warning. */
   thrownWarning?: string;
-  extractors?: Extractor[];
   runPipeline?: typeof runExtractionPipeline;
 }): Promise<ToolExtractionRun> {
   const {
@@ -342,20 +355,11 @@ export async function runExtractionForTool(options: {
     site,
     thrownReferences = {},
     thrownWarning = EXTRACTION_THREW_WARNING,
-    extractors = createDefaultExtractors(),
     runPipeline = runExtractionPipeline,
   } = options;
   try {
     const note = parse();
-    const outcome = await runPipeline(
-      note,
-      extractors,
-      deps.supabase,
-      deps.aiProvider,
-      deps.taskRepository,
-      deps.projectRepository,
-      deps.personRepository,
-    );
+    const outcome = await runPipeline(note, deps.extractors, deps);
     if (!outcome.ok) {
       return { status: "aborted", reason: outcome.error };
     }

@@ -1,8 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { extractProjectFromConventionalPath } from "../../supabase/functions/terrestrial-brain-mcp/extractors/project-extractor.ts";
+import { computeSimilarity } from "../../supabase/functions/terrestrial-brain-mcp/extractors/similarity.ts";
 import {
   buildTaskMetadata,
-  computeSimilarity,
   extractAssignment,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
 import { findPersonInText } from "../../supabase/functions/terrestrial-brain-mcp/extractors/name-matching.ts";

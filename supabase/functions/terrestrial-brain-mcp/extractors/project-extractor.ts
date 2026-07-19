@@ -17,6 +17,11 @@ import type {
 } from "./pipeline.ts";
 import { isRecord, REFERENCE_KEYS } from "./pipeline.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
+import {
+  buildIdAllowlist,
+  callJsonWithFallback,
+  formatEntityList,
+} from "./llm-helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Signal 1a: Conventional path detection (case-insensitive, any depth)
@@ -68,12 +73,14 @@ export async function extractProjectNameFromPath(
   referenceId: string,
   aiProvider: AiProvider,
 ): Promise<{ isProject: boolean; projectName: string | null }> {
-  try {
-    return await aiProvider.completeJson(
-      {
-        purpose: "project-from-path",
-        systemPrompt:
-          `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
+  return await callJsonWithFallback<
+    { isProject: boolean; projectName: string | null }
+  >({
+    aiProvider,
+    request: {
+      purpose: "project-from-path",
+      systemPrompt:
+        `You analyze file paths from an Obsidian vault to determine if they reference a specific project.
 
 RULES:
 - A path segment or filename like "Rabbit Hutch Project" IS a project named "Rabbit Hutch"
@@ -85,26 +92,22 @@ RULES:
 - If the path has a conventional "projects/{name}/" structure, use that name directly
 
 Return JSON: {"is_project": true/false, "project_name": "name" or null}`,
-        userContent: `Path: ${referenceId}`,
-      },
-      (raw): { isProject: boolean; projectName: string | null } => {
-        const parsed: { is_project?: unknown; project_name?: unknown } =
-          isRecord(raw) ? raw : {};
-        if (
-          parsed.is_project && typeof parsed.project_name === "string" &&
-          parsed.project_name.trim()
-        ) {
-          return { isProject: true, projectName: parsed.project_name.trim() };
-        }
-        return { isProject: false, projectName: null };
-      },
-    );
-  } catch (error) {
-    console.error(
-      `ProjectExtractor LLM path analysis error: ${(error as Error).message}`,
-    );
-    return { isProject: false, projectName: null };
-  }
+      userContent: `Path: ${referenceId}`,
+    },
+    parse: (raw): { isProject: boolean; projectName: string | null } => {
+      const parsed: { is_project?: unknown; project_name?: unknown } =
+        isRecord(raw) ? raw : {};
+      if (
+        parsed.is_project && typeof parsed.project_name === "string" &&
+        parsed.project_name.trim()
+      ) {
+        return { isProject: true, projectName: parsed.project_name.trim() };
+      }
+      return { isProject: false, projectName: null };
+    },
+    fallback: { isProject: false, projectName: null },
+    label: "ProjectExtractor LLM path analysis error",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -181,44 +184,36 @@ async function detectProjectsByContent(
 ): Promise<string[]> {
   if (knownProjects.length === 0) return [];
 
-  const projectList = knownProjects
-    .map((project) => `- "${project.name}" (id: ${project.id})`)
-    .join("\n");
+  const projectList = formatEntityList(knownProjects);
 
   const noteSummary = buildNoteSummary(note);
 
-  const validIds = new Set(knownProjects.map((project) => project.id));
+  const validIds = buildIdAllowlist(knownProjects);
 
-  try {
-    return await aiProvider.completeJson(
-      {
-        purpose: "projects-by-content",
-        systemPrompt:
-          `You identify which projects a note is about. You are given a note summary and a list of known projects. Return ONLY project IDs from the list that the note clearly references or relates to. Do not invent new projects. If no projects match, return an empty array.
+  return await callJsonWithFallback<string[]>({
+    aiProvider,
+    request: {
+      purpose: "projects-by-content",
+      systemPrompt:
+        `You identify which projects a note is about. You are given a note summary and a list of known projects. Return ONLY project IDs from the list that the note clearly references or relates to. Do not invent new projects. If no projects match, return an empty array.
 
 Return JSON: {"project_ids": ["uuid1", "uuid2"]}
 
 KNOWN PROJECTS:
 ${projectList}`,
-        userContent: noteSummary,
-      },
-      (raw): string[] => {
-        const parsed: { project_ids?: unknown } = isRecord(raw) ? raw : {};
-        if (!Array.isArray(parsed.project_ids)) return [];
-        // Only accept IDs that exist in the known projects list
-        return parsed.project_ids.filter(
-          (id: unknown) => typeof id === "string" && validIds.has(id),
-        );
-      },
-    );
-  } catch (error) {
-    console.error(
-      `ProjectExtractor LLM content matching error: ${
-        (error as Error).message
-      }`,
-    );
-    return [];
-  }
+      userContent: noteSummary,
+    },
+    parse: (raw): string[] => {
+      const parsed: { project_ids?: unknown } = isRecord(raw) ? raw : {};
+      if (!Array.isArray(parsed.project_ids)) return [];
+      // Only accept IDs that exist in the known projects list
+      return parsed.project_ids.filter(
+        (id: unknown) => typeof id === "string" && validIds.has(id),
+      );
+    },
+    fallback: [],
+    label: "ProjectExtractor LLM content matching error",
+  });
 }
 
 // ---------------------------------------------------------------------------

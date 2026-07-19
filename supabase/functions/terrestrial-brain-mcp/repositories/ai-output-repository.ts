@@ -5,6 +5,14 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
+import type { Database } from "../database.types.ts";
+
+/** A row from the `get_pending_ai_output_metadata` RPC (REPO-6) — metadata
+ * plus content size, never the content body itself. */
+export type PendingAiOutputMetadataRow =
+  Database["public"]["Functions"]["get_pending_ai_output_metadata"]["Returns"][
+    number
+  ];
 
 /** A pending AI-output row (full content) returned by the pull API. */
 export interface PendingAiOutputRow {
@@ -31,7 +39,7 @@ export interface AiOutputRepository {
   listPending(): Promise<RepoResult<PendingAiOutputRow[]>>;
 
   /** Lightweight pending metadata via the `get_pending_ai_output_metadata` RPC. */
-  listPendingMetadata(): Promise<RepoResult<unknown[]>>;
+  listPendingMetadata(): Promise<RepoResult<PendingAiOutputMetadataRow[]>>;
 
   /** Content of specific pending outputs by id. */
   findContentByIds(
