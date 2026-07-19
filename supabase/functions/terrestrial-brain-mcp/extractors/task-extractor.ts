@@ -18,7 +18,7 @@ import type {
   KnownProject,
   KnownTask,
 } from "./pipeline.ts";
-import { REFERENCE_KEYS } from "./pipeline.ts";
+import { isRecord, REFERENCE_KEYS } from "./pipeline.ts";
 import type { KnownPerson } from "./name-matching.ts";
 import {
   cleanStrippedText,
@@ -26,7 +26,7 @@ import {
   getConfiguredTimeZone,
   getZonedDate,
 } from "./date-parser.ts";
-import { findPersonInText } from "./name-matching.ts";
+import { findPersonByName, findPersonInText } from "./name-matching.ts";
 import { ASSIGNMENT_MARKER_PATTERN, DUE_MARKER_PATTERN } from "./markers.ts";
 import { monthPattern } from "./date-parser.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
@@ -476,18 +476,24 @@ ${projectList}`,
         userContent: `TASKS:\n${taskList}`,
       },
       (raw): { ok: true; assignments: TaskProjectAssignment[] } => {
-        const parsed = raw as { assignments?: unknown };
+        const parsed: { assignments?: unknown } = isRecord(raw) ? raw : {};
         if (!Array.isArray(parsed.assignments)) {
           return { ok: true, assignments: [] };
         }
+        // One malformed element is skipped, never allowed to throw and drop
+        // the whole batch (EXTR-8).
         const assignments = parsed.assignments
           .filter(
-            (assignment: { task_index?: unknown; project_id?: unknown }) =>
+            (assignment): assignment is {
+              task_index: number;
+              project_id: string;
+            } =>
+              isRecord(assignment) &&
               typeof assignment.task_index === "number" &&
               typeof assignment.project_id === "string" &&
               validIds.has(assignment.project_id),
           )
-          .map((assignment: { task_index: number; project_id: string }) => ({
+          .map((assignment) => ({
             taskIndex: assignment.task_index,
             projectId: assignment.project_id,
           }));
@@ -552,8 +558,11 @@ const ASSIGNMENT_PATTERN = new RegExp(
 
 /**
  * Fast path: extracts explicit "(assigned: Alice)" / "(owner: Bob)" patterns.
- * Strips the pattern from content if person is found.
- * Does NOT do substring matching — that's handled by AI fallback.
+ * Strips the pattern from content if person is found. Matching uses the shared
+ * tiered matcher (EXTR-3): exact full name wins, then a name-part match only
+ * when unambiguous — never first-in-list substring containment, so "Bo" can't
+ * silently land on "Bob Smith". Ambiguous candidates fall through (personId
+ * null, marker left intact) to the AI path, which has heading context.
  */
 export function extractAssignment(
   text: string,
@@ -564,19 +573,12 @@ export function extractAssignment(
   const match = text.match(ASSIGNMENT_PATTERN);
   if (!match) return { personId: null, cleanedText: text };
 
-  const candidateName = match[1].trim().toLowerCase();
-  for (const person of knownPeople) {
-    const personLower = person.name.toLowerCase();
-    if (
-      personLower === candidateName ||
-      candidateName.includes(personLower) ||
-      personLower.includes(candidateName)
-    ) {
-      return {
-        personId: person.id,
-        cleanedText: cleanStrippedText(text.replace(match[0], "")),
-      };
-    }
+  const personId = findPersonByName(match[1], knownPeople);
+  if (personId) {
+    return {
+      personId,
+      cleanedText: cleanStrippedText(text.replace(match[0], "")),
+    };
   }
 
   return { personId: null, cleanedText: text };
@@ -664,23 +666,26 @@ ${peopleList}`,
         userContent: `TASKS:\n${taskList}`,
       },
       (raw): { ok: true; enrichments: TaskEnrichment[] } => {
-        const parsed = raw as { enrichments?: unknown };
+        const parsed: { enrichments?: unknown } = isRecord(raw) ? raw : {};
         if (!Array.isArray(parsed.enrichments)) {
           return { ok: true, enrichments: [] };
         }
+        // One malformed element is skipped, never allowed to throw and drop
+        // the whole batch (EXTR-8).
         const enrichments = parsed.enrichments
           .filter(
-            (entry: Record<string, unknown>) =>
-              typeof entry.task_index === "number" &&
-              typeof entry.cleaned_text === "string",
-          )
-          .map((
-            entry: {
+            (entry): entry is {
               task_index: number;
               assigned_to_id?: string | null;
               due_date?: string | null;
               cleaned_text: string;
-            },
+            } =>
+              isRecord(entry) &&
+              typeof entry.task_index === "number" &&
+              typeof entry.cleaned_text === "string",
+          )
+          .map((
+            entry,
           ) => ({
             taskIndex: entry.task_index,
             assignedToId: typeof entry.assigned_to_id === "string" &&
@@ -911,15 +916,23 @@ export class TaskExtractor implements Extractor {
    */
   private async enrichDatesAndAssignments(run: ExtractionRun): Promise<void> {
     const aiCandidates = this.resolveFastPaths(run);
-    const enrichmentRan = await this.applyAiEnrichment(run, aiCandidates);
+    const { ran, respondedIndexes } = await this.applyAiEnrichment(
+      run,
+      aiCandidates,
+    );
 
     for (const candidate of aiCandidates) {
       const state = run.enriched[candidate.index];
-      if (candidate.needsDate && state.dueDate === null && !enrichmentRan) {
+      // A field is "unavailable" (→ preserve stored value) when enrichment did
+      // not run OR the response carried NO entry for this task (EXTR-4): an
+      // absent entry — e.g. a truncated completion — is not an affirmative
+      // "nothing found". Only an entry present with explicit nulls clears.
+      const entryAbsent = !ran || !respondedIndexes.has(candidate.index);
+      if (candidate.needsDate && state.dueDate === null && entryAbsent) {
         state.dateUnavailable = true;
       }
       if (
-        candidate.needsPerson && state.assignedTo === null && !enrichmentRan
+        candidate.needsPerson && state.assignedTo === null && entryAbsent
       ) {
         state.personUnavailable = true;
       }
@@ -1002,13 +1015,13 @@ export class TaskExtractor implements Extractor {
   private async applyAiEnrichment(
     run: ExtractionRun,
     aiCandidates: AiCandidate[],
-  ): Promise<boolean> {
+  ): Promise<{ ran: boolean; respondedIndexes: Set<number> }> {
     const shouldCall = aiCandidates.length > 0 &&
       (run.uniquePeople.length > 0 ||
         aiCandidates.some((candidate) =>
           run.enriched[candidate.index].dueDate === null
         ));
-    if (!shouldCall) return false;
+    if (!shouldCall) return { ran: false, respondedIndexes: new Set() };
 
     const { ok, enrichments } = await inferTaskEnrichments(
       aiCandidates,
@@ -1017,7 +1030,13 @@ export class TaskExtractor implements Extractor {
       run.referenceDate,
       run.userTimeZone,
     );
-    if (!ok) return false;
+    if (!ok) return { ran: false, respondedIndexes: new Set() };
+
+    // The indexes the model actually answered for — an omitted task must be
+    // treated as unresolved, not as "clear the stored value" (EXTR-4).
+    const respondedIndexes = new Set(
+      enrichments.map((enrichment) => enrichment.taskIndex),
+    );
 
     for (const enrichment of enrichments) {
       const state = run.enriched[enrichment.taskIndex];
@@ -1034,7 +1053,7 @@ export class TaskExtractor implements Extractor {
         state.content = cleanStrippedText(enrichment.cleanedText);
       }
     }
-    return true;
+    return { ran: true, respondedIndexes };
   }
 
   /**

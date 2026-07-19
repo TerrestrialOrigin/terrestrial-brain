@@ -227,3 +227,32 @@ Deno.test("extractAssignment: no pattern returns null personId", () => {
   assertEquals(result.personId, null);
   assertEquals(result.cleanedText, "Just a regular task");
 });
+
+// ─── Step 20 (EXTR-3): assignment uses tiered name matching ─────────────────
+
+Deno.test("extractAssignment: exact-part match beats accidental containment regardless of list order", () => {
+  const people = [
+    { id: "bob-1", name: "Bob Smith" },
+    { id: "bo-1", name: "Bo Diddley" },
+  ];
+  const result = extractAssignment("Fix bug (assigned: Bo)", people);
+  assertEquals(
+    result.personId,
+    "bo-1",
+    "'Bo' must match Bo Diddley, not the earlier-listed Bob Smith by containment",
+  );
+});
+
+Deno.test("extractAssignment: ambiguous short candidate assigns nobody", () => {
+  const people = [
+    { id: "ann-s", name: "Ann Smith" },
+    { id: "ann-j", name: "Ann Jones" },
+  ];
+  const result = extractAssignment("Plan sprint (assigned: Ann)", people);
+  assertEquals(
+    result.personId,
+    null,
+    "an ambiguous candidate must fall through to the AI path, not pick by list order",
+  );
+  assertEquals(result.cleanedText, "Plan sprint (assigned: Ann)");
+});

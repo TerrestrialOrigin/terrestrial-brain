@@ -15,7 +15,7 @@ import type {
   Extractor,
   KnownProject,
 } from "./pipeline.ts";
-import { REFERENCE_KEYS } from "./pipeline.ts";
+import { isRecord, REFERENCE_KEYS } from "./pipeline.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 
 // ---------------------------------------------------------------------------
@@ -88,7 +88,8 @@ Return JSON: {"is_project": true/false, "project_name": "name" or null}`,
         userContent: `Path: ${referenceId}`,
       },
       (raw): { isProject: boolean; projectName: string | null } => {
-        const parsed = raw as { is_project?: unknown; project_name?: unknown };
+        const parsed: { is_project?: unknown; project_name?: unknown } =
+          isRecord(raw) ? raw : {};
         if (
           parsed.is_project && typeof parsed.project_name === "string" &&
           parsed.project_name.trim()
@@ -202,7 +203,7 @@ ${projectList}`,
         userContent: noteSummary,
       },
       (raw): string[] => {
-        const parsed = raw as { project_ids?: unknown };
+        const parsed: { project_ids?: unknown } = isRecord(raw) ? raw : {};
         if (!Array.isArray(parsed.project_ids)) return [];
         // Only accept IDs that exist in the known projects list
         return parsed.project_ids.filter(

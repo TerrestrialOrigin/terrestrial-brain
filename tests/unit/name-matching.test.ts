@@ -174,3 +174,18 @@ Deno.test("findPersonInText: does not match an accented full name embedded in a 
   // "José" followed by the letter "l" is not a whole word.
   assertEquals(findPersonInText("Josély signed off", peopleWithJose), null);
 });
+
+// ─── Step 20 (EXTR-10): equal-position tie prefers the more specific name ───
+
+Deno.test("findPersonInText: 'Ann Smith' beats 'Ann' at the same position (either list order)", () => {
+  const annFirst = [
+    { id: "ann", name: "Ann" },
+    { id: "ann-smith", name: "Ann Smith" },
+  ];
+  const smithFirst = [
+    { id: "ann-smith", name: "Ann Smith" },
+    { id: "ann", name: "Ann" },
+  ];
+  assertEquals(findPersonInText("Ann Smith called", annFirst), "ann-smith");
+  assertEquals(findPersonInText("Ann Smith called", smithFirst), "ann-smith");
+});

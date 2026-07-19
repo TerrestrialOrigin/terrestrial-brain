@@ -40,6 +40,8 @@ export interface HttpRouteDeps {
   aiOutputRepository: AiOutputRepository;
   quotaGate: AiQuotaGate;
   logger: FunctionCallLogger;
+  /** Injectable clock (CORE-13) — the composition root passes `Date.now`. */
+  now: () => number;
 }
 
 export type HttpRouteResult =
@@ -140,7 +142,7 @@ export const HTTP_ROUTES: HttpRoute[] = [
     handle: async (deps, body) => {
       // Metered AI operation (Step 15): refused before any embedding/extraction
       // when over quota, with a distinct 429 (never a silent success/skip).
-      const quota = await deps.quotaGate.check(Date.now());
+      const quota = await deps.quotaGate.check(deps.now());
       if (!quota.allowed) {
         return { ok: false, error: quotaExceededMessage(quota), status: 429 };
       }

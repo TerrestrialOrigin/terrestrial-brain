@@ -13,7 +13,7 @@ import type {
   Extractor,
   KnownPerson,
 } from "./pipeline.ts";
-import { REFERENCE_KEYS } from "./pipeline.ts";
+import { isRecord, REFERENCE_KEYS } from "./pipeline.ts";
 import { findPersonByName } from "./name-matching.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
 
@@ -71,14 +71,17 @@ ${peopleList}`,
         userContent: noteContent,
       },
       (raw): DetectedPerson[] => {
-        const parsed = raw as { people?: unknown };
+        const parsed: { people?: unknown } = isRecord(raw) ? raw : {};
         if (!Array.isArray(parsed.people)) return [];
+        // One malformed element is skipped, never allowed to throw and drop
+        // the whole batch (EXTR-8).
         return parsed.people
           .filter(
-            (entry: { name?: unknown; id?: unknown }) =>
-              typeof entry.name === "string" && entry.name.trim().length > 0,
+            (entry): entry is { name: string; id?: unknown } =>
+              isRecord(entry) && typeof entry.name === "string" &&
+              entry.name.trim().length > 0,
           )
-          .map((entry: { name: string; id?: string | null }) => ({
+          .map((entry) => ({
             name: entry.name.trim(),
             knownId: typeof entry.id === "string" && validIds.has(entry.id)
               ? entry.id

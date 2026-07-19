@@ -269,6 +269,15 @@ export async function runExtractionPipeline(
   return { ok: true, references, errors: collectedErrors };
 }
 
+/**
+ * Element-level guard for LLM response parsing (EXTR-8): callbacks check each
+ * array element with this before touching properties, so one malformed element
+ * (e.g. a literal null) is skipped instead of throwing and poisoning the batch.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared tool-facing wrapper
 // ---------------------------------------------------------------------------

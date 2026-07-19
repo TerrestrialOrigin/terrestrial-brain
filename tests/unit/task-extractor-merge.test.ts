@@ -595,3 +595,105 @@ Deno.test("EXTR-5: new-task insert stamps content_hash = hash(content)", async (
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Step 20 (EXTR-4): an ABSENT enrichment entry preserves stored values —
+// only an entry present with explicit nulls clears them (truncation safety).
+// ---------------------------------------------------------------------------
+
+Deno.test("merge: a task omitted from the enrichment response keeps its stored due_by/assigned_to", async () => {
+  await withFetchStub(async () => {
+    // The enrichment ran but returned NO entries (e.g. truncated response) —
+    // that is not an affirmative "nothing found" for any task.
+    stubFetchOk({ enrichments: [] });
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
+      knownProjects: [],
+      knownPeople: [{ id: "person-1", name: "Alice" }],
+    });
+
+    await new TaskExtractor().extract(
+      note([checkbox("Fix the login page")]),
+      context,
+    );
+
+    const update = matchedUpdate(writes);
+    assertEquals(update !== undefined, true);
+    assertEquals(
+      "due_by" in update!.payload,
+      false,
+      "an absent enrichment entry must PRESERVE the stored due_by",
+    );
+    assertEquals(
+      "assigned_to" in update!.payload,
+      false,
+      "an absent enrichment entry must PRESERVE the stored assigned_to",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 20 (EXTR-8): one malformed response element is skipped, not allowed to
+// poison the whole batch.
+// ---------------------------------------------------------------------------
+
+Deno.test("merge: a null element in enrichments is skipped and the valid entry still applies", async () => {
+  await withFetchStub(async () => {
+    stubFetchOk({
+      enrichments: [
+        null,
+        {
+          task_index: 0,
+          assigned_to_id: "person-1",
+          due_date: "2026-08-01T00:00:00.000Z",
+          cleaned_text: "Fix the login page",
+        },
+      ],
+    });
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
+      knownProjects: [],
+      knownPeople: [{ id: "person-1", name: "Alice" }],
+    });
+
+    await new TaskExtractor().extract(
+      note([checkbox("Fix the login page")]),
+      context,
+    );
+
+    const update = matchedUpdate(writes);
+    assertEquals(update !== undefined, true);
+    assertEquals(
+      update!.payload.assigned_to,
+      "person-1",
+      "the valid element must survive a null sibling",
+    );
+    assertEquals(update!.payload.due_by, "2026-08-01T00:00:00.000Z");
+  });
+});
+
+Deno.test("merge: a null element in project assignments is skipped and the valid entry still applies", async () => {
+  await withFetchStub(async () => {
+    stubFetchOk({
+      assignments: [null, { task_index: 0, project_id: "proj-1" }],
+      enrichments: [],
+    });
+    const { taskRepository, writes } = makeFakeTaskRepository();
+    const context = baseContext(taskRepository, {
+      knownProjects: [{ id: "proj-1", name: "Some Project" }],
+    });
+
+    await new TaskExtractor().extract(
+      note([checkbox("Fix the login page")]),
+      context,
+    );
+
+    const update = matchedUpdate(writes);
+    assertEquals(update !== undefined, true);
+    assertEquals(
+      update!.payload.project_id,
+      "proj-1",
+      "the valid assignment must survive a null sibling",
+    );
+  });
+});

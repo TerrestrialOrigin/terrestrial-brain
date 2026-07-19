@@ -132,16 +132,24 @@ export function findPersonInText(
 
   const textLower = text.toLowerCase();
 
-  // Tier 1: full-name substring match (existing behavior)
+  // Tier 1: full-name substring match. On an equal earliest position the
+  // LONGER (more specific) name wins — "Ann Smith" beats "Ann" regardless of
+  // list order (EXTR-10).
   let earliestPosition = Infinity;
+  let earliestLength = 0;
   let earliestPersonId: string | null = null;
 
   for (const person of knownPeople) {
     const nameLower = person.name.toLowerCase();
     if (nameLower.length < MINIMUM_PART_LENGTH) continue;
     const position = indexOfWholeWord(textLower, nameLower);
-    if (position !== -1 && position < earliestPosition) {
+    if (
+      position !== -1 &&
+      (position < earliestPosition ||
+        (position === earliestPosition && nameLower.length > earliestLength))
+    ) {
       earliestPosition = position;
+      earliestLength = nameLower.length;
       earliestPersonId = person.id;
     }
   }

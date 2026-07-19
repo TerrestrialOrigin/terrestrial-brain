@@ -179,3 +179,31 @@ Deno.test("PeopleExtractor: 23505 with a failed recovery lookup is reported, not
   assertEquals(result.errors.length, 1);
   assertStringIncludes(result.errors[0], "Ghost");
 });
+
+// ─── Step 20 (EXTR-8): one malformed element must not poison the batch ──────
+
+Deno.test("PeopleExtractor: a null element in the response is skipped, valid entries survive", async () => {
+  const note = parseNote(
+    "Ask Alice about the design",
+    "Note",
+    null,
+    "obsidian",
+  );
+  const provider = new FakeAiProvider(() => ({
+    people: [null, { name: "Alice", id: ALICE_ID }],
+  }));
+  const personRepository = new FakePersonRepository();
+  const context = makeContext(
+    [{ id: ALICE_ID, name: "Alice" }],
+    provider,
+    personRepository,
+  );
+
+  const result = await new PeopleExtractor().extract(note, context);
+
+  assertEquals(
+    result.ids,
+    [ALICE_ID],
+    "the valid element must survive a null sibling",
+  );
+});

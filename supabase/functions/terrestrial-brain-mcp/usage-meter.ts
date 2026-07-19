@@ -26,11 +26,17 @@ export class SupabaseUsageMeter implements UsageMeter {
 
   async countMeteredCallsSince(sinceMs: number): Promise<number> {
     const iso = new Date(sinceMs).toISOString();
+    // Only completed AI operations count (CORE-9): refused and failed calls end
+    // with `error_details` set (the MCP decorator's isError path and the HTTP
+    // dispatcher's error/throw paths both stamp it), so excluding errored rows
+    // stops a refusal from permanently burning quota. `error_details` is
+    // server-written telemetry — never client-controlled.
     const { count, error } = await this.supabase
       .from("function_call_logs")
       .select("*", { count: "exact", head: true })
       .in("function_name", [...this.meteredFunctions])
-      .gte("called_at", iso);
+      .gte("called_at", iso)
+      .is("error_details", null);
     if (error) {
       throw new Error(`usage count query failed: ${error.message}`);
     }
