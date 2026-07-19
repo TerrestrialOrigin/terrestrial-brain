@@ -102,6 +102,7 @@ function makeDeps(options: {
     ),
     quotaGate: gate,
     logger: fakeLogger(log),
+    now: Date.now,
   };
 }
 

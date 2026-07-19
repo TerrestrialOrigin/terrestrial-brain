@@ -236,6 +236,7 @@ const httpRouteDeps: HttpRouteDeps = {
   aiOutputRepository,
   quotaGate,
   logger,
+  now: Date.now,
 };
 
 const app = new Hono();

@@ -86,3 +86,53 @@ Deno.test("quotaExceededResult reports used/limit/reset and no content", () => {
   assert(text.includes("2026-04-01"));
   assert(text.includes("No AI operation was performed"));
 });
+
+// ─── Step 19 (CORE-9): only consuming calls count ────────────────────────────
+
+Deno.test("the meter excludes errored/refused rows from the count", async () => {
+  const { makeFakeClient } = await import("./fake-supabase-client.ts");
+  const { SupabaseUsageMeter } = await import(
+    "../../supabase/functions/terrestrial-brain-mcp/usage-meter.ts"
+  );
+  const { client, recorded } = makeFakeClient({ count: 2 });
+  const meter = new SupabaseUsageMeter(client, ["capture_thought"]);
+
+  await meter.countMeteredCallsSince(NOW);
+
+  assertEquals(
+    recorded.filters.some((filter) =>
+      filter.method === "is" && filter.column === "error_details" &&
+      filter.value === null
+    ),
+    true,
+    "refused/failed rows (error_details set) must be excluded from the count",
+  );
+});
+
+// ─── Step 19 (CORE-13): the decorator's clock is injectable ─────────────────
+
+Deno.test("withAiQuota: month rollover re-admits calls through the injected clock", async () => {
+  // Meter keyed by the window start it receives: the January window is full,
+  // the February window is empty.
+  const januaryStart = Date.UTC(2026, 0, 1);
+  const februaryStart = Date.UTC(2026, 1, 1);
+  const usageByWindow = new Map<number, number>([
+    [januaryStart, 5],
+    [februaryStart, 1],
+  ]);
+  const meter: UsageMeter = {
+    countMeteredCallsSince: (sinceMs) =>
+      Promise.resolve(usageByWindow.get(sinceMs) ?? 0),
+  };
+  const gate = new AiQuotaGate(2, meter);
+  const handler = () => Promise.resolve(textResult("ran"));
+
+  const lateJanuary = Date.UTC(2026, 0, 31, 23, 0, 0);
+  const refused = await withAiQuota(gate, handler, () => lateJanuary)();
+  assertEquals(refused.isError, true);
+
+  const earlyFebruary = Date.UTC(2026, 1, 1, 1, 0, 0);
+  const allowed = await withAiQuota(gate, handler, () => earlyFebruary)();
+  assertEquals(allowed.isError, undefined);
+  assertEquals(allowed.content[0].text, "ran");
+});

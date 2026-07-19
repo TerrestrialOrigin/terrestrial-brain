@@ -33,6 +33,13 @@ export class AiQuotaGate {
    * telemetry error must not block a legitimate operation — it is logged and
    * allowed, degrading to the pre-Step-15 (uncapped) behavior, never to a wrong
    * block or empty result.
+   *
+   * Accuracy tolerance (CORE-9): the count excludes errored/refused rows, so a
+   * refusal never permanently burns quota. Concurrent at-limit calls each
+   * pre-count the other's in-flight row, so N simultaneous calls at the margin
+   * can all be refused even though one would have fit — an accepted ±concurrency
+   * admission window for best-effort cost control (the refused rows gain
+   * error_details and drop out of later counts, so the window never compounds).
    */
   async check(nowMs: number): Promise<QuotaDecision> {
     const resetAtMs = startOfNextUtcMonthMs(nowMs);
@@ -84,9 +91,12 @@ export function quotaExceededResult(decision: QuotaDecision): McpToolResult {
 export function withAiQuota<Args extends unknown[]>(
   gate: AiQuotaGate,
   handler: (...args: Args) => Promise<McpToolResult>,
+  // Injectable clock (CORE-13) so month-boundary behavior is unit-testable at a
+  // chosen instant; production call sites take the default.
+  now: () => number = Date.now,
 ): (...args: Args) => Promise<McpToolResult> {
   return async (...args: Args): Promise<McpToolResult> => {
-    const decision = await gate.check(Date.now());
+    const decision = await gate.check(now());
     if (!decision.allowed) return quotaExceededResult(decision);
     return handler(...args);
   };

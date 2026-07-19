@@ -67,3 +67,45 @@ Deno.test("metering: real meter counts only in-window metered rows, gate enforce
     ]);
   }
 });
+
+Deno.test("metering: a refused/errored call does not reduce the remaining allowance", async () => {
+  const marker = `metering-refused-${uniqueToken()}`;
+  const now = Date.now();
+  const monthStart = startOfUtcMonthMs(now);
+  const inWindow = new Date(now).toISOString();
+
+  const { error: seedError } = await supabase.from("function_call_logs").insert(
+    [
+      // One completed AI call…
+      { function_name: marker, function_type: "mcp", called_at: inWindow },
+      // …and one refused/failed call (error_details set) — consumed nothing.
+      {
+        function_name: marker,
+        function_type: "mcp",
+        called_at: inWindow,
+        error_details: "AI quota exceeded: refused before any AI call",
+      },
+    ],
+  );
+  assertEquals(seedError, null);
+
+  try {
+    const meter = new SupabaseUsageMeter(supabase, [marker]);
+    const used = await meter.countMeteredCallsSince(monthStart);
+    assertEquals(
+      used,
+      1,
+      "the refused call's row must not count against the quota",
+    );
+
+    // Limit 2, one success recorded: the in-flight call pre-counts itself
+    // (used becomes 2) and must be allowed — the earlier refusal is free.
+    const decision = await new AiQuotaGate(2, meter).check(now);
+    assertEquals(decision.allowed, true);
+  } finally {
+    await supabase.from("function_call_logs").delete().eq(
+      "function_name",
+      marker,
+    );
+  }
+});
