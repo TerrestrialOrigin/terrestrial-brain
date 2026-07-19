@@ -172,6 +172,81 @@ export async function buildThoughtUpdate(
   };
 }
 
+/** Arguments accepted by `handleUpdateThought` (mirrors the tool schema). */
+export interface UpdateThoughtArgs {
+  id: string;
+  content?: string;
+  reliability?: (typeof RELIABILITIES)[number];
+  author?: string;
+  project_ids?: string[];
+  document_ids?: string[];
+  actor?: "LLM" | "user" | "sync";
+}
+
+/**
+ * update_thought handler, extracted so it can run against fake repositories —
+ * no database, no network (TOOL-6 concurrency behavior is unit-tested here).
+ */
+export async function handleUpdateThought(
+  aiProvider: AiProvider,
+  thoughtRepository: ThoughtRepository,
+  { id, content, reliability, author, project_ids, document_ids, actor }:
+    UpdateThoughtArgs,
+) {
+  // Validate at least one optional field is provided
+  if (
+    content === undefined &&
+    reliability === undefined &&
+    author === undefined &&
+    project_ids === undefined &&
+    document_ids === undefined
+  ) {
+    return errorResult(
+      "At least one of content, reliability, author, project_ids, or document_ids must be provided.",
+    );
+  }
+
+  // Fetch existing thought
+  const { data: existing, error: fetchError } = await thoughtRepository
+    .findForUpdate(id);
+
+  if (fetchError || !existing) {
+    return errorResult("Thought not found.");
+  }
+
+  const existingMetadata = (existing.metadata || {}) as Record<
+    string,
+    unknown
+  >;
+
+  const { updatePayload, updatedFields } = await buildThoughtUpdate(
+    aiProvider,
+    existingMetadata,
+    { content, reliability, author, project_ids, document_ids, actor },
+  );
+
+  // Optimistic concurrency (TOOL-6): the update carries the updated_at we read,
+  // so an interleaved edit (LLM/user/sync all drive this path) matches zero
+  // rows instead of silently clobbering the other actor's write.
+  const { data: matched, error: updateError } = await thoughtRepository.update(
+    id,
+    updatePayload,
+    { expectedUpdatedAt: existing.updated_at },
+  );
+
+  if (updateError) {
+    return errorResult(`Update failed: ${updateError.message}`);
+  }
+  if (!matched) {
+    return errorResult(
+      "Concurrent edit detected — this thought changed since it was read. " +
+        "Re-read it and retry the update.",
+    );
+  }
+
+  return textResult(`Thought updated: ${updatedFields.join(", ")}`);
+}
+
 export function register(
   server: McpServer,
   supabase: SupabaseClient,
@@ -860,52 +935,7 @@ export function register(
     },
     withMcpLogging(
       "update_thought",
-      async (
-        { id, content, reliability, author, project_ids, document_ids, actor },
-      ) => {
-        // Validate at least one optional field is provided
-        if (
-          content === undefined &&
-          reliability === undefined &&
-          author === undefined &&
-          project_ids === undefined &&
-          document_ids === undefined
-        ) {
-          return errorResult(
-            "At least one of content, reliability, author, project_ids, or document_ids must be provided.",
-          );
-        }
-
-        // Fetch existing thought
-        const { data: existing, error: fetchError } = await thoughtRepository
-          .findForUpdate(id);
-
-        if (fetchError || !existing) {
-          return errorResult("Thought not found.");
-        }
-
-        const existingMetadata = (existing.metadata || {}) as Record<
-          string,
-          unknown
-        >;
-
-        const { updatePayload, updatedFields } = await buildThoughtUpdate(
-          aiProvider,
-          existingMetadata,
-          { content, reliability, author, project_ids, document_ids, actor },
-        );
-
-        const { error: updateError } = await thoughtRepository.update(
-          id,
-          updatePayload,
-        );
-
-        if (updateError) {
-          return errorResult(`Update failed: ${updateError.message}`);
-        }
-
-        return textResult(`Thought updated: ${updatedFields.join(", ")}`);
-      },
+      (args) => handleUpdateThought(aiProvider, thoughtRepository, args),
       logger,
     ),
   );

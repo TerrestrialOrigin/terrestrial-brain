@@ -31,7 +31,7 @@
 ## Phase C — Error honesty & concurrency (server)
 - [x] 15. Rollback & idempotency (`bug/RollbackAndIdempotency`) — TOOL-3, REPO-5
 - [x] 16. Error surfacing sweep (`bug/ErrorSurfacingSweep`) — TOOL-4, TOOL-5, TOOL-12, TOOL-13, REPO-7
-- [ ] 17. update_thought concurrency (`bug/UpdateThoughtConcurrency`) — TOOL-6
+- [x] 17. update_thought concurrency (`bug/UpdateThoughtConcurrency`) — TOOL-6
 - [ ] 18. HTTP route validation (`feature/HttpRouteValidation`) — CORE-5, CORE-6, CORE-14, CORE-17, TOOL-15
 - [ ] 19. Quota metering accuracy (`bug/QuotaMeteringAccuracy`) — CORE-9, CORE-10, CORE-13
 - [ ] 20. Extractor enrichment & merge (`bug/ExtractorEnrichmentMerge`) — EXTR-3, EXTR-4, EXTR-8, EXTR-10

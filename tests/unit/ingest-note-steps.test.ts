@@ -233,7 +233,7 @@ Deno.test("executeReconciliationPlan: soft-archives deletes, counts each op", as
     },
     update: (id) => {
       updated.push(id);
-      return Promise.resolve({ data: undefined, error: null });
+      return Promise.resolve({ data: { id }, error: null });
     },
   });
 
