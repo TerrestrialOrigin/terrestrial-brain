@@ -4,7 +4,7 @@
  * Parses common date patterns (ISO, natural, relative) and strips matched
  * fragments from content. Relative dates ("today"/"tomorrow"/weekday names)
  * and omitted-year inference resolve against the current calendar date in a
- * configured user timezone (see `getConfiguredTimeZone`), not the server's
+ * configured user timezone (injected via the pipeline deps), not the server's
  * UTC clock. Resolved dates are stored as midnight-UTC of the calendar date.
  */
 
@@ -125,11 +125,6 @@ export function getZonedDate(referenceDate: Date, timeZone: string): ZonedDate {
       weekday: referenceDate.getUTCDay(),
     };
   }
-}
-
-/** Reads the configured user timezone (IANA name), defaulting to UTC. */
-export function getConfiguredTimeZone(): string {
-  return Deno.env.get("TB_USER_TIMEZONE") ?? "UTC";
 }
 
 /** Adds `days` to a zoned calendar date, returning midnight-UTC ISO of the result. */

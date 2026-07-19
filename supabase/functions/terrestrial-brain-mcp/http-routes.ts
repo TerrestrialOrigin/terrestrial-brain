@@ -27,6 +27,7 @@ import type { ProjectRepository } from "./repositories/project-repository.ts";
 import type { PersonRepository } from "./repositories/person-repository.ts";
 import type { NoteSnapshotRepository } from "./repositories/note-snapshot-repository.ts";
 import type { AiOutputRepository } from "./repositories/ai-output-repository.ts";
+import type { Extractor } from "./extractors/pipeline.ts";
 
 /** Every seam a direct HTTP route may use — injected, never module-scope. */
 export interface HttpRouteDeps {
@@ -40,6 +41,10 @@ export interface HttpRouteDeps {
   aiOutputRepository: AiOutputRepository;
   quotaGate: AiQuotaGate;
   logger: FunctionCallLogger;
+  /** The ordered extractor set, built once at the composition root (TOOL-14). */
+  extractors: Extractor[];
+  /** Configured user timezone (EXTR-11), read once at the composition root. */
+  timeZone: string;
   /** Injectable clock (CORE-13) — the composition root passes `Date.now`. */
   now: () => number;
 }
@@ -146,20 +151,11 @@ export const HTTP_ROUTES: HttpRoute[] = [
       if (!quota.allowed) {
         return { ok: false, error: quotaExceededMessage(quota), status: 429 };
       }
-      const result = await handleIngestNote(
-        deps.supabase,
-        deps.aiProvider,
-        deps.thoughtRepository,
-        deps.taskRepository,
-        deps.projectRepository,
-        deps.personRepository,
-        deps.noteSnapshotRepository,
-        {
-          content: body.content,
-          title: body.title,
-          note_id: body.note_id,
-        },
-      );
+      const result = await handleIngestNote(deps, {
+        content: body.content,
+        title: body.title,
+        note_id: body.note_id,
+      });
       if (!result.success) {
         return {
           ok: false,

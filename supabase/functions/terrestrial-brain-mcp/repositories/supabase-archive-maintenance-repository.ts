@@ -6,7 +6,7 @@
  */
 
 import type { AppSupabaseClient } from "../supabase-client.ts";
-import { type RepoResult, toRepoError } from "./repo-result.ts";
+import { type RepoResult, runQuery } from "./repo-result.ts";
 import type {
   ArchiveMaintenanceRepository,
   ArchiveTableCount,
@@ -20,13 +20,15 @@ export class SupabaseArchiveMaintenanceRepository
     targetTable: string | null,
     archivedOnOrBefore: string | null,
   ): Promise<RepoResult<ArchiveTableCount[]>> {
-    const { data, error } = await this.supabase.rpc("count_archived_rows", {
-      target_table: targetTable ?? undefined,
-      archived_on_or_before: archivedOnOrBefore ?? undefined,
-    });
-    if (error) return { data: null, error: toRepoError(error) };
+    const result = await runQuery(
+      this.supabase.rpc("count_archived_rows", {
+        target_table: targetTable ?? undefined,
+        archived_on_or_before: archivedOnOrBefore ?? undefined,
+      }),
+    );
+    if (result.error) return { data: null, error: result.error };
     return {
-      data: (data ?? []).map((row) => ({
+      data: (result.data ?? []).map((row) => ({
         tableName: row.table_name,
         count: row.row_count,
       })),
@@ -38,13 +40,15 @@ export class SupabaseArchiveMaintenanceRepository
     targetTable: string | null,
     archivedOnOrBefore: string | null,
   ): Promise<RepoResult<ArchiveTableCount[]>> {
-    const { data, error } = await this.supabase.rpc("purge_archived_rows", {
-      target_table: targetTable ?? undefined,
-      archived_on_or_before: archivedOnOrBefore ?? undefined,
-    });
-    if (error) return { data: null, error: toRepoError(error) };
+    const result = await runQuery(
+      this.supabase.rpc("purge_archived_rows", {
+        target_table: targetTable ?? undefined,
+        archived_on_or_before: archivedOnOrBefore ?? undefined,
+      }),
+    );
+    if (result.error) return { data: null, error: result.error };
     return {
-      data: (data ?? []).map((row) => ({
+      data: (result.data ?? []).map((row) => ({
         tableName: row.table_name,
         count: row.deleted_count,
       })),

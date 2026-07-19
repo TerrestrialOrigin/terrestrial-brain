@@ -40,10 +40,20 @@ export function coerceThoughtType(
  * the old `{ project_id: "uuid" }` and new `{ projects: ["uuid"] }` formats.
  */
 export function getProjectRefs(metadata: Record<string, unknown>): string[] {
-  const refs = metadata?.references as Record<string, unknown> | undefined;
-  if (!refs) return [];
-  if (Array.isArray(refs.projects)) return refs.projects as string[];
-  if (typeof refs.project_id === "string") return [refs.project_id];
+  // Stored metadata is external data (JSONB written by earlier code versions
+  // and LLM-derived pipelines) — validate structurally, never cast (CORE-11).
+  const refs = metadata?.references;
+  if (typeof refs !== "object" || refs === null) return [];
+  const { projects, project_id: legacyProjectId } = refs as Record<
+    string,
+    unknown
+  >;
+  if (Array.isArray(projects)) {
+    return projects.filter((entry): entry is string =>
+      typeof entry === "string"
+    );
+  }
+  if (typeof legacyProjectId === "string") return [legacyProjectId];
   return [];
 }
 
@@ -189,22 +199,35 @@ export function parseSplitThoughts(raw: unknown): string[] {
   return collected;
 }
 
-export async function freshIngest(
-  thoughtRepository: ThoughtRepository,
+/** Seams `freshIngest` runs against (CORE-7: deps object, not positionals). */
+export interface FreshIngestDeps {
+  thoughtRepository: ThoughtRepository;
+  aiProvider: AiProvider;
+}
+
+/** Named inputs for `freshIngest` — adjacent same-typed optionals were the
+ * transposition hazard the deps-object rule exists to remove (CORE-7). */
+export interface FreshIngestInput {
+  content: string;
+  title?: string;
+  noteId?: string;
+  noteSnapshotId?: string | null;
+  references?: Record<string, string[]>;
+  provenance?: { reliability: string; author: string };
+}
+
+/**
+ * Splits the note into standalone thoughts via the LLM. An HTTP failure aborts
+ * ingestion (throws); an unparseable response degrades to treating the whole
+ * note as a single thought — matching the pre-refactor behavior exactly.
+ */
+export async function splitIntoThoughts(
   aiProvider: AiProvider,
   content: string,
   title: string | undefined,
-  note_id: string | undefined,
-  noteSnapshotId?: string | null,
-  references?: Record<string, string[]>,
-  provenance?: { reliability: string; author: string },
-): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
-  // Split the note into standalone thoughts. An HTTP failure aborts ingestion
-  // (throws); an unparseable response degrades to treating the whole note as a
-  // single thought — matching the pre-refactor behavior exactly.
-  let thoughts: string[] = [];
+): Promise<string[]> {
   try {
-    thoughts = await aiProvider.completeJson(
+    return await aiProvider.completeJson(
       {
         purpose: "split-thoughts",
         systemPrompt:
@@ -228,12 +251,52 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
   } catch (error) {
     if (error instanceof AiProviderParseError) {
       // Unparseable split response → keep the note as one thought.
-      thoughts = [content.trim()];
-    } else {
-      // HTTP/transport failure → abort ingestion (unchanged behavior).
-      throw error;
+      return [content.trim()];
     }
+    // HTTP/transport failure → abort ingestion (unchanged behavior).
+    throw error;
   }
+}
+
+/** Assembles the caller-facing ingest summary from real per-thought outcomes. */
+export function buildIngestSummary(options: {
+  succeeded: number;
+  failed: number;
+  title: string | undefined;
+  references: Record<string, string[]>;
+}): string {
+  const { succeeded, failed, title, references } = options;
+  const taskCount = references.tasks?.length || 0;
+  const projectCount = references.projects?.length || 0;
+  const extractionParts: string[] = [];
+  if (taskCount > 0) {
+    extractionParts.push(
+      `${taskCount} task${taskCount !== 1 ? "s" : ""} detected`,
+    );
+  }
+  if (projectCount > 0) {
+    extractionParts.push(
+      `${projectCount} project${projectCount !== 1 ? "s" : ""} linked`,
+    );
+  }
+  const extractionSuffix = extractionParts.length > 0
+    ? ` — ${extractionParts.join(", ")}`
+    : "";
+
+  return `Captured ${succeeded} thought${succeeded !== 1 ? "s" : ""} from "${
+    title || "note"
+  }"${failed > 0 ? ` — ${failed} failed` : ""}${extractionSuffix}`;
+}
+
+export async function freshIngest(
+  deps: FreshIngestDeps,
+  input: FreshIngestInput,
+): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
+  const { thoughtRepository, aiProvider } = deps;
+  const { content, title, noteId, noteSnapshotId, references, provenance } =
+    input;
+
+  const thoughts = await splitIntoThoughts(aiProvider, content, title);
 
   if (thoughts.length === 0) {
     return {
@@ -256,7 +319,7 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
       const { error } = await thoughtRepository.insert({
         content: thoughtContent,
         embedding,
-        reference_id: note_id || null,
+        reference_id: noteId || null,
         note_snapshot_id: noteSnapshotId || null,
         content_hash: contentHash,
         last_actor: "sync",
@@ -291,29 +354,15 @@ Return ONLY valid JSON: {"thoughts": ["thought 1", "thought 2", ...]}`,
   const failed =
     results.filter((result) => result.status === "rejected").length;
 
-  const taskCount = pipelineRefs.tasks?.length || 0;
-  const projectCount = pipelineRefs.projects?.length || 0;
-  const extractionParts: string[] = [];
-  if (taskCount > 0) {
-    extractionParts.push(
-      `${taskCount} task${taskCount !== 1 ? "s" : ""} detected`,
-    );
-  }
-  if (projectCount > 0) {
-    extractionParts.push(
-      `${projectCount} project${projectCount !== 1 ? "s" : ""} linked`,
-    );
-  }
-  const extractionSuffix = extractionParts.length > 0
-    ? ` — ${extractionParts.join(", ")}`
-    : "";
-
   return {
     content: [{
       type: "text" as const,
-      text: `Captured ${succeeded} thought${succeeded !== 1 ? "s" : ""} from "${
-        title || "note"
-      }"${failed > 0 ? ` — ${failed} failed` : ""}${extractionSuffix}`,
+      text: buildIngestSummary({
+        succeeded,
+        failed,
+        title,
+        references: pipelineRefs,
+      }),
     }],
     isError: failed === thoughts.length,
   };

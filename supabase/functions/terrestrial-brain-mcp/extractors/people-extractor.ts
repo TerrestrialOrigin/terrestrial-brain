@@ -16,6 +16,11 @@ import type {
 import { isRecord, REFERENCE_KEYS } from "./pipeline.ts";
 import { findPersonByName } from "./name-matching.ts";
 import type { AiProvider } from "../ai/ai-provider.ts";
+import {
+  buildIdAllowlist,
+  callJsonWithFallback,
+  formatEntityList,
+} from "./llm-helpers.ts";
 
 // ---------------------------------------------------------------------------
 // LLM-based person detection
@@ -42,19 +47,17 @@ async function detectAllPeople(
   if (!noteContent.trim()) return [];
 
   const peopleList = knownPeople.length > 0
-    ? knownPeople.map((person) => `- "${person.name}" (id: ${person.id})`).join(
-      "\n",
-    )
+    ? formatEntityList(knownPeople)
     : "(none)";
 
-  const validIds = new Set(knownPeople.map((person) => person.id));
+  const validIds = buildIdAllowlist(knownPeople);
 
-  try {
-    return await aiProvider.completeJson(
-      {
-        purpose: "detect-people",
-        systemPrompt:
-          `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
+  return await callJsonWithFallback<DetectedPerson[]>({
+    aiProvider,
+    request: {
+      purpose: "detect-people",
+      systemPrompt:
+        `You identify people mentioned in a note. Given note content and a list of known people, return ALL person names detected.
 
 For each person found:
 - If they match a known person, return their ID
@@ -68,33 +71,31 @@ Return JSON: {"people": [{"name": "Alice", "id": "uuid-if-known-or-null"}, ...]}
 
 KNOWN PEOPLE:
 ${peopleList}`,
-        userContent: noteContent,
-      },
-      (raw): DetectedPerson[] => {
-        const parsed: { people?: unknown } = isRecord(raw) ? raw : {};
-        if (!Array.isArray(parsed.people)) return [];
-        // One malformed element is skipped, never allowed to throw and drop
-        // the whole batch (EXTR-8).
-        return parsed.people
-          .filter(
-            (entry): entry is { name: string; id?: unknown } =>
-              isRecord(entry) && typeof entry.name === "string" &&
-              entry.name.trim().length > 0,
-          )
-          .map((entry) => ({
-            name: entry.name.trim(),
-            knownId: typeof entry.id === "string" && validIds.has(entry.id)
-              ? entry.id
-              : null,
-          }));
-      },
-    );
-  } catch (error) {
-    console.error(
-      `PeopleExtractor LLM detection error: ${(error as Error).message}`,
-    );
-    return [];
-  }
+      userContent: noteContent,
+    },
+    parse: (raw): DetectedPerson[] => {
+      const parsed: { people?: unknown } = isRecord(raw) ? raw : {};
+      if (!Array.isArray(parsed.people)) return [];
+      // One malformed element is skipped, never allowed to throw and drop
+      // the whole batch (EXTR-8).
+      return parsed.people
+        .filter(
+          (entry): entry is { name: string; id?: unknown } =>
+            isRecord(entry) && typeof entry.name === "string" &&
+            entry.name.trim().length > 0,
+        )
+        .map((entry) => ({
+          name: entry.name.trim(),
+          knownId: typeof entry.id === "string" && validIds.has(entry.id)
+            ? entry.id
+            : null,
+        }));
+    },
+    // Detection is best-effort: any transport/parse failure degrades to an
+    // empty list so a missing person never aborts extraction.
+    fallback: [],
+    label: "PeopleExtractor LLM detection error",
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -1,16 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { uuidField } from "../zod-schemas.ts";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { hashContent } from "../helpers.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { UNAVAILABLE_MARKER } from "./section-format.ts";
 import { PROJECT_TYPES } from "../enums.ts";
 import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
-import type { ProjectRepository } from "../repositories/project-repository.ts";
+import type {
+  ProjectRepository,
+  ProjectUpdate,
+} from "../repositories/project-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 export type ArchiveCascadeOutcome =
   | { ok: true; childCount: number; taskCount: number }
@@ -332,11 +335,12 @@ export async function handleGetProject(
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  projectRepository: ProjectRepository,
-  taskRepository: TaskRepository,
+  deps: Pick<
+    ToolDeps,
+    "supabase" | "logger" | "projectRepository" | "taskRepository"
+  >,
 ) {
+  const { supabase, logger, projectRepository, taskRepository } = deps;
   server.registerTool(
     "create_project",
     {
@@ -482,7 +486,8 @@ export function register(
           }
         }
 
-        const updates: Record<string, unknown> = {};
+        // Schema-typed payload (REPO-4): a misspelled column is a compile error.
+        const updates: ProjectUpdate = {};
         if (name !== undefined) updates.name = name;
         if (type !== undefined) updates.type = type;
         if (parent_id !== undefined) updates.parent_id = parent_id;

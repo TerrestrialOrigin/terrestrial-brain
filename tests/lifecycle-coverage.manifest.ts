@@ -129,7 +129,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     tier: "deterministic",
     milestone: "shipped",
     expectation: "pass-now",
-    testRef: "tests/integration/lifecycle/extraction_type_allowlist.test.ts",
+    testRef: "tests/unit/extraction-type-allowlist.test.ts",
   },
   {
     capability: "memory-lifecycle-rules",
@@ -139,7 +139,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     tier: "deterministic",
     milestone: "shipped",
     expectation: "pass-now",
-    testRef: "tests/integration/lifecycle/extraction_type_allowlist.test.ts",
+    testRef: "tests/unit/extraction-type-allowlist.test.ts",
     testNameContains: "out-of-allowlist type is coerced",
   },
   {
@@ -151,7 +151,7 @@ export const COVERAGE_MANIFEST: CoverageEntry[] = [
     tier: "deterministic",
     milestone: "shipped",
     expectation: "pass-now",
-    testRef: "tests/integration/lifecycle/extraction_type_allowlist.test.ts",
+    testRef: "tests/unit/extraction-type-allowlist.test.ts",
   },
   {
     capability: "memory-lifecycle-rules",

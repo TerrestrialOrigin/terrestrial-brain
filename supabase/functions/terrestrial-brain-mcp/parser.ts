@@ -50,26 +50,34 @@ const FENCE_PATTERN = /^(\s*)(```|~~~)/;
 
 /**
  * Returns a Set of 1-indexed line numbers that fall inside fenced code blocks.
+ *
+ * Per CommonMark (and Obsidian's renderer), a block opened with one fence type
+ * is closed only by the same type — a `~~~` line inside a ``` block is content.
  */
 export function detectCodeBlockLines(lines: string[]): Set<number> {
   const insideCodeBlock = new Set<number>();
-  let inBlock = false;
+  let openFence: "```" | "~~~" | null = null;
 
   for (let index = 0; index < lines.length; index++) {
     const lineNumber = index + 1;
-    if (FENCE_PATTERN.test(lines[index])) {
-      if (inBlock) {
-        // Closing fence — this line is still inside the block
-        insideCodeBlock.add(lineNumber);
-        inBlock = false;
-      } else {
+    const fenceMatch = lines[index].match(FENCE_PATTERN);
+    if (fenceMatch) {
+      const fenceType = fenceMatch[2] as "```" | "~~~";
+      if (openFence === null) {
         // Opening fence — this line starts the block
         insideCodeBlock.add(lineNumber);
-        inBlock = true;
+        openFence = fenceType;
+      } else if (fenceType === openFence) {
+        // Closing fence — this line is still inside the block
+        insideCodeBlock.add(lineNumber);
+        openFence = null;
+      } else {
+        // Mismatched fence type inside an open block — plain content
+        insideCodeBlock.add(lineNumber);
       }
       continue;
     }
-    if (inBlock) {
+    if (openFence !== null) {
       insideCodeBlock.add(lineNumber);
     }
   }

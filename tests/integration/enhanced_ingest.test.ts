@@ -660,7 +660,7 @@ withNoteFixture(
       content: string;
     }[];
     const output = pendingOutputs.find(
-      (o) => o.file_path === filePath,
+      (pendingOutput) => pendingOutput.file_path === filePath,
     );
     assertExists(output);
     assertEquals(

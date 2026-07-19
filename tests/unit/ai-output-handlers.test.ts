@@ -5,6 +5,7 @@ import {
 } from "../../supabase/functions/terrestrial-brain-mcp/tools/ai_output.ts";
 import type {
   AiOutputRepository,
+  PendingAiOutputMetadataRow,
   PendingAiOutputRow,
 } from "../../supabase/functions/terrestrial-brain-mcp/repositories/ai-output-repository.ts";
 import type { RepoResult } from "../../supabase/functions/terrestrial-brain-mcp/repositories/repo-result.ts";
@@ -25,7 +26,9 @@ function fakeRepo(
         PendingAiOutputRow[]
       >),
     listPendingMetadata: () =>
-      Promise.resolve({ data: [], error: null } as RepoResult<unknown[]>),
+      Promise.resolve({ data: [], error: null } as RepoResult<
+        PendingAiOutputMetadataRow[]
+      >),
     findContentByIds: () =>
       Promise.resolve({ data: [], error: null } as RepoResult<
         { id: string; content: string }[]

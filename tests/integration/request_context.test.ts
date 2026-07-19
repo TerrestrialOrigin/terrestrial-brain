@@ -9,7 +9,7 @@
 // design.md, Decision 3), so this integration test guards the single-request
 // path and the refactor, not the race itself.
 
-import { assert, assertEquals } from "@std/assert";
+import { assert } from "@std/assert";
 import {
   mcpHeaders,
   restUrl,
@@ -20,9 +20,12 @@ import {
 
 const MCP_ENDPOINT = `${SUPABASE_URL}/functions/v1/terrestrial-brain-mcp`;
 
-Deno.test("MCP request records its client IP in function_call_logs (C8)", async () => {
+Deno.test("MCP request records a validated, trusted-hop client IP in function_call_logs (C8/CORE-16)", async () => {
   const marker = `rctx-int-${uniqueToken()}`;
-  const clientIp = "203.0.113.7";
+  // A client-forged x-forwarded-for element. CORE-16: the logger must take the
+  // TRUSTED hop (the one the gateway appends LAST), never this spoofable value.
+  const spoofedIp = "203.0.113.7";
+  const clientIp = spoofedIp;
 
   const response = await fetch(MCP_ENDPOINT, {
     method: "POST",
@@ -64,7 +67,19 @@ Deno.test("MCP request records its client IP in function_call_logs (C8)", async 
     rows.length >= 1,
     `expected a log row for marker ${marker}, found none`,
   );
-  assertEquals(rows[0].ip_address, clientIp);
+  // The spoofable first hop must NOT be what lands in the forensic trail: the
+  // gateway appends the true client IP as the LAST hop, and the logger stores
+  // that trusted hop (shape-validated) or null — never the forged value.
+  const storedIp = rows[0].ip_address;
+  assert(
+    storedIp !== spoofedIp,
+    `logged ip_address must not be the client-forged XFF hop, got ${storedIp}`,
+  );
+  const IP_SHAPE = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]+)$/;
+  assert(
+    storedIp === null || IP_SHAPE.test(storedIp),
+    `logged ip_address must be a validated IP or null, got ${storedIp}`,
+  );
 
   // Cleanup this test's log row(s).
   await fetch(

@@ -88,8 +88,13 @@ export interface NoteSnapshotDetailRow {
   captured_at: string;
 }
 
-export interface QueryRepository {
-  // get_project_summary
+// ---------------------------------------------------------------------------
+// Role interfaces (REPO-2) — one per tool the repository backs. Handlers
+// depend on the role they use; `SupabaseQueryRepository` implements them all.
+// ---------------------------------------------------------------------------
+
+/** Reads composed by `get_project_summary`. */
+export interface ProjectSummaryReads {
   getProjectById(id: string): Promise<RepoResult<SummaryProjectRow>>;
   getProjectName(id: string): Promise<RepoResult<{ name: string }>>;
   listChildProjects(parentId: string): Promise<RepoResult<SummaryChildRow[]>>;
@@ -107,8 +112,10 @@ export interface QueryRepository {
   ): Promise<RepoResult<SummarySnapshotRow[]>>;
   /** Assignee id → name, via the shared `resolveNames` helper. */
   personNamesByIds(ids: string[]): Promise<Map<string, string>>;
+}
 
-  // get_recent_activity
+/** Reads composed by `get_recent_activity`. */
+export interface RecentActivityReads {
   listRecentThoughts(
     sinceIso: string,
   ): Promise<RepoResult<RecentThoughtRow[]>>;
@@ -135,8 +142,10 @@ export interface QueryRepository {
   ): Promise<RepoResult<DeliveredAiOutputRow[]>>;
   /** Task project id → name, via the shared `resolveNames` helper. */
   projectNamesByIds(ids: string[]): Promise<Map<string, string>>;
+}
 
-  // get_note_snapshot
+/** Reads composed by `get_note_snapshot`. */
+export interface NoteSnapshotReads {
   getNoteSnapshotById(
     id: string,
   ): Promise<RepoResult<NoteSnapshotDetailRow>>;
@@ -144,3 +153,7 @@ export interface QueryRepository {
     referenceId: string,
   ): Promise<RepoResult<NoteSnapshotDetailRow>>;
 }
+
+/** The full seam — every concern together (what implementations provide). */
+export interface QueryRepository
+  extends ProjectSummaryReads, RecentActivityReads, NoteSnapshotReads {}

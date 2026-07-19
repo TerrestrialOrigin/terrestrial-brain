@@ -580,3 +580,42 @@ Deno.test("parent: in-section shallower checkbox is still found across a deeper 
   assertEquals(result.checkboxes[1].parentIndex, 0);
   assertEquals(result.checkboxes[2].parentIndex, 0);
 });
+
+// ---------------------------------------------------------------------------
+// CORE-15 — Fence-type tracking: a block is closed only by its own fence type
+// ---------------------------------------------------------------------------
+
+Deno.test("codeblock: tilde fence inside a backtick block does not close it (CORE-15)", () => {
+  const content = [
+    "```",
+    "~~~",
+    "- [ ] fake task",
+    "```",
+  ].join("\n");
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes.length, 0);
+});
+
+Deno.test("codeblock: backtick fence inside a tilde block does not close it (CORE-15)", () => {
+  const content = [
+    "~~~",
+    "```",
+    "## fake heading",
+    "~~~",
+  ].join("\n");
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.headings.length, 0);
+});
+
+Deno.test("codeblock: content resumes after a same-type close following a mismatched fence (CORE-15)", () => {
+  const content = [
+    "```",
+    "~~~",
+    "- [ ] still inside",
+    "```",
+    "- [ ] real task",
+  ].join("\n");
+  const result = parseNote(content, null, null, "obsidian");
+  assertEquals(result.checkboxes.length, 1);
+  assertEquals(result.checkboxes[0].text, "real task");
+});

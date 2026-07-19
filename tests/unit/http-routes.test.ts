@@ -102,6 +102,8 @@ function makeDeps(options: {
     ),
     quotaGate: gate,
     logger: fakeLogger(log),
+    extractors: [],
+    timeZone: "UTC",
     now: Date.now,
   };
 }

@@ -1,11 +1,12 @@
 /**
  * SupabaseDocumentRepository — the sole implementation of `DocumentRepository`
  * (fix-plan Step 17). Every `documents` table query formerly inline in
- * `tools/documents.ts` lives here.
+ * `tools/documents.ts` lives here. Each method delegates its await-then-wrap
+ * to the shared `runQuery` / `runWrite` helpers (REPO-3).
  */
 
 import type { AppSupabaseClient } from "../supabase-client.ts";
-import { type RepoResult, toRepoError } from "./repo-result.ts";
+import { type RepoResult, runQuery, runWrite } from "./repo-result.ts";
 import { escapeLikePattern } from "../escape-like.ts";
 import type {
   DocumentForUpdateRow,
@@ -14,33 +15,36 @@ import type {
   DocumentListFilters,
   DocumentListRow,
   DocumentRepository,
+  DocumentUpdate,
   NewDocumentValues,
 } from "./document-repository.ts";
 
 export class SupabaseDocumentRepository implements DocumentRepository {
   constructor(private readonly supabase: AppSupabaseClient) {}
 
-  async insert(
+  insert(
     values: NewDocumentValues,
   ): Promise<RepoResult<DocumentInsertRow>> {
-    const { data, error } = await this.supabase
-      .from("documents")
-      .insert(values)
-      .select("id, title, project_id")
-      .single();
-    return { data, error: toRepoError(error) };
+    return runQuery(
+      this.supabase
+        .from("documents")
+        .insert(values)
+        .select("id, title, project_id")
+        .single(),
+    );
   }
 
-  async findById(id: string): Promise<RepoResult<DocumentFullRow>> {
-    const { data, error } = await this.supabase
-      .from("documents")
-      .select("*")
-      .eq("id", id)
-      .single();
-    return { data, error: toRepoError(error) };
+  findById(id: string): Promise<RepoResult<DocumentFullRow>> {
+    return runQuery(
+      this.supabase
+        .from("documents")
+        .select("*")
+        .eq("id", id)
+        .single(),
+    );
   }
 
-  async list(
+  list(
     filters: DocumentListFilters,
   ): Promise<RepoResult<DocumentListRow[]>> {
     let query = this.supabase
@@ -65,27 +69,28 @@ export class SupabaseDocumentRepository implements DocumentRepository {
       query = query.ilike("content", `%${escapeLikePattern(filters.search)}%`);
     }
 
-    const { data, error } = await query;
-    return { data, error: toRepoError(error) };
+    return runQuery(query);
   }
 
-  async findForUpdate(id: string): Promise<RepoResult<DocumentForUpdateRow>> {
-    const { data, error } = await this.supabase
-      .from("documents")
-      .select("id, title, project_id")
-      .eq("id", id)
-      .single();
-    return { data, error: toRepoError(error) };
+  findForUpdate(id: string): Promise<RepoResult<DocumentForUpdateRow>> {
+    return runQuery(
+      this.supabase
+        .from("documents")
+        .select("id, title, project_id")
+        .eq("id", id)
+        .single(),
+    );
   }
 
-  async update(
+  update(
     id: string,
-    updates: Record<string, unknown>,
+    updates: DocumentUpdate,
   ): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
-      .from("documents")
-      .update(updates)
-      .eq("id", id);
-    return { data: null, error: toRepoError(error) };
+    return runWrite(
+      this.supabase
+        .from("documents")
+        .update(updates)
+        .eq("id", id),
+    );
   }
 }

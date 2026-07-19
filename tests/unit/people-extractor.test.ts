@@ -2,7 +2,6 @@ import { assertEquals, assertExists, assertStringIncludes } from "@std/assert";
 import { PeopleExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/people-extractor.ts";
 import type { ExtractionContext } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
 import { parseNote } from "../../supabase/functions/terrestrial-brain-mcp/parser.ts";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { KnownPerson } from "../../supabase/functions/terrestrial-brain-mcp/extractors/name-matching.ts";
 import {
   FakeAiProvider,
@@ -17,19 +16,17 @@ import {
 // allowlist so a hallucinated id can never become a "known" reference.
 
 const ALICE_ID = "00000000-0000-0000-0000-100000000001";
-const fakeSupabase = {} as unknown as SupabaseClient;
-
 function makeContext(
   knownPeople: KnownPerson[],
   aiProvider: FakeAiProvider,
   personRepository: FakePersonRepository,
 ): ExtractionContext {
   return {
-    supabase: fakeSupabase,
     aiProvider,
     taskRepository: new FakeTaskRepository(),
     projectRepository: new FakeProjectRepository(),
     personRepository,
+    timeZone: "UTC",
     knownProjects: [],
     knownTasks: [],
     knownPeople,

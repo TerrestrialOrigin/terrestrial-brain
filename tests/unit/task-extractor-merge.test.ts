@@ -1,9 +1,6 @@
 import { assertEquals } from "@std/assert";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import {
-  stripMarkersForComparison,
-  TaskExtractor,
-} from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
+import { stripMarkersForComparison } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-reconciliation.ts";
+import { TaskExtractor } from "../../supabase/functions/terrestrial-brain-mcp/extractors/task-extractor.ts";
 import type {
   ExtractionContext,
 } from "../../supabase/functions/terrestrial-brain-mcp/extractors/pipeline.ts";
@@ -84,7 +81,6 @@ interface FakeRepoOptions {
 
 // The extractor never reads through context.supabase after the seam, so a bare
 // stand-in satisfies the ExtractionContext type without being called.
-const DUMMY_SUPABASE = {} as unknown as SupabaseClient;
 
 function makeFakeTaskRepository(
   options: FakeRepoOptions = {},
@@ -262,7 +258,7 @@ function baseContext(
   overrides: Partial<ExtractionContext> = {},
 ): ExtractionContext {
   return {
-    supabase: DUMMY_SUPABASE,
+    timeZone: "UTC",
     taskRepository,
     projectRepository: STUB_PROJECT_REPOSITORY,
     personRepository: STUB_PERSON_REPOSITORY,

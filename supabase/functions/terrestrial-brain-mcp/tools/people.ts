@@ -1,14 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { emailField, uuidField } from "../zod-schemas.ts";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { UNAVAILABLE_MARKER } from "./section-format.ts";
 import { PERSON_TYPES } from "../enums.ts";
 import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
-import type { PersonRepository } from "../repositories/person-repository.ts";
+import type {
+  PersonRepository,
+  PersonUpdate,
+} from "../repositories/person-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 /**
  * get_person handler, extracted so it can run against fake repositories —
@@ -65,11 +68,9 @@ export async function handleGetPerson(
 
 export function register(
   server: McpServer,
-  _supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  personRepository: PersonRepository,
-  taskRepository: TaskRepository,
+  deps: Pick<ToolDeps, "logger" | "personRepository" | "taskRepository">,
 ) {
+  const { logger, personRepository, taskRepository } = deps;
   server.registerTool(
     "create_person",
     {
@@ -224,7 +225,8 @@ export function register(
     withMcpLogging(
       "update_person",
       async ({ id, name, type, email, description }) => {
-        const updates: Record<string, unknown> = {};
+        // Schema-typed payload (REPO-4): a misspelled column is a compile error.
+        const updates: PersonUpdate = {};
         if (name !== undefined) updates.name = name;
         if (type !== undefined) updates.type = type;
         if (email !== undefined) updates.email = email;

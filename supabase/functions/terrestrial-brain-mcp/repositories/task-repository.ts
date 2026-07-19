@@ -5,7 +5,7 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
-import type { Row } from "../supabase-client.ts";
+import type { Row, UpdateRow } from "../supabase-client.ts";
 
 /** Row shape returned to `list_tasks`. */
 export type TaskListRow = Pick<
@@ -50,6 +50,12 @@ export interface NewTaskValues {
   metadata?: Record<string, unknown>;
   archived_at?: string | null;
 }
+
+/**
+ * A partial update payload for a task, derived from the generated schema so a
+ * misspelled column is a compile error (REPO-4).
+ */
+export type TaskUpdate = Partial<UpdateRow<"tasks">>;
 
 export interface TaskListFilters {
   limit: number;
@@ -100,7 +106,7 @@ export interface TaskRepository {
    */
   update(
     id: string,
-    updates: Record<string, unknown>,
+    updates: TaskUpdate,
   ): Promise<RepoResult<{ id: string }>>;
 
   /** Archive a task (sets `archived_at`; leaves status untouched). */

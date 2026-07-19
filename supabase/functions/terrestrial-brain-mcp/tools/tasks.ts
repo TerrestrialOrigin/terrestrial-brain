@@ -1,13 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { dueByField, uuidField } from "../zod-schemas.ts";
-import { SupabaseClient } from "@supabase/supabase-js";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, McpToolResult, textResult } from "../mcp-response.ts";
 import { hashContent } from "../helpers.ts";
 import type {
+  TaskDetailRow,
   TaskListRow,
   TaskRepository,
+  TaskUpdate,
 } from "../repositories/task-repository.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { TASK_STATUSES } from "../enums.ts";
@@ -18,6 +19,7 @@ import {
   MAX_QUERY_LIMIT,
   RECONCILE_TASK_LIMIT,
 } from "../constants.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 /** Resolves a batch of ids to a `Map<id, displayValue>` (injected for testing). */
 type NameResolver = (ids: string[]) => Promise<Map<string, string>>;
@@ -27,25 +29,42 @@ interface TaskLineContext {
   /** When present, a `Project:` line is added for tasks with a resolved name. */
   projectNames?: Map<string, string>;
   personNames: Map<string, string>;
+  /** When present, a `Parent task:` line is added for tasks with a resolved parent. */
+  parentNames?: Map<string, string>;
+  /** When true, an `Archived:` line is added for archived tasks. */
+  showArchived?: boolean;
+}
+
+/** The one status-icon mapping every task renderer uses (TOOL-8). */
+export function taskStatusIcon(status: string): string {
+  return status === "done" ? "[x]" : status === "in_progress" ? "[~]" : "[ ]";
+}
+
+/** Overdue means past due AND not done — a done task is never overdue (TOOL-8). */
+export function isTaskOverdue(dueBy: string, status: string): boolean {
+  return new Date(dueBy) < new Date() && status !== "done";
+}
+
+/** The one due-date line body every multi-line task renderer uses (TOOL-8). */
+export function formatDueDate(dueBy: string, status: string): string {
+  return `Due: ${new Date(dueBy).toLocaleDateString()}${
+    isTaskOverdue(dueBy, status) ? " (OVERDUE)" : ""
+  }`;
 }
 
 /**
  * Renders one task as its numbered multi-line block (status icon, id/status,
- * optional project + assignee, due date with overdue marker). Shared by
- * `list_tasks` and `list_open_tasks_by_project` so a task looks identical
- * wherever it appears. Pure apart from `new Date()` for overdue detection.
+ * optional project + assignee + parent, due date with overdue marker, optional
+ * archived date). Shared by `list_tasks`, `list_open_tasks_by_project`, and
+ * `get_tasks` so a task looks identical wherever it appears (TOOL-8). Pure
+ * apart from `new Date()` for overdue detection.
  */
 export function renderTaskLine(
-  task: TaskListRow,
+  task: TaskListRow & Partial<Pick<TaskDetailRow, "parent_id">>,
   position: number,
   context: TaskLineContext,
 ): string {
-  const statusIcon = task.status === "done"
-    ? "[x]"
-    : task.status === "in_progress"
-    ? "[~]"
-    : "[ ]";
-  const parts = [`${position}. ${statusIcon} ${task.content}`];
+  const parts = [`${position}. ${taskStatusIcon(task.status)} ${task.content}`];
   parts.push(`   ID: ${task.id} | Status: ${task.status}`);
   const projectName = task.project_id
     ? context.projectNames?.get(task.project_id)
@@ -59,14 +78,50 @@ export function renderTaskLine(
   if (personName) {
     parts.push(`   Assigned to: ${personName}`);
   }
+  const parentName = task.parent_id
+    ? context.parentNames?.get(task.parent_id)
+    : undefined;
+  if (parentName) {
+    parts.push(`   Parent task: ${parentName}`);
+  }
   if (task.due_by) {
-    const due = new Date(task.due_by);
-    const overdue = due < new Date() && task.status !== "done";
+    parts.push(`   ${formatDueDate(task.due_by, task.status)}`);
+  }
+  if (context.showArchived && task.archived_at) {
     parts.push(
-      `   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`,
+      `   Archived: ${new Date(task.archived_at).toLocaleDateString()}`,
     );
   }
   return parts.join("\n");
+}
+
+/**
+ * Formats the `get_tasks` response body. Pure — every name map is injected —
+ * so it is unit-testable with synthetic rows (TOOL-8: composed from the shared
+ * `renderTaskLine`, not an inline copy).
+ */
+export function buildGetTasksText(
+  tasks: TaskDetailRow[],
+  maps: {
+    projectNames: Map<string, string>;
+    personNames: Map<string, string>;
+    parentNames: Map<string, string>;
+  },
+  missingIds: string[],
+): string {
+  const lines = tasks.map((task, index) =>
+    renderTaskLine(task, index + 1, {
+      projectNames: maps.projectNames,
+      personNames: maps.personNames,
+      parentNames: maps.parentNames,
+      showArchived: true,
+    })
+  );
+  let result = `${tasks.length} task(s):\n\n${lines.join("\n\n")}`;
+  if (missingIds.length > 0) {
+    result += `\n\nNot found (${missingIds.length}): ${missingIds.join(", ")}`;
+  }
+  return result;
 }
 
 /**
@@ -146,7 +201,9 @@ export function buildOpenTasksByProjectText(
       tasks: noProject,
     });
   }
-  groups.sort((a, b) => a.rank - b.rank || a.sortKey.localeCompare(b.sortKey));
+  groups.sort((groupA, groupB) =>
+    groupA.rank - groupB.rank || groupA.sortKey.localeCompare(groupB.sortKey)
+  );
 
   const sections = groups.map((group) => {
     const lines = group.tasks.map((task, index) =>
@@ -269,10 +326,9 @@ export async function handleOpenTasksByProject(
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  taskRepository: TaskRepository,
+  deps: Pick<ToolDeps, "supabase" | "logger" | "taskRepository">,
 ) {
+  const { supabase, logger, taskRepository } = deps;
   server.registerTool(
     "create_task",
     {
@@ -435,7 +491,8 @@ export function register(
     withMcpLogging(
       "update_task",
       async ({ id, content, status, due_by, project_id, assigned_to }) => {
-        const updates: Record<string, unknown> = {};
+        // Schema-typed payload (REPO-4): a misspelled column is a compile error.
+        const updates: TaskUpdate = {};
         if (content !== undefined) {
           updates.content = content;
           // INVARIANT 1: re-hash on every content edit (one update path).
@@ -556,44 +613,15 @@ export function register(
         ? await resolveNames(supabase, "tasks", parentIds, "content")
         : new Map<string, string>();
 
-      const lines = data.map((task, index) => {
-        const statusIcon = task.status === "done"
-          ? "[x]"
-          : task.status === "in_progress"
-          ? "[~]"
-          : "[ ]";
-        const parts = [`${index + 1}. ${statusIcon} ${task.content}`];
-        parts.push(`   ID: ${task.id} | Status: ${task.status}`);
-        if (task.project_id && projectMap.get(task.project_id)) {
-          parts.push(`   Project: ${projectMap.get(task.project_id)}`);
-        }
-        if (task.assigned_to && personMap.get(task.assigned_to)) {
-          parts.push(`   Assigned to: ${personMap.get(task.assigned_to)}`);
-        }
-        if (task.parent_id && parentMap.get(task.parent_id)) {
-          parts.push(`   Parent task: ${parentMap.get(task.parent_id)}`);
-        }
-        if (task.due_by) {
-          const due = new Date(task.due_by);
-          const overdue = due < new Date() && task.status !== "done";
-          parts.push(
-            `   Due: ${due.toLocaleDateString()}${overdue ? " (OVERDUE)" : ""}`,
-          );
-        }
-        if (task.archived_at) {
-          parts.push(
-            `   Archived: ${new Date(task.archived_at).toLocaleDateString()}`,
-          );
-        }
-        return parts.join("\n");
-      });
-
-      let result = `${data.length} task(s):\n\n${lines.join("\n\n")}`;
-      if (missingIds.length > 0) {
-        result += `\n\nNot found (${missingIds.length}): ${
-          missingIds.join(", ")
-        }`;
-      }
+      const result = buildGetTasksText(
+        data,
+        {
+          projectNames: projectMap,
+          personNames: personMap,
+          parentNames: parentMap,
+        },
+        missingIds,
+      );
 
       return textResult(result, { recordsReturned: data.length });
     }, logger),

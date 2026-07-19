@@ -1,19 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { uuidField } from "../zod-schemas.ts";
-import { SupabaseClient } from "@supabase/supabase-js";
 import {
   extractMetadata,
   freshIngest,
   getEmbedding,
-  getProjectRefs,
   hashContent,
   resolveDedup,
 } from "../helpers.ts";
 import { parseNote } from "../parser.ts";
 import { runExtractionForTool } from "../extractors/pipeline.ts";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
-import { AiQuotaGate, withAiQuota } from "../ai-quota.ts";
+import { withMcpLogging } from "../logger.ts";
+import { withAiQuota } from "../ai-quota.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { RELIABILITIES, THOUGHT_TYPES } from "../enums.ts";
@@ -27,11 +25,18 @@ import { AiProviderParseError } from "../ai/ai-provider.ts";
 import type {
   ThoughtByReferenceRow,
   ThoughtRepository,
+  ThoughtUpdate,
+  ThoughtUsefulness,
 } from "../repositories/thought-repository.ts";
-import type { TaskRepository } from "../repositories/task-repository.ts";
-import type { ProjectRepository } from "../repositories/project-repository.ts";
-import type { PersonRepository } from "../repositories/person-repository.ts";
 import type { NoteSnapshotRepository } from "../repositories/note-snapshot-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
+import {
+  collectProjectUuids,
+  formatCaptureConfirmation,
+  formatListEntry,
+  formatSearchResult,
+  formatThoughtDetailLines,
+} from "./thought-format.ts";
 
 /** Max characters of a thought's content shown in the archive-list preview. */
 const ARCHIVE_PREVIEW_LENGTH = 80;
@@ -62,7 +67,7 @@ function isoDaysAgo(days: number): string {
  * review queues) is diagnosable (TOOL-5). Shared by the three retrieval sites.
  */
 export async function touchRetrievedLogged(
-  thoughtRepository: ThoughtRepository,
+  thoughtRepository: ThoughtUsefulness,
   thoughtIds: string[],
   contextLabel: string,
 ): Promise<void> {
@@ -95,7 +100,7 @@ export async function buildThoughtUpdate(
   existingMetadata: Record<string, unknown>,
   fields: ThoughtUpdateFields,
 ): Promise<
-  { updatePayload: Record<string, unknown>; updatedFields: string[] }
+  { updatePayload: ThoughtUpdate; updatedFields: string[] }
 > {
   const { content, reliability, author, project_ids, document_ids, actor } =
     fields;
@@ -104,7 +109,8 @@ export async function buildThoughtUpdate(
     string[]
   >;
 
-  const updatePayload: Record<string, unknown> = {};
+  // Schema-typed payload (REPO-4): a misspelled column is a compile error.
+  const updatePayload: ThoughtUpdate = {};
   // Every mutation records its actor through the one update path (Invariant 2).
   updatePayload.last_actor = actor ?? "LLM";
   const updatedReferences = { ...existingReferences };
@@ -249,15 +255,32 @@ export async function handleUpdateThought(
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  aiProvider: AiProvider,
-  thoughtRepository: ThoughtRepository,
-  taskRepository: TaskRepository,
-  projectRepository: ProjectRepository,
-  personRepository: PersonRepository,
-  quotaGate: AiQuotaGate,
+  deps: Pick<
+    ToolDeps,
+    | "supabase"
+    | "logger"
+    | "aiProvider"
+    | "thoughtRepository"
+    | "taskRepository"
+    | "projectRepository"
+    | "personRepository"
+    | "quotaGate"
+    | "extractors"
+    | "timeZone"
+  >,
 ) {
+  const {
+    supabase,
+    logger,
+    aiProvider,
+    thoughtRepository,
+    taskRepository,
+    projectRepository,
+    personRepository,
+    quotaGate,
+    extractors,
+    timeZone,
+  } = deps;
   // Tool 1: Semantic Search
   server.registerTool(
     "search_thoughts",
@@ -314,81 +337,14 @@ export function register(
             });
           }
 
-          // Collect all project UUIDs and resolve to names
-          const allProjectUuids: string[] = [];
-          for (const thought of data) {
-            const projectRefs = getProjectRefs(
-              (thought.metadata || {}) as Record<string, unknown>,
-            );
-            allProjectUuids.push(...projectRefs);
-          }
           const projectNameMap = await resolveNames(
             supabase,
             "projects",
-            allProjectUuids,
+            collectProjectUuids(data),
           );
 
-          const results = data.map(
-            (thought, i: number) => {
-              const metadata = (thought.metadata ?? {}) as Record<
-                string,
-                unknown
-              >;
-              const parts = [
-                `--- Result ${i + 1} (${
-                  (thought.similarity * 100).toFixed(1)
-                }% match) ---`,
-                `ID: ${thought.id}`,
-                `Captured: ${new Date(thought.created_at).toISOString()}`,
-              ];
-              if (thought.updated_at) {
-                parts.push(
-                  `Updated: ${new Date(thought.updated_at).toISOString()}`,
-                );
-              }
-              parts.push(`Type: ${metadata.type || "unknown"}`);
-              if (thought.reliability || thought.author) {
-                const provenanceParts: string[] = [];
-                if (thought.reliability) {
-                  provenanceParts.push(
-                    `Reliability: ${thought.reliability}`,
-                  );
-                }
-                if (thought.author) {
-                  provenanceParts.push(`Author: ${thought.author}`);
-                }
-                parts.push(provenanceParts.join(" | "));
-              }
-              if (Array.isArray(metadata.topics) && metadata.topics.length) {
-                parts.push(
-                  `Topics: ${(metadata.topics as string[]).join(", ")}`,
-                );
-              }
-              if (Array.isArray(metadata.people) && metadata.people.length) {
-                parts.push(
-                  `People: ${(metadata.people as string[]).join(", ")}`,
-                );
-              }
-              const projectRefs = getProjectRefs(
-                metadata as Record<string, unknown>,
-              );
-              if (projectRefs.length > 0) {
-                const projectNames = projectRefs.map((uuid) =>
-                  projectNameMap.get(uuid) || uuid
-                );
-                parts.push(`Projects: ${projectNames.join(", ")}`);
-              }
-              if (
-                Array.isArray(metadata.action_items) &&
-                metadata.action_items.length
-              ) {
-                parts.push(
-                  `Actions: ${(metadata.action_items as string[]).join("; ")}`,
-                );
-              }
-              parts.push(`\n${thought.content}`);
-              return parts.join("\n");
-            },
+          const results = data.map((thought, index) =>
+            formatSearchResult(thought, index, projectNameMap)
           );
 
           const thoughtIds = data.map((thought: { id: string }) => thought.id);
@@ -493,66 +449,14 @@ export function register(
           return textResult("No thoughts found.", { recordsReturned: 0 });
         }
 
-        // Collect all project UUIDs and resolve to names
-        const allProjectUuids: string[] = [];
-        for (const thought of data) {
-          const projectRefs = getProjectRefs(
-            (thought.metadata || {}) as Record<string, unknown>,
-          );
-          allProjectUuids.push(...projectRefs);
-        }
         const projectNameMap = await resolveNames(
           supabase,
           "projects",
-          allProjectUuids,
+          collectProjectUuids(data),
         );
 
-        const results = data.map(
-          (thought, i: number) => {
-            const metadata = (thought.metadata ?? {}) as Record<
-              string,
-              unknown
-            >;
-            const tags = Array.isArray(metadata.topics)
-              ? (metadata.topics as string[]).join(", ")
-              : "";
-            const parts = [
-              `${i + 1}. [${
-                thought.created_at
-                  ? new Date(thought.created_at).toISOString()
-                  : "unknown"
-              }] (${metadata.type || "??"}${tags ? " - " + tags : ""})`,
-              `   ID: ${thought.id}`,
-            ];
-            if (thought.updated_at) {
-              parts.push(
-                `   Updated: ${new Date(thought.updated_at).toISOString()}`,
-              );
-            }
-            if (thought.reliability || thought.author) {
-              const provenanceParts: string[] = [];
-              if (thought.reliability) {
-                provenanceParts.push(
-                  `Reliability: ${thought.reliability}`,
-                );
-              }
-              if (thought.author) {
-                provenanceParts.push(`Author: ${thought.author}`);
-              }
-              parts.push(`   ${provenanceParts.join(" | ")}`);
-            }
-            const projectRefs = getProjectRefs(
-              metadata as Record<string, unknown>,
-            );
-            if (projectRefs.length > 0) {
-              const projectNames = projectRefs.map((uuid) =>
-                projectNameMap.get(uuid) || uuid
-              );
-              parts.push(`   Projects: ${projectNames.join(", ")}`);
-            }
-            parts.push(`   ${thought.content}`);
-            return parts.join("\n");
-          },
+        const results = data.map((thought, index) =>
+          formatListEntry(thought, index, projectNameMap)
         );
 
         const thoughtIds = data.map((thought: { id: string }) => thought.id);
@@ -679,48 +583,7 @@ export function register(
         );
       }
 
-      const metadata = (data.metadata || {}) as Record<string, unknown>;
-      const lines: string[] = [
-        `ID: ${data.id}`,
-        `Captured: ${
-          data.created_at ? new Date(data.created_at).toISOString() : "unknown"
-        }`,
-      ];
-      if (data.updated_at) {
-        lines.push(`Updated: ${new Date(data.updated_at).toISOString()}`);
-      }
-      lines.push(`Type: ${metadata.type || "unknown"}`);
-      if (data.reference_id) lines.push(`Source: ${data.reference_id}`);
-      if (Array.isArray(metadata.topics) && metadata.topics.length) {
-        lines.push(`Topics: ${(metadata.topics as string[]).join(", ")}`);
-      }
-      if (Array.isArray(metadata.people) && metadata.people.length) {
-        lines.push(`People: ${(metadata.people as string[]).join(", ")}`);
-      }
-      if (
-        Array.isArray(metadata.action_items) && metadata.action_items.length
-      ) {
-        lines.push(
-          `Actions: ${(metadata.action_items as string[]).join("; ")}`,
-        );
-      }
-      const references = metadata.references as
-        | Record<string, string[]>
-        | undefined;
-      if (references) {
-        if (references.projects?.length) {
-          lines.push(`Projects: ${references.projects.join(", ")}`);
-        }
-        if (references.tasks?.length) {
-          lines.push(`Tasks: ${references.tasks.join(", ")}`);
-        }
-        if (references.people?.length) {
-          lines.push(`People refs: ${references.people.join(", ")}`);
-        }
-      }
-      lines.push(`\n${data.content}`);
-
-      return textResult(lines.join("\n"), {
+      return textResult(formatThoughtDetailLines(data).join("\n"), {
         recordsReturned: 1,
         returnedIds: [data.id],
       });
@@ -774,11 +637,12 @@ export function register(
           const extractionRun = await runExtractionForTool({
             parse: () => parseNote(content, null, null, "mcp"),
             deps: {
-              supabase,
               aiProvider,
               taskRepository,
               projectRepository,
               personRepository,
+              extractors,
+              timeZone,
             },
             site: "capture_thought",
           });
@@ -872,21 +736,9 @@ export function register(
             }
           }
 
-          const meta = metadata as Record<string, unknown>;
-          let confirmation = `Captured as ${meta.type || "thought"}`;
-          if (Array.isArray(meta.topics) && meta.topics.length) {
-            confirmation += ` — ${(meta.topics as string[]).join(", ")}`;
-          }
-          if (Array.isArray(meta.people) && meta.people.length) {
-            confirmation += ` | People: ${
-              (meta.people as string[]).join(", ")
-            }`;
-          }
-          if (Array.isArray(meta.action_items) && meta.action_items.length) {
-            confirmation += ` | Actions: ${
-              (meta.action_items as string[]).join("; ")
-            }`;
-          }
+          let confirmation = formatCaptureConfirmation(
+            metadata as Record<string, unknown>,
+          );
           confirmation += buildsOnNote;
           confirmation += extractionWarning;
           confirmation += dedupNote;
@@ -1388,9 +1240,9 @@ export async function executeReconciliationPlan(
   thoughtRepository: ThoughtRepository,
   aiProvider: AiProvider,
   plan: ReconciliationPlan,
-  ctx: ReconcileContext,
+  context: ReconcileContext,
 ): Promise<ReconcileCounts> {
-  const { noteSnapshotId, noteId, title, references } = ctx;
+  const { noteSnapshotId, noteId, title, references } = context;
   const ops: Promise<void>[] = [];
   let updated = 0, added = 0, deleted = 0;
 
@@ -1530,19 +1382,33 @@ export function formatIngestSummary(params: {
 }
 
 export async function handleIngestNote(
-  supabase: SupabaseClient,
-  aiProvider: AiProvider,
-  thoughtRepository: ThoughtRepository,
-  taskRepository: TaskRepository,
-  projectRepository: ProjectRepository,
-  personRepository: PersonRepository,
-  noteSnapshotRepository: NoteSnapshotRepository,
+  deps: Pick<
+    ToolDeps,
+    | "aiProvider"
+    | "thoughtRepository"
+    | "taskRepository"
+    | "projectRepository"
+    | "personRepository"
+    | "noteSnapshotRepository"
+    | "extractors"
+    | "timeZone"
+  >,
   { content, title, note_id }: {
     content: string;
     title?: string;
     note_id?: string;
   },
 ): Promise<IngestResult> {
+  const {
+    aiProvider,
+    thoughtRepository,
+    taskRepository,
+    projectRepository,
+    personRepository,
+    noteSnapshotRepository,
+    extractors,
+    timeZone,
+  } = deps;
   try {
     if (await checkUnchanged(noteSnapshotRepository, note_id, content)) {
       return { success: true, message: "Note unchanged — skipped." };
@@ -1559,11 +1425,12 @@ export async function handleIngestNote(
       parse: () =>
         parseNote(content, title || null, note_id || null, "obsidian"),
       deps: {
-        supabase,
         aiProvider,
         taskRepository,
         projectRepository,
         personRepository,
+        extractors,
+        timeZone,
       },
       site: "ingest_note",
     });
@@ -1584,16 +1451,14 @@ export async function handleIngestNote(
     // unparseable-plan fallback below.
     const runFreshIngest = async () =>
       freshIngestResult(
-        await freshIngest(
-          thoughtRepository,
-          aiProvider,
+        await freshIngest({ thoughtRepository, aiProvider }, {
           content,
           title,
-          note_id,
+          noteId: note_id,
           noteSnapshotId,
           references,
-          INGEST_PROVENANCE,
-        ),
+          provenance: INGEST_PROVENANCE,
+        }),
       );
 
     // Appends any partial-extraction warning (EXTR-6) to a result's message so

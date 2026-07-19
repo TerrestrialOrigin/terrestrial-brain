@@ -23,20 +23,40 @@ export function serializeLoggedInput(input: Record<string, unknown>): string {
 
 // ─── IP extraction from HTTP headers ────────────────────────────────────────
 
+// Shape gates for candidate IPs: a value that parses as neither is treated as
+// absent (null) so a client can never plant arbitrary strings in
+// function_call_logs.ip_address.
+const IPV4_PATTERN =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+const IPV6_PATTERN = /^[0-9a-fA-F:]{2,45}$/;
+
+function validateIpShape(candidate: string): string | null {
+  if (IPV4_PATTERN.test(candidate)) return candidate;
+  // IPv6 must contain at least one colon and only hex/colon characters.
+  if (candidate.includes(":") && IPV6_PATTERN.test(candidate)) return candidate;
+  return null;
+}
+
+// Trusted proxy chain: Supabase's edge gateway APPENDS the true client IP as
+// the LAST x-forwarded-for hop, while earlier elements are client-controlled.
+// We therefore read the last hop, falling back to the single-value headers,
+// and validate the shape before storing.
 export function extractIpAddress(headers: Headers): string | null {
   const forwarded = headers.get("x-forwarded-for");
   if (forwarded) {
-    return forwarded.split(",")[0].trim();
+    const hops = forwarded.split(",");
+    const trustedHop = hops[hops.length - 1].trim();
+    return validateIpShape(trustedHop);
   }
 
   const realIp = headers.get("x-real-ip");
   if (realIp) {
-    return realIp.trim();
+    return validateIpShape(realIp.trim());
   }
 
   const cfIp = headers.get("cf-connecting-ip");
   if (cfIp) {
-    return cfIp.trim();
+    return validateIpShape(cfIp.trim());
   }
 
   return null;

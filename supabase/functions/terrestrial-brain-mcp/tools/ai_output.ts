@@ -3,12 +3,13 @@ import { z } from "zod";
 import { dueByField, uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { validateFilePath } from "../validators.ts";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
 import { resolveNames } from "../repositories/name-resolution.ts";
 import { TASK_STATUSES } from "../enums.ts";
 import type { AiOutputRepository } from "../repositories/ai-output-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 // ---------------------------------------------------------------------------
 // Task input schema + type for create_tasks_with_output
@@ -342,11 +343,12 @@ export async function handleRejectAIOutput(
 
 export function register(
   server: McpServer,
-  supabase: SupabaseClient,
-  logger: FunctionCallLogger,
-  aiOutputRepository: AiOutputRepository,
-  taskRepository: TaskRepository,
+  deps: Pick<
+    ToolDeps,
+    "supabase" | "logger" | "aiOutputRepository" | "taskRepository"
+  >,
 ) {
+  const { supabase, logger, aiOutputRepository, taskRepository } = deps;
   server.registerTool(
     "create_ai_output",
     {

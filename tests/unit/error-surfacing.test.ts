@@ -389,11 +389,12 @@ Deno.test("touchRetrievedLogged: success logs nothing", async () => {
 
 function extractionDeps() {
   return {
-    supabase: makeFakeClient({ data: null }).client,
     aiProvider: new FakeAiProvider(),
     taskRepository: fakeTaskRepository({}),
     projectRepository: fakeProjectRepository({}),
     personRepository: fakePersonRepository({}),
+    extractors: [],
+    timeZone: "UTC",
   };
 }
 
@@ -536,11 +537,8 @@ Deno.test("freshIngest: a failed thought insert logs its reason and still counts
   let text = "";
   const logs = await withCapturedErrors(async () => {
     const result = await freshIngest(
-      repo,
-      new FakeAiProvider(),
-      "One standalone thought",
-      undefined,
-      undefined,
+      { thoughtRepository: repo, aiProvider: new FakeAiProvider() },
+      { content: "One standalone thought" },
     );
     text = result.content.map((part) => part.text).join("\n");
   });

@@ -7,7 +7,7 @@
  */
 
 import type { RepoResult } from "./repo-result.ts";
-import type { Row } from "../supabase-client.ts";
+import type { Row, UpdateRow } from "../supabase-client.ts";
 
 /** The identity of a freshly-inserted / matched project. */
 export type ProjectIdentity = Pick<Row<"projects">, "id" | "name">;
@@ -31,6 +31,12 @@ export interface NewProjectValues {
   parent_id?: string | null;
   description?: string | null;
 }
+
+/**
+ * A partial update payload for a project, derived from the generated schema so
+ * a misspelled column is a compile error (REPO-4).
+ */
+export type ProjectUpdate = Partial<UpdateRow<"projects">>;
 
 export interface ProjectListFilters {
   includeArchived: boolean;
@@ -80,7 +86,7 @@ export interface ProjectRepository {
    */
   update(
     id: string,
-    updates: Record<string, unknown>,
+    updates: ProjectUpdate,
   ): Promise<RepoResult<{ id: string }>>;
 
   /** Archive every still-active project in `ids`. */

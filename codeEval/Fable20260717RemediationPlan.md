@@ -43,12 +43,12 @@
 - [x] 24. Plugin cleanup (`feature/PluginCleanup`) — PLUG-9, PLUG-10, PLUG-11, PLUG-14, PLUG-15, PLUG-16 (landed on `bug/PluginPhaseD`)
 
 ## Phase E — Structure, duplication & style
-- [ ] 25. Deps objects (`feature/DepsObjects`) — CORE-7, TOOL-11, TOOL-14, EXTR-9, EXTR-11
-- [ ] 26. Formatter dedup (`feature/FormatterDedup`) — TOOL-8, TOOL-9
-- [ ] 27. Repository shape (`feature/RepositoryShape`) — REPO-2, REPO-3, REPO-4, REPO-6
-- [ ] 28. Extractor structure (`feature/ExtractorStructure`) — EXTR-12, EXTR-13
-- [ ] 29. Core low-severity sweep (`feature/CoreLowSweep`) — CORE-11, CORE-15, CORE-16, TOOL-16
-- [ ] 30. Test suite hygiene (`feature/TestSuiteHygiene`) — TEST-7, TEST-9..17, TEST-19
+- [x] 25. Deps objects (`feature/DepsObjects`) — CORE-7, TOOL-11, TOOL-14, EXTR-9, EXTR-11 (landed on `feature/StructurePhaseE`, one OpenSpec change `phase-e-structure-remediation` for all of Phase E)
+- [x] 26. Formatter dedup (`feature/FormatterDedup`) — TOOL-8, TOOL-9 (landed on `feature/StructurePhaseE`)
+- [x] 27. Repository shape (`feature/RepositoryShape`) — REPO-2, REPO-3, REPO-4, REPO-6 (landed on `feature/StructurePhaseE`)
+- [x] 28. Extractor structure (`feature/ExtractorStructure`) — EXTR-12, EXTR-13 (landed on `feature/StructurePhaseE`)
+- [x] 29. Core low-severity sweep (`feature/CoreLowSweep`) — CORE-11, CORE-15, CORE-16, TOOL-16 (landed on `feature/StructurePhaseE`)
+- [x] 30. Test suite hygiene (`feature/TestSuiteHygiene`) — TEST-7, TEST-9..17, TEST-19 (landed on `feature/StructurePhaseE`; TEST-18 stays deferred per the Deliberate No-Action list)
 
 ---
 

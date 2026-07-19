@@ -34,3 +34,48 @@ export function toRepoError(
     ? { message: error.message, code: error.code }
     : { message: error.message };
 }
+
+/**
+ * Awaits a supabase-js query builder (builders are PromiseLike) and wraps the
+ * response into a `RepoResult` (REPO-3). This is the one await-then-wrap block
+ * every repository read delegates to: on error, `data` is always null so a
+ * broken read can never masquerade as a success shape.
+ */
+export async function runQuery<Data>(
+  builder: PromiseLike<{
+    data: Data | null;
+    error: { message: string; code?: string } | null;
+  }>,
+): Promise<RepoResult<Data>> {
+  const { data, error } = await builder;
+  if (error) return { data: null, error: toRepoError(error) };
+  return { data, error: null };
+}
+
+/**
+ * Awaits a supabase-js write builder whose data is not used and wraps the
+ * error channel into a `RepoResult<void>` (REPO-3).
+ */
+export async function runWrite(
+  builder: PromiseLike<{ error: { message: string; code?: string } | null }>,
+): Promise<RepoResult<void>> {
+  const { error } = await builder;
+  return { data: null, error: toRepoError(error) };
+}
+
+/**
+ * Awaits a supabase-js `count: "exact", head: true` builder and wraps the
+ * count into a `RepoResult<number>` (REPO-3). A failed count keeps `data`
+ * null — `data: 0` alongside an error would make "broken" indistinguishable
+ * from "genuinely zero" (REPO-7).
+ */
+export async function runCount(
+  builder: PromiseLike<{
+    count: number | null;
+    error: { message: string; code?: string } | null;
+  }>,
+): Promise<RepoResult<number>> {
+  const { count, error } = await builder;
+  if (error) return { data: null, error: toRepoError(error) };
+  return { data: count ?? 0, error: null };
+}

@@ -10,7 +10,7 @@
 
 import type { RepoResult } from "./repo-result.ts";
 import type { Database } from "../database.types.ts";
-import type { Row } from "../supabase-client.ts";
+import type { Row, UpdateRow } from "../supabase-client.ts";
 
 // ---------------------------------------------------------------------------
 // Row & parameter shapes — row DTOs are projections of the generated schema
@@ -123,7 +123,29 @@ export interface NewThought {
   last_actor?: string;
 }
 
-export interface ThoughtRepository {
+/**
+ * A partial update payload for a thought, derived from the generated schema so
+ * a misspelled column is a compile error (REPO-4). Two columns are re-typed to
+ * what callers actually build: `embedding` (pgvector, which typegen maps to
+ * `string`) is the JSON `number[]` the RPC/runtime accepts, and `metadata`
+ * (jsonb `Json`) is the plain object the metadata extractor produces — the
+ * same two typegen limitations `NewThought` bridges on the insert path.
+ */
+export type ThoughtUpdate =
+  & Partial<Omit<UpdateRow<"thoughts">, "embedding" | "metadata">>
+  & {
+    embedding?: number[];
+    metadata?: Record<string, unknown>;
+  };
+
+// ---------------------------------------------------------------------------
+// Role interfaces (REPO-2) — the full repository is the sum of five concerns.
+// Handlers that use only one concern can depend on just that role; fakes and
+// the Supabase implementation still provide the whole `ThoughtRepository`.
+// ---------------------------------------------------------------------------
+
+/** Search & retrieval reads over the `thoughts` table and its search RPC. */
+export interface ThoughtReads {
   /** Vector search via the `search_thoughts_by_embedding` RPC. */
   matchByEmbedding(
     params: ThoughtMatchParams,
@@ -155,7 +177,31 @@ export interface ThoughtRepository {
 
   /** Active, non-superseded thoughts with an exact content-hash (write dedup). */
   findByContentHash(hash: string): Promise<RepoResult<{ id: string }[]>>;
+}
 
+/** The write path: insert, partial update, and soft-archive. */
+export interface ThoughtWrites {
+  /** Insert one thought. */
+  insert(thought: NewThought): Promise<RepoResult<void>>;
+
+  /**
+   * Apply a partial update to a thought. When `options.expectedUpdatedAt` is
+   * provided, the update additionally filters on `updated_at` (optimistic
+   * concurrency, TOOL-6): a stale snapshot matches zero rows. `data` carries the
+   * matched row's id, or `null` when nothing matched (with `error` null).
+   */
+  update(
+    id: string,
+    payload: ThoughtUpdate,
+    options?: { expectedUpdatedAt?: string },
+  ): Promise<RepoResult<{ id: string } | null>>;
+
+  /** Soft-archive a thought (sets `archived_at`; never deletes). */
+  archive(id: string): Promise<RepoResult<void>>;
+}
+
+/** The stale/archival human-review queues and the supersedes edge. */
+export interface ThoughtReviewQueues {
   /**
    * Stale-review queue: active thoughts older than `olderThanIso` that have not
    * been retrieved since `staleBeforeIso` (retrieval-recency, NOT score alone —
@@ -182,33 +228,12 @@ export interface ThoughtRepository {
     id: string,
     supersededBy: string | null,
   ): Promise<RepoResult<void>>;
+}
 
+/** Usefulness scoring & the retrieval-recency signal. */
+export interface ThoughtUsefulness {
   /** Advance the retrieval-recency signal for the given ids (non-fatal). */
   touchRetrieved(ids: string[]): Promise<RepoResult<void>>;
-
-  /** Insert one thought. */
-  insert(thought: NewThought): Promise<RepoResult<void>>;
-
-  /**
-   * Apply a partial update to a thought. When `options.expectedUpdatedAt` is
-   * provided, the update additionally filters on `updated_at` (optimistic
-   * concurrency, TOOL-6): a stale snapshot matches zero rows. `data` carries the
-   * matched row's id, or `null` when nothing matched (with `error` null).
-   */
-  update(
-    id: string,
-    payload: Record<string, unknown>,
-    options?: { expectedUpdatedAt?: string },
-  ): Promise<RepoResult<{ id: string } | null>>;
-
-  /** Soft-archive a thought (sets `archived_at`; never deletes). */
-  archive(id: string): Promise<RepoResult<void>>;
-
-  /**
-   * Soft-archive every thought whose metadata references the given document id —
-   * the `update_document` stale-thought cleanup. Never hard-deletes.
-   */
-  archiveByDocumentReference(documentId: string): Promise<RepoResult<void>>;
 
   /** Increment usefulness for the given ids; data is the affected count. */
   incrementUsefulness(ids: string[]): Promise<RepoResult<number>>;
@@ -218,6 +243,15 @@ export interface ThoughtRepository {
     ids: string[],
     weight: number,
   ): Promise<RepoResult<number>>;
+}
+
+/** Bulk removal paths: user-initiated erasure and document stale-thought cleanup. */
+export interface ThoughtErasure {
+  /**
+   * Soft-archive every thought whose metadata references the given document id —
+   * the `update_document` stale-thought cleanup. Never hard-deletes.
+   */
+  archiveByDocumentReference(documentId: string): Promise<RepoResult<void>>;
 
   /**
    * HARD-delete every thought derived from a note snapshot; data is the count
@@ -227,3 +261,12 @@ export interface ThoughtRepository {
    */
   deleteByNoteSnapshot(snapshotId: string): Promise<RepoResult<number>>;
 }
+
+/** The full seam — every concern together (what implementations provide). */
+export interface ThoughtRepository
+  extends
+    ThoughtReads,
+    ThoughtWrites,
+    ThoughtReviewQueues,
+    ThoughtUsefulness,
+    ThoughtErasure {}

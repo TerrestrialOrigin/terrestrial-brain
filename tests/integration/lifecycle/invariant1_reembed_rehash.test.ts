@@ -32,7 +32,7 @@ async function firstRow(
   return rows[0] ?? null;
 }
 
-async function del(table: string, filter: string): Promise<void> {
+async function deleteRows(table: string, filter: string): Promise<void> {
   const response = await fetch(restUrl(`${table}?${filter}`), {
     method: "DELETE",
     headers: serviceHeaders(),
@@ -171,9 +171,9 @@ Deno.test("invariant1: content_hash re-hashes on project, task, and document edi
     );
   } finally {
     if (projectId) {
-      await del("documents", `project_id=eq.${projectId}`);
-      await del("tasks", `project_id=eq.${projectId}`);
-      await del("projects", `id=eq.${projectId}`);
+      await deleteRows("documents", `project_id=eq.${projectId}`);
+      await deleteRows("tasks", `project_id=eq.${projectId}`);
+      await deleteRows("projects", `id=eq.${projectId}`);
     }
   }
 });
@@ -199,6 +199,6 @@ Deno.test("invariant1: emptying a thought's content is a valid, re-hashed edit",
     );
   } finally {
     // Content is now empty, so delete by id (marker no longer in content).
-    if (thoughtId) await del("thoughts", `id=eq.${thoughtId}`);
+    if (thoughtId) await deleteRows("thoughts", `id=eq.${thoughtId}`);
   }
 });

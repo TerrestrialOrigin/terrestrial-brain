@@ -23,3 +23,11 @@ export type Row<Table extends TableName> =
 /** The generated Insert type for a table. */
 export type InsertRow<Table extends TableName> =
   Database["public"]["Tables"][Table]["Insert"];
+
+/**
+ * The generated Update type for a table (all columns optional). Repository
+ * update payloads derive from this so a misspelled column in an update is a
+ * compile error instead of a silent no-op (REPO-4).
+ */
+export type UpdateRow<Table extends TableName> =
+  Database["public"]["Tables"][Table]["Update"];

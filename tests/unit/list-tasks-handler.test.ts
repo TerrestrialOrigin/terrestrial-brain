@@ -1,5 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
+  buildGetTasksText,
   buildTaskListText,
   handleListTasks,
 } from "../../supabase/functions/terrestrial-brain-mcp/tools/tasks.ts";
@@ -145,4 +146,75 @@ Deno.test("buildTaskListText: renders status icons and overdue markers", () => {
   assertStringIncludes(text, "[x] Done item");
   assertStringIncludes(text, "[ ] Late item");
   assertStringIncludes(text, "(OVERDUE)");
+});
+
+// ─── TOOL-8: get_tasks renders through the shared renderTaskLine ─────────────
+// The expected strings replicate the pre-refactor inline algorithm exactly, so
+// these pin byte-for-byte output equivalence across the extraction.
+
+Deno.test("buildGetTasksText: full detail block matches the pre-refactor format", () => {
+  const dueBy = "2000-01-01T00:00:00Z";
+  const archivedAt = "2026-01-15T00:00:00Z";
+  const text = buildGetTasksText(
+    [
+      {
+        id: "task-1",
+        content: "Write the report",
+        status: "open",
+        due_by: dueBy,
+        project_id: "proj-1",
+        parent_id: "parent-1",
+        assigned_to: "person-1",
+        archived_at: archivedAt,
+        created_at: "2026-01-02T00:00:00Z",
+      },
+    ],
+    {
+      projectNames: new Map([["proj-1", "Apollo"]]),
+      personNames: new Map([["person-1", "Ana"]]),
+      parentNames: new Map([["parent-1", "Parent task content"]]),
+    },
+    ["missing-1"],
+  );
+
+  const expected = [
+    "1 task(s):",
+    "",
+    "1. [ ] Write the report",
+    "   ID: task-1 | Status: open",
+    "   Project: Apollo",
+    "   Assigned to: Ana",
+    "   Parent task: Parent task content",
+    `   Due: ${new Date(dueBy).toLocaleDateString()} (OVERDUE)`,
+    `   Archived: ${new Date(archivedAt).toLocaleDateString()}`,
+    "",
+    "Not found (1): missing-1",
+  ].join("\n");
+  assertEquals(text, expected);
+});
+
+Deno.test("buildGetTasksText: a done task past its due date is never OVERDUE (TOOL-8)", () => {
+  const text = buildGetTasksText(
+    [
+      {
+        id: "task-2",
+        content: "Shipped",
+        status: "done",
+        due_by: "2000-01-01T00:00:00Z",
+        project_id: null,
+        parent_id: null,
+        assigned_to: null,
+        archived_at: null,
+        created_at: "2026-01-02T00:00:00Z",
+      },
+    ],
+    {
+      projectNames: new Map(),
+      personNames: new Map(),
+      parentNames: new Map(),
+    },
+    [],
+  );
+  assertEquals(text.includes("(OVERDUE)"), false);
+  assertEquals(text.includes("[x] Shipped"), true);
 });

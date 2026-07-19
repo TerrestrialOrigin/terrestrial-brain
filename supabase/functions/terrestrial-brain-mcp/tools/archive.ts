@@ -1,11 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
+import { withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
-import type {
-  ArchiveMaintenanceRepository,
-  ArchiveTableCount,
-} from "../repositories/archive-maintenance-repository.ts";
+import type { ArchiveTableCount } from "../repositories/archive-maintenance-repository.ts";
+import type { ToolDeps } from "./tool-deps.ts";
 
 /** The four tables that carry `archived_at` — the allowlist the RPCs validate. */
 export const ARCHIVABLE_TABLES = [
@@ -31,9 +29,9 @@ function renderCounts(rows: ArchiveTableCount[]): string {
  */
 export function register(
   server: McpServer,
-  logger: FunctionCallLogger,
-  archiveRepository: ArchiveMaintenanceRepository,
+  deps: Pick<ToolDeps, "logger" | "archiveMaintenanceRepository">,
 ) {
+  const { logger, archiveMaintenanceRepository: archiveRepository } = deps;
   server.registerTool(
     "purge_archived",
     {
