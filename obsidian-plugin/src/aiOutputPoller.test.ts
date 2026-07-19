@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { AiOutputPoller, AiOutputPollerDeps } from "./aiOutputPoller";
 import { AIOutputContent, AIOutputMetadata } from "./apiClient";
 import { ConfirmationResult, ConflictResolution } from "./confirmModal";
@@ -49,6 +49,34 @@ function makePoller(options: {
   return { poller: new AiOutputPoller(deps), client, writer, notifier, hashes, prompt };
 }
 
+describe("AiOutputPoller — PLUG-7 re-entrancy guard", () => {
+  it("overlapping pollAIOutput calls run exactly one poll cycle", async () => {
+    const { poller, client } = makePoller();
+    let metadataCallCount = 0;
+    let releaseGate!: (value: AIOutputMetadata[]) => void;
+    const gate = new Promise<AIOutputMetadata[]>((resolve) => { releaseGate = resolve; });
+    client.metadataImpl = () => { metadataCallCount++; return gate; };
+
+    const firstPoll = poller.pollAIOutput();
+    const secondPoll = poller.pollAIOutput(); // must bail on the guard
+    releaseGate([]);
+    await Promise.all([firstPoll, secondPoll]);
+
+    expect(metadataCallCount).toBe(1);
+  });
+
+  it("a completed poll releases the guard for the next cycle", async () => {
+    const { poller, client } = makePoller();
+    let metadataCallCount = 0;
+    client.metadataImpl = async () => { metadataCallCount++; return []; };
+
+    await poller.pollAIOutput();
+    await poller.pollAIOutput();
+
+    expect(metadataCallCount).toBe(2);
+  });
+});
+
 describe("AiOutputPoller — two-phase fetch & delivery", () => {
   it("stores a content hash under the written path after delivery", async () => {
     const { poller, hashes } = makePoller({
@@ -78,8 +106,8 @@ describe("AiOutputPoller — two-phase fetch & delivery", () => {
       content: [{ id: "output-1", content: "Content" }],
     });
     await poller.pollAIOutput();
-    expect(client.callLog.map((c) => c.endpoint)).toContain("mark-ai-output-picked-up");
-    expect(client.callLog.find((c) => c.endpoint === "mark-ai-output-picked-up")?.body).toEqual({ ids: ["output-1"] });
+    expect(client.callLog.map((callEntry) => callEntry.endpoint)).toContain("mark-ai-output-picked-up");
+    expect(client.callLog.find((callEntry) => callEntry.endpoint === "mark-ai-output-picked-up")?.body).toEqual({ ids: ["output-1"] });
   });
 
   it("does nothing when no endpoint is configured", async () => {
@@ -119,7 +147,7 @@ describe("AiOutputPoller — decision handling", () => {
     client.contentImpl = async () => { contentCalled = true; return []; };
     await poller.pollAIOutput();
     expect(contentCalled).toBe(false);
-    expect(client.callLog.map((c) => c.endpoint)).toContain("reject-ai-output");
+    expect(client.callLog.map((callEntry) => callEntry.endpoint)).toContain("reject-ai-output");
   });
 
   it("does nothing and stays silent when the user postpones", async () => {
@@ -130,7 +158,7 @@ describe("AiOutputPoller — decision handling", () => {
     client.contentImpl = async () => { contentCalled = true; return []; };
     await poller.pollAIOutput();
     expect(contentCalled).toBe(false);
-    expect(client.callLog.some((c) => c.endpoint === "reject-ai-output")).toBe(false);
+    expect(client.callLog.some((callEntry) => callEntry.endpoint === "reject-ai-output")).toBe(false);
     expect(notifier.messages).toHaveLength(0);
   });
 });
@@ -195,8 +223,8 @@ describe("AiOutputPoller — conflict-aware writing", () => {
     writer.existsImpl = async (path) => path !== "success.md"; // every fail(N).md exists
     await poller.pollAIOutput();
     expect(writer.writes).toEqual([{ path: "success.md", content: "Works" }]);
-    expect(client.callLog.find((c) => c.endpoint === "mark-ai-output-picked-up")?.body).toEqual({ ids: ["output-2"] });
-    expect(notifier.some((m) => m.includes("Could not find available copy name"))).toBe(true);
+    expect(client.callLog.find((callEntry) => callEntry.endpoint === "mark-ai-output-picked-up")?.body).toEqual({ ids: ["output-2"] });
+    expect(notifier.some((message) => message.includes("Could not find available copy name"))).toBe(true);
   });
 });
 
@@ -204,7 +232,7 @@ describe("AiOutputPoller — B4 manual pull failure & malformed response", () =>
   it("surfaces a Notice when a manual pull fails", async () => {
     const { poller, notifier } = makePoller({ metadataImpl: async () => { throw new Error("server exploded"); } });
     await poller.pollAIOutput({ manual: true });
-    expect(notifier.some((m) => /Pull AI output failed/.test(m))).toBe(true);
+    expect(notifier.some((message) => /Pull AI output failed/.test(message))).toBe(true);
   });
 
   it("stays silent when an automatic poll fails", async () => {
@@ -213,12 +241,20 @@ describe("AiOutputPoller — B4 manual pull failure & malformed response", () =>
     expect(notifier.messages).toHaveLength(0);
   });
 
+  it("PLUG-3: a manual pull rejecting with a plain string shows a Notice, not a crash", async () => {
+    const { poller, notifier } = makePoller({
+      metadataImpl: async () => { throw "string failure"; },
+    });
+    await poller.pollAIOutput({ manual: true });
+    expect(notifier.some((message) => message.includes("string failure"))).toBe(true);
+  });
+
   it("surfaces a malformed-response error on a manual pull and writes nothing", async () => {
     const { poller, notifier, writer } = makePoller({
       metadataImpl: async () => { throw new Error("Malformed AI-output metadata response from server"); },
     });
     await poller.pollAIOutput({ manual: true });
-    expect(notifier.some((m) => /Malformed AI-output metadata response/.test(m))).toBe(true);
+    expect(notifier.some((message) => /Malformed AI-output metadata response/.test(message))).toBe(true);
     expect(writer.writes).toHaveLength(0);
   });
 });

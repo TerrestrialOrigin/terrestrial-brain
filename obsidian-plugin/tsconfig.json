@@ -9,6 +9,7 @@
     "importHelpers": true,
     "isolatedModules": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
     "lib": [
       "ES2018",
       "DOM"

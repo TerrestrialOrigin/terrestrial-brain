@@ -9,8 +9,27 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+/**
+ * Remove a leading YAML frontmatter block. Only genuine frontmatter matches:
+ * `---` as the entire first line and a closing `---` on its own line. A note
+ * that merely opens with a `---` horizontal rule is left untouched (a looser
+ * pattern silently truncated such notes before syncing — PLUG-12).
+ */
 export function stripFrontmatter(content: string): string {
-  return content.replace(/^---[\s\S]*?---\n?/, "");
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---(\r?\n|$)/, "");
+}
+
+/**
+ * Render a caught unknown as a message string. The shared helper for every
+ * catch site, so a thrown string/object never crashes inside the catch handler.
+ */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** True when the value is a plain (non-array, non-null) object. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -125,8 +144,8 @@ export function isInsecureEndpoint(endpointUrl: string): boolean {
     return false;
   }
   const withoutScheme = endpointUrl.substring("http://".length);
-  const hostWithPort = withoutScheme.split(/[/?#]/)[0];
-  const host = hostWithPort.split(":")[0].toLowerCase();
+  const hostWithPort = withoutScheme.split(/[/?#]/)[0] ?? "";
+  const host = (hostWithPort.split(":")[0] ?? "").toLowerCase();
   return host !== "localhost" && host !== "127.0.0.1";
 }
 

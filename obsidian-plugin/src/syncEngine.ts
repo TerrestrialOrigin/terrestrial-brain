@@ -9,10 +9,12 @@ import { TerrestrialBrainApiClient } from "./apiClient";
 import {
   FileClassifier,
   NoteReader,
+  Scheduler,
   SyncedHashStore,
+  TimerHandle,
   UserNotifier,
 } from "./ports";
-import { MS_PER_MINUTE, simpleHash, stripFrontmatter, truncateForNotice } from "./utils";
+import { errorMessage, MS_PER_MINUTE, simpleHash, stripFrontmatter, truncateForNotice } from "./utils";
 
 /** Outcome of a single processNote call — lets callers count real results. */
 export type SyncOutcome = "synced" | "skipped" | "failed";
@@ -37,19 +39,30 @@ export interface SyncEngineDeps {
   classifier: FileClassifier;
   notifier: UserNotifier;
   hashes: SyncedHashStore;
+  scheduler: Scheduler;
   config: SyncEngineConfig;
 }
 
 export class SyncEngine {
   // Per-file debounce timers — managed manually for the long (minutes) delay.
-  private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private debounceTimers: Map<string, TimerHandle> = new Map();
+
+  // Single-flight guard: at most one processNote run per file path. Concurrent
+  // callers (debounce fire + manual sync + vault sync) coalesce into the
+  // in-flight run instead of double-ingesting.
+  private readonly inFlight = new Map<string, Promise<SyncOutcome>>();
+
+  // Set on unload so an in-flight sync that resolves afterwards can never
+  // re-arm a retry timer from a dead plugin.
+  private disposed = false;
 
   constructor(private readonly deps: SyncEngineDeps) {}
 
   /** For lifecycle cleanup on plugin unload. */
   clearAllTimers(): void {
+    this.disposed = true;
     for (const timer of this.debounceTimers.values()) {
-      clearTimeout(timer);
+      this.deps.scheduler.cancel(timer);
     }
     this.debounceTimers.clear();
   }
@@ -63,13 +76,15 @@ export class SyncEngine {
   // after the sync delay of inactivity on that specific file.
 
   scheduleSync(file: TFile, attempt = 0): void {
+    if (this.disposed) return;
     this.cancelTimer(file.path);
-    const timer = setTimeout(async () => {
+    const timer = this.deps.scheduler.schedule(async () => {
       this.debounceTimers.delete(file.path);
       try {
         const outcome = await this.processNote(file);
         // A failed scheduled sync retries with capped backoff instead of
-        // silently dropping the note until its next manual edit.
+        // silently dropping the note until its next manual edit. (Post-unload
+        // retries are blocked by the disposed guard at the top of scheduleSync.)
         if (outcome === "failed" && attempt < MAX_RETRY_ATTEMPTS) {
           this.scheduleSync(file, attempt + 1);
         }
@@ -94,8 +109,8 @@ export class SyncEngine {
 
   cancelTimer(filePath: string): void {
     const existing = this.debounceTimers.get(filePath);
-    if (existing) {
-      clearTimeout(existing);
+    if (existing !== undefined) {
+      this.deps.scheduler.cancel(existing);
       this.debounceTimers.delete(filePath);
     }
   }
@@ -128,9 +143,7 @@ export class SyncEngine {
       await this.deps.client.forgetNote(file.path);
     } catch (error) {
       this.deps.notifier.notify(
-        `⚠️ Terrestrial Brain: could not erase "${file.path}": ${
-          truncateForNotice(error instanceof Error ? error.message : String(error))
-        }`,
+        `⚠️ Terrestrial Brain: could not erase "${file.path}": ${truncateForNotice(errorMessage(error))}`,
       );
     }
   }
@@ -150,9 +163,7 @@ export class SyncEngine {
       this.deps.notifier.notify(`🧠 ${message}`);
     } catch (error) {
       this.deps.notifier.notify(
-        `⚠️ Could not forget "${file.path}": ${
-          truncateForNotice(error instanceof Error ? error.message : String(error))
-        }`,
+        `⚠️ Could not forget "${file.path}": ${truncateForNotice(errorMessage(error))}`,
       );
     }
   }
@@ -205,9 +216,30 @@ export class SyncEngine {
 
   // ─── Core note processing ──────────────────────────────────────────────────
 
-  async processNote(
+  /**
+   * Single-flight entry point: a sync request for a path with a run already in
+   * flight returns that run's promise (no second ingest). Runs-twice: coalesced
+   * here. Crashes-halfway: the finally clears the entry, so the next request
+   * starts clean. Interleaves: the map check-then-set has no await between, so
+   * the event loop makes it atomic.
+   */
+  processNote(
     file: TFile,
     options: { force?: boolean; silent?: boolean } = {},
+  ): Promise<SyncOutcome> {
+    const existing = this.inFlight.get(file.path);
+    if (existing) return existing;
+
+    const run = this.runProcessNote(file, options).finally(() => {
+      this.inFlight.delete(file.path);
+    });
+    this.inFlight.set(file.path, run);
+    return run;
+  }
+
+  private async runProcessNote(
+    file: TFile,
+    options: { force?: boolean; silent?: boolean },
   ): Promise<SyncOutcome> {
     if (this.deps.classifier.isExcluded(file)) {
       if (options.force && !options.silent) {
@@ -225,9 +257,12 @@ export class SyncEngine {
     try {
       content = await this.deps.reader.read(file);
     } catch (error) {
-      // The file may have been deleted between the modify event and this read.
       console.error("TB Plugin read error:", error);
-      return "skipped";
+      // Unforced (debounce) path: the file may have been deleted between the
+      // modify event and this read — a benign skip. Forced path (manual /
+      // vault sync): the file list was enumerated moments ago, so a read error
+      // is a real failure and must not hide in the skipped bucket (PLUG-11).
+      return options.force ? "failed" : "skipped";
     }
 
     const stripped = stripFrontmatter(content).trim();
@@ -255,7 +290,7 @@ export class SyncEngine {
     } catch (error) {
       console.error("TB Plugin error:", error);
       if (!options.silent) {
-        this.deps.notifier.notify(`❌ Terrestrial Brain: ${truncateForNotice((error as Error).message)}`);
+        this.deps.notifier.notify(`❌ Terrestrial Brain: ${truncateForNotice(errorMessage(error))}`);
       }
       return "failed";
     }

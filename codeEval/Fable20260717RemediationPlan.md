@@ -37,10 +37,10 @@
 - [x] 20. Extractor enrichment & merge (`bug/ExtractorEnrichmentMerge`) — EXTR-3, EXTR-4, EXTR-8, EXTR-10 (landed on the Step 19 branch/change)
 
 ## Phase D — Obsidian plugin
-- [ ] 21. Plugin sync concurrency (`bug/PluginSyncConcurrency`) — PLUG-1, PLUG-8, PLUG-13
-- [ ] 22. Plugin boundary validation (`bug/PluginBoundaryValidation`) — PLUG-2, PLUG-3, PLUG-4, PLUG-6, PLUG-12
-- [ ] 23. Plugin safety tooling (`feature/PluginSafetyTooling`) — PLUG-5, PLUG-7
-- [ ] 24. Plugin cleanup (`feature/PluginCleanup`) — PLUG-9, PLUG-10, PLUG-11, PLUG-14, PLUG-15, PLUG-16
+- [x] 21. Plugin sync concurrency (`bug/PluginSyncConcurrency`) — PLUG-1, PLUG-8, PLUG-13 (landed on `bug/PluginPhaseD`, one OpenSpec change `plugin-phase-d-remediation` for all of Phase D)
+- [x] 22. Plugin boundary validation (`bug/PluginBoundaryValidation`) — PLUG-2, PLUG-3, PLUG-4, PLUG-6, PLUG-12 (landed on `bug/PluginPhaseD`)
+- [x] 23. Plugin safety tooling (`feature/PluginSafetyTooling`) — PLUG-5, PLUG-7 (landed on `bug/PluginPhaseD`)
+- [x] 24. Plugin cleanup (`feature/PluginCleanup`) — PLUG-9, PLUG-10, PLUG-11, PLUG-14, PLUG-15, PLUG-16 (landed on `bug/PluginPhaseD`)
 
 ## Phase E — Structure, duplication & style
 - [ ] 25. Deps objects (`feature/DepsObjects`) — CORE-7, TOOL-11, TOOL-14, EXTR-9, EXTR-11

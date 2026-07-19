@@ -7,7 +7,7 @@
 
 // Explicit .ts extension so this client (and its only dependency) can be
 // imported directly from the Deno integration test as well as bundled by esbuild.
-import { buildEndpointUrl, truncateForNotice } from "./utils.ts";
+import { buildEndpointUrl, isInsecureEndpoint, isRecord, truncateForNotice } from "./utils.ts";
 
 // ─── Server response shapes ──────────────────────────────────────────────────
 
@@ -27,10 +27,7 @@ export interface AIOutputContent {
 // ─── Boundary type guards ────────────────────────────────────────────────────
 // External data is validated here — never cast with `as`. A response that fails
 // these guards is surfaced as an error rather than silently trusted.
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+// (The shared isRecord guard lives in utils.ts.)
 
 export function isAIOutputMetadata(value: unknown): value is AIOutputMetadata {
   if (!isRecord(value)) return false;
@@ -106,7 +103,15 @@ export class HttpTerrestrialBrainClient implements TerrestrialBrainApiClient {
     body: Record<string, unknown> | undefined,
     errorLabel: string,
   ): Promise<Record<string, unknown>> {
-    const endpointUrl = buildEndpointUrl(this.settings.getEndpointUrl(), endpointName);
+    const configuredUrl = this.settings.getEndpointUrl();
+    // HTTPS verified before credentials are sent: a non-local http:// endpoint
+    // would carry the access key AND the note content in cleartext (PLUG-6).
+    if (isInsecureEndpoint(configuredUrl)) {
+      throw new Error(
+        "Refusing to send your access key over unencrypted http://. Use https:// (or a localhost test server).",
+      );
+    }
+    const endpointUrl = buildEndpointUrl(configuredUrl, endpointName);
 
     const response = await fetch(endpointUrl, {
       method: "POST",
@@ -120,11 +125,20 @@ export class HttpTerrestrialBrainClient implements TerrestrialBrainApiClient {
       throw new Error(`${errorLabel} ${response.status}: ${truncateForNotice(responseBody)}`);
     }
 
-    const result = await response.json();
-    if (!result.success) {
-      throw new Error(truncateForNotice(result.error || `Unknown ${errorLabel.toLowerCase()} error`));
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch {
+      throw new Error(`${errorLabel}: server returned non-JSON response`);
     }
-    return result;
+    if (!isRecord(parsed)) {
+      throw new Error(`${errorLabel}: malformed response envelope`);
+    }
+    if (parsed.success !== true) {
+      const serverError = typeof parsed.error === "string" ? parsed.error : "";
+      throw new Error(truncateForNotice(serverError || `Unknown ${errorLabel.toLowerCase()} error`));
+    }
+    return parsed;
   }
 
   async call(endpointName: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {

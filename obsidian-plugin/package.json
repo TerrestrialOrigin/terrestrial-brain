@@ -4,8 +4,10 @@
   "description": "Dev build of Terrestrial Brain Obsidian plugin — points at local Supabase",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build": "npm run lint && npm run typecheck && node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
+    "lint": "eslint src test",
+    "typecheck": "tsc -noEmit && tsc -noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -13,9 +15,11 @@
     "@types/node": "^26.0.0",
     "builtin-modules": "3.3.0",
     "esbuild": "^0.28.0",
+    "eslint": "^10.7.0",
     "obsidian": "1.12.3",
     "tslib": "2.6.0",
     "typescript": "^6.0.0",
+    "typescript-eslint": "^8.64.0",
     "vitest": "^4.1.0"
   }
 }

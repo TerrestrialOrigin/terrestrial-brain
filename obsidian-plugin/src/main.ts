@@ -4,7 +4,7 @@
 // the settings tab. All business logic lives in the extracted modules; main.ts
 // only composes and adapts.
 
-import { App, Menu, Notice, Plugin, TFile } from "obsidian";
+import { Menu, Notice, Plugin, TFile } from "obsidian";
 import { HttpTerrestrialBrainClient, TerrestrialBrainApiClient } from "./apiClient";
 import { AIOutputConfirmModal, ConfirmationResult, ConflictInfo } from "./confirmModal";
 import { AiOutputPoller } from "./aiOutputPoller";
@@ -13,6 +13,7 @@ import {
   ConflictPrompt,
   FileClassifier,
   NoteReader,
+  Scheduler,
   SyncedHashStore,
   UserNotifier,
   VaultWriter,
@@ -24,7 +25,7 @@ import {
   TBSettingTab,
 } from "./settings";
 import { AIOutputMetadata } from "./apiClient";
-import { isExcludedByCache, MS_PER_MINUTE } from "./utils";
+import { isExcludedByCache, isRecord, MS_PER_MINUTE } from "./utils";
 
 /** Delay before the first AI-output poll after startup (ms), so onload finishes first. */
 const INITIAL_POLL_DELAY_MS = 2000;
@@ -37,6 +38,10 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   // Tracked poll interval so it can be cleared and re-registered when settings change.
   private pollIntervalId: number | null = null;
+
+  // Tracked startup-poll timeout so a disable within the delay window cannot
+  // fire a credentialed poll from an unloaded plugin (PLUG-8).
+  private startupPollTimeoutId: number | null = null;
 
   // The pollIntervalMinutes value the current interval was registered with —
   // lets applyPollInterval() no-op when the setting has not actually changed.
@@ -60,6 +65,9 @@ export default class TerrestrialBrainPlugin extends Plugin {
   onunload() {
     if (this.pollIntervalId !== null) {
       window.clearInterval(this.pollIntervalId);
+    }
+    if (this.startupPollTimeoutId !== null) {
+      window.clearTimeout(this.startupPollTimeoutId);
     }
     this.engine?.clearAllTimers();
   }
@@ -95,6 +103,10 @@ export default class TerrestrialBrainPlugin extends Plugin {
     const prompt: ConflictPrompt = {
       confirm: (metadataList, conflicts) => this.showConfirmationDialog(metadataList, conflicts),
     };
+    const scheduler: Scheduler = {
+      schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+      cancel: (handle) => window.clearTimeout(handle as number),
+    };
 
     this.engine = new SyncEngine({
       client: this.client,
@@ -102,6 +114,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
       classifier,
       notifier,
       hashes,
+      scheduler,
       config: {
         getEndpointUrl: () => this.settings.tbEndpointUrl,
         getSyncDelayMs: () => this.settings.syncDelayMinutes * MS_PER_MINUTE,
@@ -147,12 +160,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     this.addCommand({
       id: "sync-to-terrestrial-brain",
       name: "Sync current note to Terrestrial Brain",
-      callback: async () => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file) { new Notice("No active file"); return; }
-        this.engine.cancelTimer(file.path);
-        await this.engine.processNote(file, { force: true });
-      },
+      callback: async () => { await this.syncActiveNote(); },
     });
     this.addCommand({
       id: "sync-vault-to-terrestrial-brain",
@@ -185,12 +193,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
         item
           .setTitle("Sync note to Terrestrial Brain")
           .setIcon("upload")
-          .onClick(async () => {
-            const file = this.app.workspace.getActiveFile();
-            if (!file) { new Notice("No active file"); return; }
-            this.engine.cancelTimer(file.path);
-            await this.engine.processNote(file, { force: true });
-          });
+          .onClick(async () => { await this.syncActiveNote(); });
       });
       menu.addItem((item) => {
         item
@@ -204,9 +207,20 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
   private startPolling(): void {
     // Poll for AI output shortly after startup (deferred so onload completes first).
-    window.setTimeout(() => this.poller.pollAIOutput(), INITIAL_POLL_DELAY_MS);
+    this.startupPollTimeoutId = window.setTimeout(() => this.poller.pollAIOutput(), INITIAL_POLL_DELAY_MS);
     // Then poll on interval (tracked so it can be re-registered when settings change).
     this.applyPollInterval();
+  }
+
+  /**
+   * Force-sync the active note — the single implementation behind both the
+   * command palette entry and the ribbon menu item (PLUG-9).
+   */
+  private async syncActiveNote(): Promise<void> {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) { new Notice("No active file"); return; }
+    this.engine.cancelTimer(file.path);
+    await this.engine.processNote(file, { force: true });
   }
 
   /** Gather eligible files and hand the full-vault sync to the engine. */
@@ -220,7 +234,7 @@ export default class TerrestrialBrainPlugin extends Plugin {
     conflicts: ConflictInfo,
   ): Promise<ConfirmationResult> {
     return new Promise((resolve) => {
-      new AIOutputConfirmModal(this.app, metadataList, conflicts, resolve).open();
+      new AIOutputConfirmModal(this.app, { metadataList, conflicts, onResult: resolve }).open();
     });
   }
 
@@ -288,9 +302,9 @@ export default class TerrestrialBrainPlugin extends Plugin {
 
 /** Pull a validated syncedHashes map out of raw persisted data. */
 function extractSyncedHashes(data: unknown): Record<string, string> {
-  if (typeof data !== "object" || data === null) return {};
-  const stored = (data as Record<string, unknown>).syncedHashes;
-  if (typeof stored !== "object" || stored === null) return {};
+  if (!isRecord(data)) return {};
+  const stored = data.syncedHashes;
+  if (!isRecord(stored)) return {};
   const result: Record<string, string> = {};
   for (const [path, hash] of Object.entries(stored)) {
     if (typeof hash === "string") result[path] = hash;

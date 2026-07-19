@@ -7,7 +7,7 @@
 import { AIOutputMetadata, TerrestrialBrainApiClient } from "./apiClient";
 import { ConflictInfo, ConflictResolution } from "./confirmModal";
 import { ConflictPrompt, SyncedHashStore, UserNotifier, VaultWriter } from "./ports";
-import { generateCopyPath, simpleHash, stripFrontmatter, truncateForNotice } from "./utils";
+import { errorMessage, generateCopyPath, simpleHash, stripFrontmatter, truncateForNotice } from "./utils";
 
 export interface PollerConfig {
   getEndpointUrl(): string;
@@ -57,7 +57,7 @@ export class AiOutputPoller {
       console.error("TB Poll error:", error);
       // A manual pull that fails must tell the user; background polls stay quiet.
       if (options.manual) {
-        this.deps.notifier.notify(`❌ Pull AI output failed: ${truncateForNotice((error as Error).message)}`);
+        this.deps.notifier.notify(`❌ Pull AI output failed: ${truncateForNotice(errorMessage(error))}`);
       }
     } finally {
       this.pollInProgress = false;
@@ -121,7 +121,7 @@ export class AiOutputPoller {
     try {
       return await generateCopyPath(metadata.file_path, (path) => this.deps.writer.exists(path));
     } catch (error) {
-      this.deps.notifier.notify(`⚠️ ${(error as Error).message}`);
+      this.deps.notifier.notify(`⚠️ ${errorMessage(error)}`);
       return null;
     }
   }

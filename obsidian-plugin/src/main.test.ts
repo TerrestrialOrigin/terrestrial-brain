@@ -42,7 +42,7 @@ describe("loadSettings (composition root)", () => {
 
     await plugin.loadSettings();
 
-    expect((plugin.settings as Record<string, unknown>).projectsFolderBase).toBeUndefined();
+    expect("projectsFolderBase" in plugin.settings).toBe(false);
     expect(plugin.settings.tbEndpointUrl).toBe("https://host/fn");
     expect(saveData).toHaveBeenCalledTimes(1);
   });
@@ -91,7 +91,8 @@ describe("loadSettings (composition root)", () => {
     // Reflect through saveSettings to inspect what is persisted.
     const saveData = plugin.saveData as ReturnType<typeof vi.fn>;
     await plugin.saveSettings();
-    const persisted = saveData.mock.calls.at(-1)?.[0] as { syncedHashes: Record<string, string> };
+    const lastSaveCall = saveData.mock.calls[saveData.mock.calls.length - 1];
+    const persisted = lastSaveCall?.[0] as { syncedHashes: Record<string, string> };
     expect(persisted.syncedHashes).toEqual({ "kept.md": "h1" });
   });
 });
@@ -119,7 +120,8 @@ describe("onload wiring — vault sync command runs through the real engine + cl
   beforeEach(() => {
     clearRecordedNotices();
     (globalThis as { window?: unknown }).window = {
-      setTimeout: vi.fn(),
+      setTimeout: vi.fn().mockReturnValue(77),
+      clearTimeout: vi.fn(),
       setInterval: vi.fn().mockReturnValue(1),
       clearInterval: vi.fn(),
     };
@@ -128,6 +130,67 @@ describe("onload wiring — vault sync command runs through the real engine + cl
     if (realWindow !== undefined) (globalThis as { window?: unknown }).window = realWindow;
     else delete (globalThis as { window?: unknown }).window;
     globalThis.fetch = realFetch;
+  });
+
+  interface WindowStub {
+    setTimeout: ReturnType<typeof vi.fn>;
+    clearTimeout: ReturnType<typeof vi.fn>;
+    setInterval: ReturnType<typeof vi.fn>;
+    clearInterval: ReturnType<typeof vi.fn>;
+  }
+
+  function windowStub(): WindowStub {
+    return (globalThis as unknown as { window: WindowStub }).window;
+  }
+
+  async function loadedPlugin(): Promise<TerrestrialBrainPlugin> {
+    const app = fakeApp();
+    const plugin = newPlugin(app);
+    plugin.loadData = vi.fn().mockResolvedValue({
+      settings: { tbEndpointUrl: "https://example.com/mcp", accessKey: "k" },
+      syncedHashes: {},
+    });
+    plugin.saveData = vi.fn().mockResolvedValue(undefined);
+    plugin.addCommand = vi.fn() as never;
+    await plugin.onload();
+    return plugin;
+  }
+
+  it("PLUG-8: onunload clears the startup poll timeout", async () => {
+    const plugin = await loadedPlugin();
+    const startupTimeoutId = windowStub().setTimeout.mock.results[0]?.value as number;
+
+    plugin.onunload();
+
+    expect(windowStub().clearTimeout).toHaveBeenCalledWith(startupTimeoutId);
+  });
+
+  it("PLUG-7: onunload clears the poll interval and the engine timers", async () => {
+    const plugin = await loadedPlugin();
+    const engine = (plugin as unknown as { engine: { clearAllTimers: () => void } }).engine;
+    const clearAllTimersSpy = vi.spyOn(engine, "clearAllTimers");
+
+    plugin.onunload();
+
+    expect(windowStub().clearInterval).toHaveBeenCalledWith(1);
+    expect(clearAllTimersSpy).toHaveBeenCalled();
+  });
+
+  it("PLUG-7: applyPollInterval is a no-op for an unchanged value and re-registers on change", async () => {
+    const plugin = await loadedPlugin();
+    windowStub().setInterval.mockReturnValueOnce(2);
+    const intervalCallsAfterLoad = windowStub().setInterval.mock.calls.length;
+    expect(intervalCallsAfterLoad).toBe(1); // registered once during onload
+
+    plugin.applyPollInterval(); // same minutes — must not re-register
+    expect(windowStub().setInterval.mock.calls.length).toBe(1);
+    expect(windowStub().clearInterval).not.toHaveBeenCalled();
+
+    plugin.settings.pollIntervalMinutes = 42;
+    plugin.applyPollInterval(); // changed — clears the old id, registers anew
+    expect(windowStub().clearInterval).toHaveBeenCalledWith(1);
+    expect(windowStub().setInterval.mock.calls.length).toBe(2);
+    expect(windowStub().setInterval.mock.calls[1]?.[1]).toBe(42 * 60000);
   });
 
   it("reports failure (not success) when every note's ingest fails", async () => {
@@ -151,9 +214,9 @@ describe("onload wiring — vault sync command runs through the real engine + cl
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network down")) as unknown as typeof fetch;
 
     await plugin.onload();
-    await commands["sync-vault-to-terrestrial-brain"].callback();
+    await commands["sync-vault-to-terrestrial-brain"]?.callback();
 
-    expect(recordedNotices.some((m) => m.includes("Vault sync complete"))).toBe(false);
-    expect(recordedNotices.some((m) => /failed/i.test(m))).toBe(true);
+    expect(recordedNotices.some((message) => message.includes("Vault sync complete"))).toBe(false);
+    expect(recordedNotices.some((message) => /failed/.test(message))).toBe(true);
   });
 });

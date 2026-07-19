@@ -7,7 +7,6 @@ deterministic, key-free backend suite plus lint, format check, and the plugin
 test + build), the lint/format configuration that covers sources and tests, and
 how a contributor starts and cleanly (scoped) stops the full local stack with a
 single command that stays in sync with CI via `scripts/validate-all.sh`.
-
 ## Requirements
 ### Requirement: Continuous integration verifies every push and pull request
 The project SHALL provide a GitHub Actions workflow that runs on every push and pull request and verifies the full test and build surface without any live paid API. The workflow SHALL fail (non-zero, red check) if any test fails, any lint error is present, any file is not formatted, the plugin build fails, or any pgTAP database test fails. The workflow SHALL run `supabase test db` (the pgTAP suite, including RLS denial coverage) between starting the Supabase stack and running the Deno suite.
@@ -69,7 +68,6 @@ The `scripts/validate-all.sh` helper SHALL invoke the same deterministic, task-b
 - **WHEN** a contributor runs `scripts/validate-all.sh` with the local stack up
 - **THEN** it runs `supabase test db`, the same deterministic `deno task` test command, and the plugin test + build that CI runs
 
-
 ### Requirement: The local stack uses unique non-default ports
 
 The project's `supabase/config.toml` SHALL assign a unique, non-default port block (not the stock `:54321` family) so the local stack cannot collide with another Supabase project on the same machine. `scripts/validate-all.sh` SHALL derive the API URL from the running stack (`supabase status --output json`) rather than hardcoding a port, so its reachability probe can never match a different project's stack.
@@ -109,3 +107,20 @@ The CI workflow SHALL NOT describe any required job (e.g. the Deno test step) as
 #### Scenario: No "red by design" required step
 - **WHEN** `.github/workflows/ci.yml` is inspected
 - **THEN** it contains no comment declaring a required test step red-by-design
+
+### Requirement: Plugin lint and strict typecheck gate
+
+The Obsidian plugin package SHALL enforce its safety tooling in the build: an ESLint configuration with `@typescript-eslint/no-floating-promises` and `@typescript-eslint/no-explicit-any` as errors covering both source and test files, `noUncheckedIndexedAccess` enabled in the TypeScript configuration, and typechecking that covers the test files. `npm run build` in `obsidian-plugin/` SHALL fail if any lint error is present or any file (including tests) fails typechecking. Any retained `skipLibCheck` usage SHALL carry an inline justification.
+
+#### Scenario: Lint gate fails the build
+- **WHEN** a plugin source or test file contains a floating promise or an explicit `any`
+- **THEN** `npm run build` in `obsidian-plugin/` SHALL exit non-zero
+
+#### Scenario: Test files are typechecked
+- **WHEN** a plugin test file contains a type error
+- **THEN** the plugin build (or its typecheck step) SHALL exit non-zero
+
+#### Scenario: Unchecked index access is rejected
+- **WHEN** plugin code indexes into an array or record without handling `undefined`
+- **THEN** typechecking SHALL fail (`noUncheckedIndexedAccess` is enabled)
+
