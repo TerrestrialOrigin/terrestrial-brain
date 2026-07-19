@@ -20,6 +20,13 @@ export interface ConfirmationResult {
   resolutions: ConflictResolution;
 }
 
+/** Constructor inputs for the confirmation modal, as a typed options object. */
+export interface AIOutputConfirmModalOptions {
+  metadataList: AIOutputMetadata[];
+  conflicts: ConflictInfo;
+  onResult: (result: ConfirmationResult) => void;
+}
+
 export class AIOutputConfirmModal extends Modal {
   private metadataList: AIOutputMetadata[];
   private conflicts: ConflictInfo;
@@ -27,20 +34,15 @@ export class AIOutputConfirmModal extends Modal {
   private resolved = false;
   private resolutions: ConflictResolution = new Map();
 
-  constructor(
-    app: App,
-    metadataList: AIOutputMetadata[],
-    conflicts: ConflictInfo,
-    onResult: (result: ConfirmationResult) => void,
-  ) {
+  constructor(app: App, options: AIOutputConfirmModalOptions) {
     super(app);
-    this.metadataList = metadataList;
-    this.conflicts = conflicts;
-    this.onResult = onResult;
+    this.metadataList = options.metadataList;
+    this.conflicts = options.conflicts;
+    this.onResult = options.onResult;
 
     // Initialize resolutions: conflicting files default to "overwrite"
-    for (const metadata of metadataList) {
-      if (conflicts[metadata.id]) {
+    for (const metadata of options.metadataList) {
+      if (options.conflicts[metadata.id]) {
         this.resolutions.set(metadata.id, "overwrite");
       }
     }
@@ -110,7 +112,9 @@ export class AIOutputConfirmModal extends Modal {
     select.value = "overwrite";
 
     select.addEventListener("change", () => {
-      this.resolutions.set(outputId, select.value as "overwrite" | "rename");
+      // Allowlist parse of the DOM value — anything unexpected (a future third
+      // option, a browser quirk resetting to "") falls back to "overwrite".
+      this.resolutions.set(outputId, select.value === "rename" ? "rename" : "overwrite");
     });
   }
 

@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   buildEndpointUrl,
+  errorMessage,
   extractKeyFromUrl,
   formatFileSize,
   generateCopyPath,
   isExcludedByCache,
   isInsecureEndpoint,
+  isRecord,
   simpleHash,
   stripFrontmatter,
   truncateForNotice,
@@ -26,6 +28,49 @@ describe("stripFrontmatter", () => {
   });
   it("returns content unchanged when no frontmatter", () => {
     expect(stripFrontmatter("# Hello\nWorld")).toBe("# Hello\nWorld");
+  });
+  it("PLUG-12: keeps a note that opens with a horizontal rule intact", () => {
+    // A leading rule plus a later inline "---" used to be swallowed wholesale;
+    // only a standalone closing "---" line may terminate frontmatter.
+    const note = "---\n\nRange notes: pages 3---7 discussed.\n\nEnd of note.";
+    expect(stripFrontmatter(note)).toBe(note);
+  });
+  it("PLUG-12: a rule followed by later rules never swallows the middle", () => {
+    const note = "--- intro line\ncontent\n---\nmore";
+    // The opening line is not exactly "---", so this is not frontmatter at all.
+    expect(stripFrontmatter(note)).toBe(note);
+  });
+  it("PLUG-12: strips frontmatter whose value contains ---", () => {
+    expect(stripFrontmatter("---\ntitle: a---b\n---\n# Body")).toBe("# Body");
+  });
+  it("strips CRLF frontmatter", () => {
+    expect(stripFrontmatter("---\r\ntitle: T\r\n---\r\nBody")).toBe("Body");
+  });
+});
+
+describe("errorMessage (PLUG-3)", () => {
+  it("returns .message for an Error", () => {
+    expect(errorMessage(new Error("boom"))).toBe("boom");
+  });
+  it("stringifies a thrown string", () => {
+    expect(errorMessage("plain failure")).toBe("plain failure");
+  });
+  it("stringifies a thrown plain object without crashing", () => {
+    expect(errorMessage({ code: 500 })).toBe("[object Object]");
+  });
+  it("stringifies undefined", () => {
+    expect(errorMessage(undefined)).toBe("undefined");
+  });
+});
+
+describe("isRecord (PLUG-10)", () => {
+  it("accepts a plain object", () => expect(isRecord({ a: 1 })).toBe(true));
+  it("rejects null", () => expect(isRecord(null)).toBe(false));
+  it("rejects arrays", () => expect(isRecord([1, 2])).toBe(false));
+  it("rejects primitives", () => {
+    expect(isRecord("x")).toBe(false);
+    expect(isRecord(42)).toBe(false);
+    expect(isRecord(undefined)).toBe(false);
   });
 });
 

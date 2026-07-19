@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { App, collectDescendants } from "../test/obsidian-stub";
+import { App, collectDescendants, ElementStub } from "../test/obsidian-stub";
 import { AIOutputMetadata } from "./apiClient";
 import { AIOutputConfirmModal, ConfirmationResult } from "./confirmModal";
 
@@ -22,15 +22,28 @@ function makeMetadata(overrides: Partial<AIOutputMetadata> = {}): AIOutputMetada
 
 /** Open the modal against the stub DOM and return its rendered contentEl tree. */
 function renderModal(metadataList: AIOutputMetadata[], conflicts: Record<string, boolean>) {
-  let result: ConfirmationResult | undefined;
-  const modal = new AIOutputConfirmModal(
-    new App() as never,
+  const received: ConfirmationResult[] = [];
+  const modal = new AIOutputConfirmModal(new App() as never, {
     metadataList,
     conflicts,
-    (received) => { result = received; },
-  );
+    onResult: (result) => { received.push(result); },
+  });
   modal.onOpen();
-  return { modal, contentEl: (modal as unknown as { contentEl: any }).contentEl, getResult: () => result };
+  return {
+    modal,
+    contentEl: (modal as unknown as { contentEl: ElementStub }).contentEl,
+    getResult: () => received[received.length - 1],
+    resultCount: () => received.length,
+  };
+}
+
+/** Locate a rendered button by its label (throws when absent). */
+function findButton(contentEl: ElementStub, label: string): ElementStub {
+  const button = collectDescendants(contentEl).find(
+    (element) => element.tagName === "button" && element.textContent === label,
+  );
+  if (!button) throw new Error(`button "${label}" not rendered`);
+  return button;
 }
 
 describe("AIOutputConfirmModal rendering", () => {
@@ -71,9 +84,9 @@ describe("AIOutputConfirmModal rendering", () => {
     const { contentEl } = renderModal([oneConflict, noConflict], { conflict: true, fresh: false });
     const selects = collectDescendants(contentEl).filter((element) => element.tagName === "select");
     expect(selects).toHaveLength(1);
-    const options = selects[0].children;
-    expect(options.map((option: any) => option.value)).toEqual(["overwrite", "rename"]);
-    expect(selects[0].value).toBe("overwrite");
+    const options = selects[0]?.children ?? [];
+    expect(options.map((option) => option.value)).toEqual(["overwrite", "rename"]);
+    expect(selects[0]?.value).toBe("overwrite");
   });
 
   it("renders reject / postpone / accept buttons", () => {
@@ -82,6 +95,57 @@ describe("AIOutputConfirmModal rendering", () => {
       .filter((element) => element.tagName === "button")
       .map((element) => element.textContent);
     expect(buttonTexts).toEqual(["Reject All", "Postpone", "Accept All"]);
+  });
+
+  it("PLUG-7: Accept All resolves accepted with the chosen resolutions", () => {
+    const { contentEl, getResult } = renderModal([oneConflict], { conflict: true });
+    const select = collectDescendants(contentEl).find((element) => element.tagName === "select");
+    if (!select) throw new Error("conflict select not rendered");
+    select.value = "rename";
+    select.dispatch("change");
+
+    findButton(contentEl, "Accept All").dispatch("click");
+
+    expect(getResult()?.decision).toBe("accepted");
+    expect(getResult()?.resolutions.get("conflict")).toBe("rename");
+  });
+
+  it("PLUG-7: an unexpected select value falls back to overwrite (allowlist parse)", () => {
+    const { contentEl, getResult } = renderModal([oneConflict], { conflict: true });
+    const select = collectDescendants(contentEl).find((element) => element.tagName === "select");
+    if (!select) throw new Error("conflict select not rendered");
+    select.value = "definitely-not-an-option";
+    select.dispatch("change");
+
+    findButton(contentEl, "Accept All").dispatch("click");
+
+    expect(getResult()?.resolutions.get("conflict")).toBe("overwrite");
+  });
+
+  it("PLUG-7: Reject All resolves rejected", () => {
+    const { contentEl, getResult } = renderModal([oneConflict], { conflict: true });
+    findButton(contentEl, "Reject All").dispatch("click");
+    expect(getResult()?.decision).toBe("rejected");
+  });
+
+  it("PLUG-7: Postpone resolves postponed", () => {
+    const { contentEl, getResult } = renderModal([oneConflict], { conflict: true });
+    findButton(contentEl, "Postpone").dispatch("click");
+    expect(getResult()?.decision).toBe("postponed");
+  });
+
+  it("PLUG-7: closing without a choice (Escape / X) resolves postponed — never rejected", () => {
+    const { modal, getResult } = renderModal([oneConflict], { conflict: true });
+    modal.onClose();
+    expect(getResult()?.decision).toBe("postponed");
+  });
+
+  it("PLUG-7: a button choice followed by onClose fires onResult exactly once", () => {
+    const { modal, contentEl, getResult, resultCount } = renderModal([oneConflict], { conflict: true });
+    findButton(contentEl, "Accept All").dispatch("click");
+    modal.onClose();
+    expect(resultCount()).toBe(1);
+    expect(getResult()?.decision).toBe("accepted");
   });
 
   it("styles.css defines rules for every tb-ai-output-* class the modal uses", () => {

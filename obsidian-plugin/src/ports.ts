@@ -50,3 +50,16 @@ export interface ConflictPrompt {
     conflicts: Record<string, boolean>,
   ): Promise<ConfirmationResult>;
 }
+
+/** Opaque handle to a scheduled timer, returned by Scheduler.schedule. */
+export type TimerHandle = unknown;
+
+/**
+ * Schedules delayed callbacks (wraps window.setTimeout/clearTimeout). Injected
+ * so the sync engine's timer behavior is unit-testable with a plain fake — no
+ * global setTimeout monkey-patching.
+ */
+export interface Scheduler {
+  schedule(callback: () => void, delayMs: number): TimerHandle;
+  cancel(handle: TimerHandle): void;
+}

@@ -3,8 +3,8 @@
 // UI. The migration logic is pure (given raw persisted data) so it is
 // unit-testable without a plugin instance.
 
-import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { extractKeyFromUrl, isInsecureEndpoint, MS_PER_MINUTE } from "./utils";
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { extractKeyFromUrl, isInsecureEndpoint, isRecord, MS_PER_MINUTE } from "./utils";
 import { MAX_RETRY_ATTEMPTS } from "./syncEngine";
 
 export interface TBPluginSettings {
@@ -32,8 +32,18 @@ export const DEFAULT_SETTINGS: TBPluginSettings = {
  */
 export const OBSOLETE_SETTING_KEYS = ["debounceMs", "pollIntervalMs", "projectsFolderBase"];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * Boundary clamp for minute-based settings: only a finite number >= 1 is
+ * accepted (rounded to a whole minute); anything else — zero, negatives, NaN,
+ * a corrupted data.json value — falls back to the given default. The settings
+ * UI enforces the same minimum, but the UI is not boundary validation: a 0 or
+ * NaN loaded from disk would otherwise become a 0 ms setInterval/debounce.
+ */
+function clampMinutes(rawValue: unknown, fallbackMinutes: number): number {
+  if (typeof rawValue !== "number" || !Number.isFinite(rawValue) || rawValue < 1) {
+    return fallbackMinutes;
+  }
+  return Math.round(rawValue);
 }
 
 /**
@@ -53,21 +63,28 @@ export function mergeAndMigrateSettings(
     tbEndpointUrl: typeof raw.tbEndpointUrl === "string" ? raw.tbEndpointUrl : DEFAULT_SETTINGS.tbEndpointUrl,
     accessKey: typeof raw.accessKey === "string" ? raw.accessKey : DEFAULT_SETTINGS.accessKey,
     excludeTag: typeof raw.excludeTag === "string" ? raw.excludeTag : DEFAULT_SETTINGS.excludeTag,
-    syncDelayMinutes: typeof raw.syncDelayMinutes === "number" ? raw.syncDelayMinutes : DEFAULT_SETTINGS.syncDelayMinutes,
-    pollIntervalMinutes: typeof raw.pollIntervalMinutes === "number" ? raw.pollIntervalMinutes : DEFAULT_SETTINGS.pollIntervalMinutes,
+    syncDelayMinutes: clampMinutes(raw.syncDelayMinutes, DEFAULT_SETTINGS.syncDelayMinutes),
+    pollIntervalMinutes: clampMinutes(raw.pollIntervalMinutes, DEFAULT_SETTINGS.pollIntervalMinutes),
   };
 
   // Normalize exclude tag — strip a leading # if the user entered it that way.
   settings.excludeTag = settings.excludeTag.replace(/^#/, "");
 
-  // Migrate legacy millisecond settings to minutes.
+  // Migrate legacy millisecond settings to minutes — clamped like every other
+  // boundary value, so a corrupted legacy field cannot smuggle in a value < 1.
   if ("debounceMs" in raw && !("syncDelayMinutes" in raw)) {
     const legacyMilliseconds = raw.debounceMs;
-    settings.syncDelayMinutes = (typeof legacyMilliseconds === "number" ? Math.round(legacyMilliseconds / MS_PER_MINUTE) : 0) || DEFAULT_SETTINGS.syncDelayMinutes;
+    settings.syncDelayMinutes = clampMinutes(
+      typeof legacyMilliseconds === "number" ? Math.round(legacyMilliseconds / MS_PER_MINUTE) : undefined,
+      DEFAULT_SETTINGS.syncDelayMinutes,
+    );
   }
   if ("pollIntervalMs" in raw && !("pollIntervalMinutes" in raw)) {
     const legacyMilliseconds = raw.pollIntervalMs;
-    settings.pollIntervalMinutes = (typeof legacyMilliseconds === "number" ? Math.round(legacyMilliseconds / MS_PER_MINUTE) : 0) || DEFAULT_SETTINGS.pollIntervalMinutes;
+    settings.pollIntervalMinutes = clampMinutes(
+      typeof legacyMilliseconds === "number" ? Math.round(legacyMilliseconds / MS_PER_MINUTE) : undefined,
+      DEFAULT_SETTINGS.pollIntervalMinutes,
+    );
   }
 
   let changed = OBSOLETE_SETTING_KEYS.some((key) => key in raw);
@@ -201,44 +218,64 @@ export class TBSettingTab extends PluginSettingTab {
   }
 
   private renderSyncDelaySetting(containerEl: HTMLElement): void {
-    new Setting(containerEl)
-      .setName("Sync delay (minutes)")
-      .setDesc(
-        "How long to wait after you stop editing before syncing. Default: 5 minutes. Minimum: 1 minute. " +
+    this.addMinutesSetting(containerEl, {
+      name: "Sync delay (minutes)",
+      desc: "How long to wait after you stop editing before syncing. Default: 5 minutes. Minimum: 1 minute. " +
         `A sync that fails is retried automatically up to ${MAX_RETRY_ATTEMPTS} times with increasing delay; ` +
-        "if it still fails, the note re-syncs on your next edit."
-      )
-      .addText((text) =>
-        text
-          .setPlaceholder("5")
-          .setValue(String(this.host.settings.syncDelayMinutes))
-          .onChange(async (value) => {
-            const parsed = parseInt(value);
-            if (!isNaN(parsed) && parsed >= 1) {
-              this.host.settings.syncDelayMinutes = parsed;
-              await this.host.saveSettings();
-            }
-          })
-      );
+        "if it still fails, the note re-syncs on your next edit.",
+      placeholder: "5",
+      getValue: () => this.host.settings.syncDelayMinutes,
+      setValue: async (minutes) => {
+        this.host.settings.syncDelayMinutes = minutes;
+        await this.host.saveSettings();
+      },
+    });
   }
 
   private renderPollIntervalSetting(containerEl: HTMLElement): void {
+    this.addMinutesSetting(containerEl, {
+      name: "AI output poll interval (minutes)",
+      desc: "How often to check for new AI-generated output. Default: 10 minutes. Minimum: 1 minute.",
+      placeholder: "10",
+      getValue: () => this.host.settings.pollIntervalMinutes,
+      setValue: async (minutes) => {
+        this.host.settings.pollIntervalMinutes = minutes;
+        await this.host.saveSettings();
+        // Persistence no longer restarts the timer — apply the change here.
+        this.host.applyPollInterval();
+      },
+    });
+  }
+
+  /**
+   * Shared renderer for a whole-minutes numeric setting. Invalid input (not a
+   * whole number >= 1) is never silently dropped: the user gets a Notice naming
+   * the constraint and the field resets to the stored value (PLUG-15).
+   */
+  private addMinutesSetting(
+    containerEl: HTMLElement,
+    options: {
+      name: string;
+      desc: string;
+      placeholder: string;
+      getValue: () => number;
+      setValue: (minutes: number) => Promise<void>;
+    },
+  ): void {
     new Setting(containerEl)
-      .setName("AI output poll interval (minutes)")
-      .setDesc(
-        "How often to check for new AI-generated output. Default: 10 minutes. Minimum: 1 minute."
-      )
+      .setName(options.name)
+      .setDesc(options.desc)
       .addText((text) =>
         text
-          .setPlaceholder("10")
-          .setValue(String(this.host.settings.pollIntervalMinutes))
+          .setPlaceholder(options.placeholder)
+          .setValue(String(options.getValue()))
           .onChange(async (value) => {
-            const parsed = parseInt(value);
-            if (!isNaN(parsed) && parsed >= 1) {
-              this.host.settings.pollIntervalMinutes = parsed;
-              await this.host.saveSettings();
-              // Persistence no longer restarts the timer — apply the change here.
-              this.host.applyPollInterval();
+            const parsed = parseInt(value, 10);
+            if (!Number.isNaN(parsed) && parsed >= 1) {
+              await options.setValue(parsed);
+            } else {
+              new Notice(`${options.name}: enter a whole number ≥ 1`);
+              text.setValue(String(options.getValue()));
             }
           })
       );

@@ -5,6 +5,7 @@ import {
   fakeFile,
   FakeClassifier,
   FakeNoteReader,
+  FakeScheduler,
   MapHashStore,
 } from "./testSupport";
 import { TerrestrialBrainApiClient } from "./apiClient";
@@ -13,6 +14,7 @@ interface EngineHarness {
   engine: SyncEngine;
   notifier: CollectingNotifier;
   hashes: MapHashStore;
+  scheduler: FakeScheduler;
   ingest: ReturnType<typeof vi.fn>;
   forget: ReturnType<typeof vi.fn>;
 }
@@ -28,6 +30,7 @@ function makeEngine(overrides: {
 } = {}): EngineHarness {
   const notifier = new CollectingNotifier();
   const hashes = new MapHashStore(overrides.hashes ?? {});
+  const scheduler = new FakeScheduler();
   const ingest = vi.fn(
     overrides.ingest ?? (async () => "Captured 1 thought"),
   );
@@ -36,8 +39,8 @@ function makeEngine(overrides: {
   );
   const client: TerrestrialBrainApiClient = {
     call: async () => ({ success: true }),
-    ingestNote: (c, t, n) => ingest(c, t, n),
-    forgetNote: (n) => forget(n),
+    ingestNote: (content, title, noteId) => ingest(content, title, noteId),
+    forgetNote: (noteId) => forget(noteId),
     fetchPendingMetadata: async () => [],
     fetchContent: async () => [],
   };
@@ -47,12 +50,20 @@ function makeEngine(overrides: {
     classifier: new FakeClassifier(() => overrides.excluded ?? false),
     notifier,
     hashes,
+    scheduler,
     config: {
       getEndpointUrl: () => overrides.endpointUrl ?? "https://example.com/mcp",
       getSyncDelayMs: () => overrides.syncDelayMs ?? 5 * 60000,
     },
   };
-  return { engine: new SyncEngine(deps), notifier, hashes, ingest, forget };
+  return { engine: new SyncEngine(deps), notifier, hashes, scheduler, ingest, forget };
+}
+
+/** A promise whose resolution the test controls. */
+function deferred<Value>(): { promise: Promise<Value>; resolve: (value: Value) => void } {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((promiseResolve) => { resolve = promiseResolve; });
+  return { promise, resolve };
 }
 
 describe("SyncEngine.processNote", () => {
@@ -95,7 +106,7 @@ describe("SyncEngine.processNote", () => {
     const { engine, notifier } = makeEngine({ ingest: async () => { throw new Error("network down"); } });
     const outcome = await engine.processNote(fakeFile("m.md"), { force: true });
     expect(outcome).toBe("failed");
-    expect(notifier.some((m) => /network down/.test(m))).toBe(true);
+    expect(notifier.some((message) => /network down/.test(message))).toBe(true);
   });
 });
 
@@ -105,26 +116,40 @@ describe("SyncEngine.syncEntireVault — C1 honest failure reporting", () => {
     const result = await engine.syncEntireVault([fakeFile("a.md"), fakeFile("b.md")]);
 
     expect(result).toEqual({ synced: 0, failed: 2, skipped: 0 });
-    expect(notifier.some((m) => m.includes("Vault sync complete"))).toBe(false);
-    expect(notifier.some((m) => /fail/i.test(m))).toBe(true);
+    expect(notifier.some((message) => message.includes("Vault sync complete"))).toBe(false);
+    expect(notifier.some((message) => /fail/.test(message))).toBe(true);
   });
 
   it("reports accurate counts on mixed success/failure", async () => {
     const { engine, notifier } = makeEngine({
-      ingest: async (_c, title) => { if (title === "bad") throw new Error("boom"); return "ok"; },
+      ingest: async (_content, title) => { if (title === "bad") throw new Error("boom"); return "ok"; },
     });
     const result = await engine.syncEntireVault([fakeFile("ok.md"), fakeFile("bad.md")]);
 
     expect(result).toEqual({ synced: 1, failed: 1, skipped: 0 });
-    expect(notifier.some((m) => /1 failed/.test(m))).toBe(true);
-    expect(notifier.some((m) => m.includes("Vault sync complete"))).toBe(false);
+    expect(notifier.some((message) => /1 failed/.test(message))).toBe(true);
+    expect(notifier.some((message) => message.includes("Vault sync complete"))).toBe(false);
+  });
+
+  it("PLUG-11: a read failure during a forced vault sync counts as failed, not skipped", async () => {
+    const { engine, notifier } = makeEngine({
+      read: async (path) => {
+        if (path === "broken.md") throw new Error("EACCES: permission denied");
+        return "# readable";
+      },
+    });
+    const result = await engine.syncEntireVault([fakeFile("ok.md"), fakeFile("broken.md")]);
+
+    expect(result).toEqual({ synced: 1, failed: 1, skipped: 0 });
+    expect(notifier.some((message) => message.includes("Vault sync complete"))).toBe(false);
+    expect(notifier.some((message) => /1 failed/.test(message))).toBe(true);
   });
 
   it("notifies and no-ops on an empty eligible list", async () => {
     const { engine, notifier } = makeEngine();
     const result = await engine.syncEntireVault([]);
     expect(result).toEqual({ synced: 0, failed: 0, skipped: 0 });
-    expect(notifier.some((m) => /No notes to sync/.test(m))).toBe(true);
+    expect(notifier.some((message) => /No notes to sync/.test(message))).toBe(true);
   });
 });
 
@@ -218,57 +243,90 @@ describe("SyncEngine — Step 25 backend erasure on delete", () => {
 });
 
 describe("SyncEngine — scheduling & B5 retry with capped backoff", () => {
-  function captureTimers() {
-    const captured: { fn: () => Promise<void>; delay: number }[] = [];
-    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>, delay: number) => {
-      captured.push({ fn, delay });
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as unknown as typeof setTimeout);
-    return { captured, spy };
-  }
-
   it("schedules the base delay (syncDelayMinutes * 60000)", () => {
-    const { engine } = makeEngine({ syncDelayMs: 180000 });
-    const { captured, spy } = captureTimers();
+    const { engine, scheduler } = makeEngine({ syncDelayMs: 180000 });
     engine.scheduleSync(fakeFile("test.md"));
-    expect(captured[0].delay).toBe(180000);
-    spy.mockRestore();
+    expect(scheduler.delayAt(0)).toBe(180000);
   });
 
   it("retries a failed scheduled sync with a larger delay", async () => {
-    const { engine } = makeEngine({ syncDelayMs: 300000, ingest: async () => { throw new Error("x"); } });
+    const { engine, scheduler } = makeEngine({ syncDelayMs: 300000, ingest: async () => { throw new Error("x"); } });
     // Force a failed outcome via processNote (unreadable would skip; ingest-throw → failed).
-    const { captured, spy } = captureTimers();
     engine.scheduleSync(fakeFile("x.md"));
-    expect(captured[0].delay).toBe(300000);
-    await captured[0].fn();
-    expect(captured.length).toBe(2);
-    expect(captured[1].delay).toBeGreaterThan(captured[0].delay);
-    spy.mockRestore();
+    expect(scheduler.delayAt(0)).toBe(300000);
+    await scheduler.fire(0);
+    expect(scheduler.scheduled.length).toBe(2);
+    expect(scheduler.delayAt(1)).toBeGreaterThan(scheduler.delayAt(0));
   });
 
   it("stops retrying after MAX_RETRY_ATTEMPTS", async () => {
-    const { engine } = makeEngine({ ingest: async () => { throw new Error("x"); } });
-    const { captured, spy } = captureTimers();
+    const { engine, scheduler } = makeEngine({ ingest: async () => { throw new Error("x"); } });
     engine.scheduleSync(fakeFile("x.md"), MAX_RETRY_ATTEMPTS);
-    await captured[0].fn();
-    expect(captured.length).toBe(1);
-    spy.mockRestore();
+    await scheduler.fire(0);
+    expect(scheduler.scheduled.length).toBe(1);
   });
 
   it("does not retry a successful scheduled sync", async () => {
-    const { engine } = makeEngine({ ingest: async () => "ok" });
-    const { captured, spy } = captureTimers();
+    const { engine, scheduler } = makeEngine({ ingest: async () => "ok" });
     engine.scheduleSync(fakeFile("x.md"));
-    await captured[0].fn();
-    expect(captured.length).toBe(1);
-    spy.mockRestore();
+    await scheduler.fire(0);
+    expect(scheduler.scheduled.length).toBe(1);
   });
 
   it("manual (forced) sync failure does not schedule any retry", async () => {
-    const { engine } = makeEngine({ ingest: async () => { throw new Error("boom"); } });
+    const { engine, scheduler } = makeEngine({ ingest: async () => { throw new Error("boom"); } });
     const outcome = await engine.processNote(fakeFile("m.md"), { force: true });
     expect(outcome).toBe("failed");
     expect(engine.pendingTimerCount).toBe(0);
+    expect(scheduler.scheduled.length).toBe(0);
+  });
+});
+
+describe("SyncEngine — PLUG-1 single-flight & unload discipline", () => {
+  it("coalesces a concurrent processNote for the same path into one ingest", async () => {
+    const gate = deferred<string>();
+    const { engine, ingest } = makeEngine({ ingest: () => gate.promise });
+
+    const firstRun = engine.processNote(fakeFile("note.md"), { force: true, silent: true });
+    const secondRun = engine.processNote(fakeFile("note.md"), { force: true, silent: true });
+    gate.resolve("Captured 1 thought");
+
+    const [firstOutcome, secondOutcome] = await Promise.all([firstRun, secondRun]);
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(firstOutcome).toBe<SyncOutcome>("synced");
+    expect(secondOutcome).toBe<SyncOutcome>("synced");
+  });
+
+  it("different paths still sync independently", async () => {
+    const { engine, ingest } = makeEngine();
+    await Promise.all([
+      engine.processNote(fakeFile("a.md"), { force: true, silent: true }),
+      engine.processNote(fakeFile("b.md"), { force: true, silent: true }),
+    ]);
+    expect(ingest).toHaveBeenCalledTimes(2);
+  });
+
+  it("a completed sync clears the in-flight entry so the next run is fresh", async () => {
+    const { engine, ingest } = makeEngine();
+    await engine.processNote(fakeFile("note.md"), { force: true, silent: true });
+    await engine.processNote(fakeFile("note.md"), { force: true, silent: true });
+    expect(ingest).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failing in-flight sync does not reschedule after clearAllTimers()", async () => {
+    const gate = deferred<string>();
+    const { engine, scheduler } = makeEngine({
+      syncDelayMs: 60000,
+      ingest: () => gate.promise.then(() => { throw new Error("network down"); }),
+    });
+
+    engine.scheduleSync(fakeFile("x.md"));
+    const firing = scheduler.fire(0); // processNote now awaiting the gated ingest
+    engine.clearAllTimers(); // unload while the sync is in flight
+    gate.resolve("ignored");
+    await firing;
+
+    // Only the original debounce timer exists — no retry was scheduled post-unload.
+    expect(scheduler.scheduled.length).toBe(1);
   });
 });

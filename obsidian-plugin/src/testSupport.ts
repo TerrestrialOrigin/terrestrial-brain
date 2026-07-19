@@ -11,10 +11,57 @@ import {
   ConflictPrompt,
   FileClassifier,
   NoteReader,
+  Scheduler,
   SyncedHashStore,
+  TimerHandle,
   UserNotifier,
   VaultWriter,
 } from "./ports";
+
+/** One timer captured by the FakeScheduler. */
+export interface ScheduledTimer {
+  callback: () => void | Promise<void>;
+  delayMs: number;
+  cancelled: boolean;
+}
+
+/**
+ * Plain fake Scheduler: records every scheduled timer so tests can inspect
+ * delays, fire callbacks deterministically, and assert cancellation — no
+ * global setTimeout spying required.
+ */
+export class FakeScheduler implements Scheduler {
+  readonly scheduled: ScheduledTimer[] = [];
+
+  schedule(callback: () => void, delayMs: number): TimerHandle {
+    const entry: ScheduledTimer = { callback, delayMs, cancelled: false };
+    this.scheduled.push(entry);
+    return entry;
+  }
+
+  cancel(handle: TimerHandle): void {
+    const entry = this.scheduled.find((candidate) => candidate === handle);
+    if (entry) entry.cancelled = true;
+  }
+
+  /** Run the callback of the index-th scheduled timer (throws if absent). */
+  async fire(index: number): Promise<void> {
+    const entry = this.scheduled[index];
+    if (!entry) throw new Error(`FakeScheduler: no timer at index ${index}`);
+    await entry.callback();
+  }
+
+  /** Delay of the index-th scheduled timer (throws if absent). */
+  delayAt(index: number): number {
+    const entry = this.scheduled[index];
+    if (!entry) throw new Error(`FakeScheduler: no timer at index ${index}`);
+    return entry.delayMs;
+  }
+
+  get activeCount(): number {
+    return this.scheduled.filter((entry) => !entry.cancelled).length;
+  }
+}
 
 /** A minimal file descriptor good enough for the engine's `.path/.basename/.extension`. */
 export function fakeFile(path: string, basename?: string): TFile {
