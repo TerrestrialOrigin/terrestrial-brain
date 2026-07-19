@@ -7,6 +7,51 @@
 
 ---
 
+# Progress Checklist
+
+## Phase A — High-severity correctness & data integrity
+- [x] 1. Marker word boundaries (`bug/MarkerWordBoundaries`) — EXTR-1
+- [x] 2. Pipeline seed errors (`bug/PipelineSeedErrors`) — EXTR-2, EXTR-6
+- [x] 3. Reconciliation plan validation (`bug/ReconciliationPlanValidation`) — TOOL-1
+- [x] 4. Fake provider fidelity (`bug/FakeProviderFidelity`) — CORE-1, CORE-8, CORE-12
+- [x] 5. Dedup gate integrity (`bug/DedupGateIntegrity`) — CORE-2, TOOL-7
+- [x] 6. archive_project cascade (`bug/ArchiveProjectCascade`) — TOOL-2
+- [x] 7. OpenRouter timeout & validation (`bug/OpenRouterTimeoutValidation`) — CORE-3, CORE-4
+- [x] 8. Lifecycle test depth (`feature/LifecycleTestDepth`) — TEST-1..6
+
+## Phase B — Security, GDPR & infrastructure
+- [x] 9. DB policy & function hardening (`bug/DbPolicyAndFunctionHardening`) — SQL-1, SQL-4, SQL-8
+- [x] 10. pgTAP denial suite + wiring (`feature/PgTapDenialSuite`) — SQL-5, SQL-6, TEST-8
+- [x] 11. Dedup indexes & hashes (`bug/DedupIndexesAndHashes`) — SQL-2, EXTR-5, EXTR-7
+- [x] 12. Bounded queries (`feature/BoundedQueries`) — SQL-3, REPO-1, TOOL-10
+- [x] 13. Prod script secrets & cron verification (`bug/ProdScriptsSecrets`) — SCRIPT-1, SQL-7
+- [x] 14. Dev stack hygiene (`feature/DevStackHygiene`) — SCRIPT-2..6
+- [x] Archived-rows retention & erasure — SQL-9 (`feature/ArchiveRetentionAndPurge`): 365-day retention cron + count/purge RPCs + confirm-gated `purge_archived` MCP tool + `scripts/purge-archived.sh`
+
+## Phase C — Error honesty & concurrency (server)
+- [x] 15. Rollback & idempotency (`bug/RollbackAndIdempotency`) — TOOL-3, REPO-5
+- [x] 16. Error surfacing sweep (`bug/ErrorSurfacingSweep`) — TOOL-4, TOOL-5, TOOL-12, TOOL-13, REPO-7
+- [ ] 17. update_thought concurrency (`bug/UpdateThoughtConcurrency`) — TOOL-6
+- [ ] 18. HTTP route validation (`feature/HttpRouteValidation`) — CORE-5, CORE-6, CORE-14, CORE-17, TOOL-15
+- [ ] 19. Quota metering accuracy (`bug/QuotaMeteringAccuracy`) — CORE-9, CORE-10, CORE-13
+- [ ] 20. Extractor enrichment & merge (`bug/ExtractorEnrichmentMerge`) — EXTR-3, EXTR-4, EXTR-8, EXTR-10
+
+## Phase D — Obsidian plugin
+- [ ] 21. Plugin sync concurrency (`bug/PluginSyncConcurrency`) — PLUG-1, PLUG-8, PLUG-13
+- [ ] 22. Plugin boundary validation (`bug/PluginBoundaryValidation`) — PLUG-2, PLUG-3, PLUG-4, PLUG-6, PLUG-12
+- [ ] 23. Plugin safety tooling (`feature/PluginSafetyTooling`) — PLUG-5, PLUG-7
+- [ ] 24. Plugin cleanup (`feature/PluginCleanup`) — PLUG-9, PLUG-10, PLUG-11, PLUG-14, PLUG-15, PLUG-16
+
+## Phase E — Structure, duplication & style
+- [ ] 25. Deps objects (`feature/DepsObjects`) — CORE-7, TOOL-11, TOOL-14, EXTR-9, EXTR-11
+- [ ] 26. Formatter dedup (`feature/FormatterDedup`) — TOOL-8, TOOL-9
+- [ ] 27. Repository shape (`feature/RepositoryShape`) — REPO-2, REPO-3, REPO-4, REPO-6
+- [ ] 28. Extractor structure (`feature/ExtractorStructure`) — EXTR-12, EXTR-13
+- [ ] 29. Core low-severity sweep (`feature/CoreLowSweep`) — CORE-11, CORE-15, CORE-16, TOOL-16
+- [ ] 30. Test suite hygiene (`feature/TestSuiteHygiene`) — TEST-7, TEST-9..17, TEST-19
+
+---
+
 ## Executive Summary
 
 **103 findings: 9 High · 47 Medium · 47 Low.** No Critical. IDs: CORE (edge-function core + ai/), TOOL (MCP tool handlers), REPO (repositories), EXTR (extractors), PLUG (Obsidian plugin), SQL/SCRIPT (database, shell, config), TEST (test suite).
@@ -1226,48 +1271,3 @@ Each area's catalog section above ends with an "explicitly checked and passed" l
 - **`tests/sync-rules/`** — deliberately-red PENDING v1.5 connector suite; out of scope by design.
 - **TEST-18 (eval tier)** — deliberate fail-loud placeholder; act only when Step-7 eval work is scheduled.
 - **Carried over from the 2026-07-04 plan's no-action list** (still accepted): string-brittle MCP text assertions; migration idempotency approach; `documents."references"` reserved-word column.
-
----
-
-# Progress Checklist
-
-## Phase A — High-severity correctness & data integrity
-- [x] 1. Marker word boundaries (`bug/MarkerWordBoundaries`) — EXTR-1
-- [x] 2. Pipeline seed errors (`bug/PipelineSeedErrors`) — EXTR-2, EXTR-6
-- [x] 3. Reconciliation plan validation (`bug/ReconciliationPlanValidation`) — TOOL-1
-- [x] 4. Fake provider fidelity (`bug/FakeProviderFidelity`) — CORE-1, CORE-8, CORE-12
-- [x] 5. Dedup gate integrity (`bug/DedupGateIntegrity`) — CORE-2, TOOL-7
-- [x] 6. archive_project cascade (`bug/ArchiveProjectCascade`) — TOOL-2
-- [x] 7. OpenRouter timeout & validation (`bug/OpenRouterTimeoutValidation`) — CORE-3, CORE-4
-- [x] 8. Lifecycle test depth (`feature/LifecycleTestDepth`) — TEST-1..6
-
-## Phase B — Security, GDPR & infrastructure
-- [x] 9. DB policy & function hardening (`bug/DbPolicyAndFunctionHardening`) — SQL-1, SQL-4, SQL-8
-- [x] 10. pgTAP denial suite + wiring (`feature/PgTapDenialSuite`) — SQL-5, SQL-6, TEST-8
-- [x] 11. Dedup indexes & hashes (`bug/DedupIndexesAndHashes`) — SQL-2, EXTR-5, EXTR-7
-- [x] 12. Bounded queries (`feature/BoundedQueries`) — SQL-3, REPO-1, TOOL-10
-- [x] 13. Prod script secrets & cron verification (`bug/ProdScriptsSecrets`) — SCRIPT-1, SQL-7
-- [x] 14. Dev stack hygiene (`feature/DevStackHygiene`) — SCRIPT-2..6
-- [x] Archived-rows retention & erasure — SQL-9 (`feature/ArchiveRetentionAndPurge`): 365-day retention cron + count/purge RPCs + confirm-gated `purge_archived` MCP tool + `scripts/purge-archived.sh`
-
-## Phase C — Error honesty & concurrency (server)
-- [x] 15. Rollback & idempotency (`bug/RollbackAndIdempotency`) — TOOL-3, REPO-5
-- [ ] 16. Error surfacing sweep (`bug/ErrorSurfacingSweep`) — TOOL-4, TOOL-5, TOOL-12, TOOL-13, REPO-7
-- [ ] 17. update_thought concurrency (`bug/UpdateThoughtConcurrency`) — TOOL-6
-- [ ] 18. HTTP route validation (`feature/HttpRouteValidation`) — CORE-5, CORE-6, CORE-14, CORE-17, TOOL-15
-- [ ] 19. Quota metering accuracy (`bug/QuotaMeteringAccuracy`) — CORE-9, CORE-10, CORE-13
-- [ ] 20. Extractor enrichment & merge (`bug/ExtractorEnrichmentMerge`) — EXTR-3, EXTR-4, EXTR-8, EXTR-10
-
-## Phase D — Obsidian plugin
-- [ ] 21. Plugin sync concurrency (`bug/PluginSyncConcurrency`) — PLUG-1, PLUG-8, PLUG-13
-- [ ] 22. Plugin boundary validation (`bug/PluginBoundaryValidation`) — PLUG-2, PLUG-3, PLUG-4, PLUG-6, PLUG-12
-- [ ] 23. Plugin safety tooling (`feature/PluginSafetyTooling`) — PLUG-5, PLUG-7
-- [ ] 24. Plugin cleanup (`feature/PluginCleanup`) — PLUG-9, PLUG-10, PLUG-11, PLUG-14, PLUG-15, PLUG-16
-
-## Phase E — Structure, duplication & style
-- [ ] 25. Deps objects (`feature/DepsObjects`) — CORE-7, TOOL-11, TOOL-14, EXTR-9, EXTR-11
-- [ ] 26. Formatter dedup (`feature/FormatterDedup`) — TOOL-8, TOOL-9
-- [ ] 27. Repository shape (`feature/RepositoryShape`) — REPO-2, REPO-3, REPO-4, REPO-6
-- [ ] 28. Extractor structure (`feature/ExtractorStructure`) — EXTR-12, EXTR-13
-- [ ] 29. Core low-severity sweep (`feature/CoreLowSweep`) — CORE-11, CORE-15, CORE-16, TOOL-16
-- [ ] 30. Test suite hygiene (`feature/TestSuiteHygiene`) — TEST-7, TEST-9..17, TEST-19

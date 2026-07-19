@@ -270,6 +270,107 @@ export async function runExtractionPipeline(
 }
 
 // ---------------------------------------------------------------------------
+// Shared tool-facing wrapper
+// ---------------------------------------------------------------------------
+
+/** The repository/provider seams the extraction pipeline runs against. */
+export interface ToolExtractionDeps {
+  supabase: SupabaseClient;
+  aiProvider: AiProvider;
+  taskRepository: TaskRepository;
+  projectRepository: ProjectRepository;
+  personRepository: PersonRepository;
+}
+
+/**
+ * Outcome of `runExtractionForTool`. `aborted` mirrors `PipelineFailure` (a
+ * seed read failed — the caller must refuse the operation, EXTR-2). `completed`
+ * always carries a reference map plus a caller-visible `warning` suffix: empty
+ * on clean success, the partial-failure text when extractor writes failed
+ * (EXTR-6), or the extraction-failed text when the pipeline threw (TOOL-12).
+ */
+export type ToolExtractionRun =
+  | { status: "aborted"; reason: string }
+  | {
+    status: "completed";
+    references: Record<string, string[]>;
+    warning: string;
+  };
+
+/**
+ * Caller-visible warning appended to a tool confirmation when the extraction
+ * pipeline threw (as opposed to reporting per-write errors): the operation
+ * succeeded but reference extraction did not run to completion.
+ */
+export const EXTRACTION_THREW_WARNING =
+  " (warning: reference extraction failed — references not recorded)";
+
+/**
+ * Runs the extraction pipeline on behalf of a tool handler, folding the three
+ * possible outcomes (seed-read abort / completed with per-write errors / thrown
+ * pipeline) into one discriminated result so the four ingest-shaped handlers
+ * share a single copy of the try/abort/warn logic instead of four drifting
+ * ones (TOOL-12, Rule of Three).
+ *
+ * `parse` runs inside the try so a parser throw degrades the same way a
+ * pipeline throw does. `runPipeline` is injectable for unit tests only.
+ */
+export async function runExtractionForTool(options: {
+  parse: () => ParsedNote;
+  deps: ToolExtractionDeps;
+  /** Context label for the console.error line when the pipeline throws. */
+  site: string;
+  /** References to report when the pipeline threw (site-specific fallback). */
+  thrownReferences?: Record<string, string[]>;
+  /** Site-specific wording override for the thrown-pipeline warning. */
+  thrownWarning?: string;
+  extractors?: Extractor[];
+  runPipeline?: typeof runExtractionPipeline;
+}): Promise<ToolExtractionRun> {
+  const {
+    parse,
+    deps,
+    site,
+    thrownReferences = {},
+    thrownWarning = EXTRACTION_THREW_WARNING,
+    extractors = createDefaultExtractors(),
+    runPipeline = runExtractionPipeline,
+  } = options;
+  try {
+    const note = parse();
+    const outcome = await runPipeline(
+      note,
+      extractors,
+      deps.supabase,
+      deps.aiProvider,
+      deps.taskRepository,
+      deps.projectRepository,
+      deps.personRepository,
+    );
+    if (!outcome.ok) {
+      return { status: "aborted", reason: outcome.error };
+    }
+    return {
+      status: "completed",
+      references: outcome.references,
+      warning: partialExtractionWarning(outcome.errors),
+    };
+  } catch (pipelineError) {
+    const message = pipelineError instanceof Error
+      ? pipelineError.message
+      : String(pipelineError);
+    console.error(`${site} extraction pipeline error: ${message}`);
+    // The operation proceeds, but the caller-visible warning makes the dropped
+    // references observable instead of reading as full success (TOOL-12).
+    return {
+      status: "completed",
+      references: thrownReferences,
+      warning: thrownWarning,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Default extractor factory
 // ---------------------------------------------------------------------------
 

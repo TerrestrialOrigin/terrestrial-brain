@@ -4,10 +4,64 @@ import { uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
+import { UNAVAILABLE_MARKER } from "./section-format.ts";
 import { PERSON_TYPES } from "../enums.ts";
 import { DEFAULT_LIST_LIMIT, MAX_QUERY_LIMIT } from "../constants.ts";
 import type { PersonRepository } from "../repositories/person-repository.ts";
 import type { TaskRepository } from "../repositories/task-repository.ts";
+
+/**
+ * get_person handler, extracted so it can run against fake repositories —
+ * no database, no network (TOOL-4).
+ */
+export async function handleGetPerson(
+  personRepository: PersonRepository,
+  taskRepository: TaskRepository,
+  id: string,
+) {
+  const { data: person, error } = await personRepository.findById(id);
+
+  // Unified not-found convention: a missing row on a read is data, not a
+  // tool failure. `findById` uses `.single()`, so a miss surfaces as the
+  // PGRST116 "no rows" code (mirrors get_thought_by_id / get_document).
+  if (error && error.code !== "PGRST116") {
+    return errorResult(`Error: ${error.message}`);
+  }
+  if (!person) {
+    return textResult(`No person found with ID "${id}".`, {
+      recordsReturned: 0,
+    });
+  }
+
+  // A failed count renders an explicit unavailable marker — never 0 (TOOL-4).
+  const { data: taskCount, error: taskCountError } = await taskRepository
+    .countOpenByAssignee(id);
+  if (taskCountError) {
+    console.error(
+      `get_person countOpenByAssignee error: ${taskCountError.message}`,
+    );
+  }
+
+  const lines = [
+    `Name: ${person.name}`,
+    `ID: ${person.id}`,
+    `Type: ${person.type || "—"}`,
+    `Email: ${person.email || "—"}`,
+    `Description: ${person.description || "—"}`,
+    `Open tasks assigned: ${
+      taskCountError ? UNAVAILABLE_MARKER : taskCount ?? 0
+    }`,
+    `Created: ${new Date(person.created_at).toLocaleDateString()}`,
+    `Updated: ${new Date(person.updated_at).toLocaleDateString()}`,
+  ];
+  if (person.archived_at) {
+    lines.push(
+      `Archived: ${new Date(person.archived_at).toLocaleDateString()}`,
+    );
+  }
+
+  return textResult(lines.join("\n"), { recordsReturned: 1 });
+}
 
 export function register(
   server: McpServer,
@@ -139,41 +193,11 @@ export function register(
         id: uuidField().describe("Person UUID"),
       },
     },
-    withMcpLogging("get_person", async ({ id }) => {
-      const { data: person, error } = await personRepository.findById(id);
-
-      // Unified not-found convention: a missing row on a read is data, not a
-      // tool failure. `findById` uses `.single()`, so a miss surfaces as the
-      // PGRST116 "no rows" code (mirrors get_thought_by_id / get_document).
-      if (error && error.code !== "PGRST116") {
-        return errorResult(`Error: ${error.message}`);
-      }
-      if (!person) {
-        return textResult(`No person found with ID "${id}".`, {
-          recordsReturned: 0,
-        });
-      }
-
-      const { data: taskCount } = await taskRepository.countOpenByAssignee(id);
-
-      const lines = [
-        `Name: ${person.name}`,
-        `ID: ${person.id}`,
-        `Type: ${person.type || "—"}`,
-        `Email: ${person.email || "—"}`,
-        `Description: ${person.description || "—"}`,
-        `Open tasks assigned: ${taskCount || 0}`,
-        `Created: ${new Date(person.created_at).toLocaleDateString()}`,
-        `Updated: ${new Date(person.updated_at).toLocaleDateString()}`,
-      ];
-      if (person.archived_at) {
-        lines.push(
-          `Archived: ${new Date(person.archived_at).toLocaleDateString()}`,
-        );
-      }
-
-      return textResult(lines.join("\n"), { recordsReturned: 1 });
-    }, logger),
+    withMcpLogging(
+      "get_person",
+      ({ id }) => handleGetPerson(personRepository, taskRepository, id),
+      logger,
+    ),
   );
 
   server.registerTool(
