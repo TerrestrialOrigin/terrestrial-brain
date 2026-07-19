@@ -72,10 +72,11 @@ export type ThoughtDetailRow = Pick<
   "id" | "content" | "metadata" | "reference_id" | "created_at" | "updated_at"
 >;
 
-/** Row read by `update_thought` before applying an update. */
+/** Row read by `update_thought` before applying an update. `updated_at` is the
+ * optimistic-concurrency etag passed back via `update`'s guard (TOOL-6). */
 export type ThoughtForUpdateRow = Pick<
   Row<"thoughts">,
-  "id" | "content" | "reliability" | "author" | "metadata"
+  "id" | "content" | "reliability" | "author" | "metadata" | "updated_at"
 >;
 
 /** Row read by `archive_thought` (active thoughts only). */
@@ -188,11 +189,17 @@ export interface ThoughtRepository {
   /** Insert one thought. */
   insert(thought: NewThought): Promise<RepoResult<void>>;
 
-  /** Apply a partial update to a thought. */
+  /**
+   * Apply a partial update to a thought. When `options.expectedUpdatedAt` is
+   * provided, the update additionally filters on `updated_at` (optimistic
+   * concurrency, TOOL-6): a stale snapshot matches zero rows. `data` carries the
+   * matched row's id, or `null` when nothing matched (with `error` null).
+   */
   update(
     id: string,
     payload: Record<string, unknown>,
-  ): Promise<RepoResult<void>>;
+    options?: { expectedUpdatedAt?: string },
+  ): Promise<RepoResult<{ id: string } | null>>;
 
   /** Soft-archive a thought (sets `archived_at`; never deletes). */
   archive(id: string): Promise<RepoResult<void>>;

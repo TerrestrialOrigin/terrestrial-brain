@@ -128,7 +128,7 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
   async findForUpdate(id: string): Promise<RepoResult<ThoughtForUpdateRow>> {
     const { data, error } = await this.supabase
       .from("thoughts")
-      .select("id, content, reliability, author, metadata")
+      .select("id, content, reliability, author, metadata, updated_at")
       .eq("id", id)
       .single();
     return { data, error: toRepoError(error) };
@@ -236,12 +236,21 @@ export class SupabaseThoughtRepository implements ThoughtRepository {
   async update(
     id: string,
     payload: Record<string, unknown>,
-  ): Promise<RepoResult<void>> {
-    const { error } = await this.supabase
+    options?: { expectedUpdatedAt?: string },
+  ): Promise<RepoResult<{ id: string } | null>> {
+    // Optimistic concurrency (TOOL-6): with a guard, a stale snapshot filters
+    // to zero rows; the trigger-maintained updated_at is the etag. `data: null`
+    // with a null error is the caller's "concurrent edit — retry" signal.
+    let query = this.supabase
       .from("thoughts")
       .update(payload)
       .eq("id", id);
-    return { data: null, error: toRepoError(error) };
+    if (options?.expectedUpdatedAt !== undefined) {
+      query = query.eq("updated_at", options.expectedUpdatedAt);
+    }
+    const { data, error } = await query.select("id");
+    if (error) return { data: null, error: toRepoError(error) };
+    return { data: data?.[0] ?? null, error: null };
   }
 
   async archive(id: string): Promise<RepoResult<void>> {
