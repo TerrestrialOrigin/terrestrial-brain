@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { uuidField } from "../zod-schemas.ts";
+import { dueByField, uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { validateFilePath } from "../validators.ts";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
@@ -11,17 +11,40 @@ import type { AiOutputRepository } from "../repositories/ai-output-repository.ts
 import type { TaskRepository } from "../repositories/task-repository.ts";
 
 // ---------------------------------------------------------------------------
-// Task input type for create_tasks_with_output
+// Task input schema + type for create_tasks_with_output
 // ---------------------------------------------------------------------------
 
-interface TaskInput {
-  content: string;
-  project_id?: string;
-  parent_index?: number;
-  status?: string;
-  due_by?: string;
-  assigned_to?: string;
-}
+// Boundary-tight item schema (TOOL-15): parent_index is a non-negative integer
+// at the door (cross-field ordering stays in validateParentIndices), due_by is
+// a real ISO date/datetime. `TaskInput` derives from it (z.infer) so no cast
+// bridges the schema and the type.
+const TaskInputSchema = z.object({
+  content: z.string().describe("Task description"),
+  project_id: uuidField()
+    .optional()
+    .describe("UUID of the project this task belongs to"),
+  parent_index: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      "Index (0-based) of the parent task in this array for subtask hierarchy",
+    ),
+  status: z
+    .enum(TASK_STATUSES)
+    .optional()
+    .default("open")
+    .describe("Status: open, in_progress, done, deferred"),
+  due_by: dueByField()
+    .optional()
+    .describe("Due date as ISO 8601 datetime or date"),
+  assigned_to: uuidField()
+    .optional()
+    .describe("UUID of the person this task is assigned to"),
+});
+
+type TaskInput = z.infer<typeof TaskInputSchema>;
 
 // ---------------------------------------------------------------------------
 // Markdown generation helpers
@@ -282,24 +305,34 @@ export async function handleFetchAIOutputContent(
 export async function handleMarkAIOutputPickedUp(
   aiOutputRepository: AiOutputRepository,
   ids: string[],
-): Promise<{ error: string } | { message: string }> {
-  const { error } = await aiOutputRepository.markPickedUp(ids);
-  if (error) return { error: error.message };
+): Promise<{ error: string } | { message: string; updatedCount: number }> {
+  const { data: updatedCount, error } = await aiOutputRepository.markPickedUp(
+    ids,
+  );
+  if (error || updatedCount === null) {
+    return { error: error?.message ?? "unknown" };
+  }
+  // Report what ACTUALLY changed — a retried pickup legitimately updates 0
+  // rows (claim-style idempotency, Step 15) and must say so (CORE-5).
   return {
-    message: `Marked ${ids.length} output${
-      ids.length > 1 ? "s" : ""
+    message: `Marked ${updatedCount} output${
+      updatedCount === 1 ? "" : "s"
     } as picked up.`,
+    updatedCount,
   };
 }
 
 export async function handleRejectAIOutput(
   aiOutputRepository: AiOutputRepository,
   ids: string[],
-): Promise<{ error: string } | { message: string }> {
-  const { error } = await aiOutputRepository.reject(ids);
-  if (error) return { error: error.message };
+): Promise<{ error: string } | { message: string; updatedCount: number }> {
+  const { data: updatedCount, error } = await aiOutputRepository.reject(ids);
+  if (error || updatedCount === null) {
+    return { error: error?.message ?? "unknown" };
+  }
   return {
-    message: `Rejected ${ids.length} output${ids.length > 1 ? "s" : ""}.`,
+    message: `Rejected ${updatedCount} output${updatedCount === 1 ? "" : "s"}.`,
+    updatedCount,
   };
 }
 
@@ -388,32 +421,7 @@ export function register(
           "Target vault-relative path including filename, e.g. 'projects/Test Proj/sprint-tasks.md'",
         ),
         tasks: z
-          .array(
-            z.object({
-              content: z.string().describe("Task description"),
-              project_id: uuidField()
-                .optional()
-                .describe("UUID of the project this task belongs to"),
-              parent_index: z
-                .number()
-                .optional()
-                .describe(
-                  "Index (0-based) of the parent task in this array for subtask hierarchy",
-                ),
-              status: z
-                .enum(TASK_STATUSES)
-                .optional()
-                .default("open")
-                .describe("Status: open, in_progress, done, deferred"),
-              due_by: z
-                .string()
-                .optional()
-                .describe("Due date as ISO 8601 string"),
-              assigned_to: uuidField()
-                .optional()
-                .describe("UUID of the person this task is assigned to"),
-            }),
-          )
+          .array(TaskInputSchema)
           .describe("Array of tasks to create (at least one required)"),
         source_context: z
           .string()
@@ -433,7 +441,9 @@ export function register(
           return errorResult("At least one task is required.");
         }
 
-        const typedTasks = tasks as TaskInput[];
+        // `tasks` is already TaskInput[] — the SDK parses with TaskInputSchema,
+        // so no cast bridges the boundary (TOOL-15).
+        const typedTasks: TaskInput[] = tasks;
 
         // Validate parent_index references up front — reject forward/self/
         // out-of-range/non-integer parents BEFORE inserting anything, so bad

@@ -17,17 +17,17 @@ import { parseNote } from "../../supabase/functions/terrestrial-brain-mcp/parser
 import { FakeAiProvider } from "../../supabase/functions/terrestrial-brain-mcp/ai/fake-provider.ts";
 import { SupabaseTaskRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/supabase-task-repository.ts";
 import { makeFakeClient } from "./fake-supabase-client.ts";
+import {
+  fakePersonRepository,
+  fakeProjectRepository,
+  fakeTaskRepository,
+  fakeThoughtRepository,
+} from "./fakes/repository-fakes.ts";
 import type {
   ProjectFullRow,
   ProjectListRow,
-  ProjectRepository,
 } from "../../supabase/functions/terrestrial-brain-mcp/repositories/project-repository.ts";
-import type {
-  PersonFullRow,
-  PersonRepository,
-} from "../../supabase/functions/terrestrial-brain-mcp/repositories/person-repository.ts";
-import type { TaskRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/task-repository.ts";
-import type { ThoughtRepository } from "../../supabase/functions/terrestrial-brain-mcp/repositories/thought-repository.ts";
+import type { PersonFullRow } from "../../supabase/functions/terrestrial-brain-mcp/repositories/person-repository.ts";
 import type { RepoError } from "../../supabase/functions/terrestrial-brain-mcp/repositories/repo-result.ts";
 
 // Step 16 (error-surfacing-sweep): a failed sub-lookup must render as visibly
@@ -36,7 +36,6 @@ import type { RepoError } from "../../supabase/functions/terrestrial-brain-mcp/r
 // All fakes sit on the repository/provider seams only; the handlers under test
 // run for real (mock-boundary rule).
 
-const notImpl = () => Promise.reject(new Error("not implemented"));
 const DB_ERROR: RepoError = { message: "db unavailable" };
 const UNAVAILABLE_MARKER = "? (lookup failed)";
 
@@ -78,93 +77,6 @@ function resultText(
   result: { content: { type: "text"; text: string }[] },
 ): string {
   return result.content.map((part) => part.text).join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Fakes (seam-level only)
-// ---------------------------------------------------------------------------
-
-function fakeProjectRepository(
-  overrides: Partial<ProjectRepository>,
-): ProjectRepository {
-  return {
-    insert: notImpl,
-    list: notImpl,
-    findById: notImpl,
-    findName: notImpl,
-    findByName: notImpl,
-    listChildrenBasic: notImpl,
-    listChildParentIds: notImpl,
-    listActiveChildIds: notImpl,
-    update: notImpl,
-    archiveManyActive: notImpl,
-    listActive: notImpl,
-    ...overrides,
-  };
-}
-
-function fakePersonRepository(
-  overrides: Partial<PersonRepository>,
-): PersonRepository {
-  return {
-    insert: notImpl,
-    list: notImpl,
-    findById: notImpl,
-    findName: notImpl,
-    findByName: notImpl,
-    update: notImpl,
-    archive: notImpl,
-    listActive: notImpl,
-    ...overrides,
-  };
-}
-
-function fakeTaskRepository(
-  overrides: Partial<TaskRepository>,
-): TaskRepository {
-  return {
-    insert: notImpl,
-    list: notImpl,
-    listIncompleteUnarchived: notImpl,
-    findByIds: notImpl,
-    update: notImpl,
-    archive: notImpl,
-    archiveIfActive: notImpl,
-    countOpenByProject: notImpl,
-    countOpenByAssignee: notImpl,
-    findOpenIdsByProjects: notImpl,
-    archiveMany: notImpl,
-    deleteByIds: notImpl,
-    findByReference: notImpl,
-    ...overrides,
-  };
-}
-
-function fakeThoughtRepository(
-  overrides: Partial<ThoughtRepository>,
-): ThoughtRepository {
-  return {
-    matchByEmbedding: notImpl,
-    list: notImpl,
-    stats: notImpl,
-    findById: notImpl,
-    findForUpdate: notImpl,
-    findActiveById: notImpl,
-    findByReference: notImpl,
-    findByContentHash: notImpl,
-    findStale: notImpl,
-    findArchivalCandidates: notImpl,
-    setSupersededBy: notImpl,
-    touchRetrieved: notImpl,
-    insert: notImpl,
-    update: notImpl,
-    archive: notImpl,
-    archiveByDocumentReference: notImpl,
-    incrementUsefulness: notImpl,
-    incrementUsefulnessWeighted: notImpl,
-    deleteByNoteSnapshot: notImpl,
-    ...overrides,
-  };
 }
 
 function projectRow(overrides: Partial<ProjectFullRow> = {}): ProjectFullRow {

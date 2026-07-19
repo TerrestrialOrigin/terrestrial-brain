@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { uuidField } from "../zod-schemas.ts";
+import { emailField, uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, textResult } from "../mcp-response.ts";
@@ -83,7 +83,7 @@ export function register(
         type: z.enum(PERSON_TYPES).optional().describe(
           "Person type: 'human' or 'ai'",
         ),
-        email: z.string().optional().describe("Email address"),
+        email: emailField().optional().describe("Email address"),
         description: z.string().optional().describe(
           "Notes about this person — role, relationship, context",
         ),
@@ -213,7 +213,7 @@ export function register(
         type: z.enum(PERSON_TYPES).optional().describe(
           "New type: 'human' or 'ai'",
         ),
-        email: z.string().nullable().optional().describe(
+        email: emailField().nullable().optional().describe(
           "New email, or null to clear",
         ),
         description: z.string().optional().describe(

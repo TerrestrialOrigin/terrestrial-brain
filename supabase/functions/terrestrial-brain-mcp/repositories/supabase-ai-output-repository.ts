@@ -71,26 +71,32 @@ export class SupabaseAiOutputRepository implements AiOutputRepository {
     return { data, error: toRepoError(error) };
   }
 
-  async markPickedUp(ids: string[]): Promise<RepoResult<void>> {
+  async markPickedUp(ids: string[]): Promise<RepoResult<number>> {
     // Claim-style: only stamp rows not already picked up, so an at-least-once
     // client retry is a no-op and never advances `picked_up_at` (which would
     // re-surface an already-reported delivery in `get_recent_activity`).
-    const { error } = await this.supabase
+    // `.select("id")` reports the rows ACTUALLY updated so callers can count
+    // real outcomes, never the request's array length (CORE-5).
+    const { data, error } = await this.supabase
       .from("ai_output")
       .update({ picked_up: true, picked_up_at: new Date().toISOString() })
       .in("id", ids)
-      .eq("picked_up", false);
-    return { data: null, error: toRepoError(error) };
+      .eq("picked_up", false)
+      .select("id");
+    if (error) return { data: null, error: toRepoError(error) };
+    return { data: data?.length ?? 0, error: null };
   }
 
-  async reject(ids: string[]): Promise<RepoResult<void>> {
+  async reject(ids: string[]): Promise<RepoResult<number>> {
     // Claim-style: only stamp rows not already rejected, so a retried rejection
-    // does not re-stamp `rejected_at`.
-    const { error } = await this.supabase
+    // does not re-stamp `rejected_at`. Counts actual updates (CORE-5).
+    const { data, error } = await this.supabase
       .from("ai_output")
       .update({ rejected: true, rejected_at: new Date().toISOString() })
       .in("id", ids)
-      .eq("rejected", false);
-    return { data: null, error: toRepoError(error) };
+      .eq("rejected", false)
+      .select("id");
+    if (error) return { data: null, error: toRepoError(error) };
+    return { data: data?.length ?? 0, error: null };
   }
 }

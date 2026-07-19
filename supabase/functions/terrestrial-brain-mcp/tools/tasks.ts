@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { uuidField } from "../zod-schemas.ts";
+import { dueByField, uuidField } from "../zod-schemas.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { FunctionCallLogger, withMcpLogging } from "../logger.ts";
 import { errorResult, McpToolResult, textResult } from "../mcp-response.ts";
@@ -291,7 +291,9 @@ export function register(
         parent_id: uuidField().optional().describe(
           "UUID of parent task for sub-tasks",
         ),
-        due_by: z.string().optional().describe("Due date as ISO 8601 string"),
+        due_by: dueByField().optional().describe(
+          "Due date as ISO 8601 datetime or date",
+        ),
         status: z.enum(TASK_STATUSES).optional().default("open").describe(
           "Status: open, in_progress, done, deferred",
         ),
@@ -419,8 +421,8 @@ export function register(
         status: z.enum(TASK_STATUSES).optional().describe(
           "New status: open, in_progress, done, deferred",
         ),
-        due_by: z.string().nullable().optional().describe(
-          "New due date (ISO 8601), or null to clear",
+        due_by: dueByField().nullable().optional().describe(
+          "New due date (ISO 8601 datetime or date), or null to clear",
         ),
         project_id: uuidField().nullable().optional().describe(
           "New project UUID, or null to unlink",

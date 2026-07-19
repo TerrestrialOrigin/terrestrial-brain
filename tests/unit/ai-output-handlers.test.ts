@@ -71,7 +71,7 @@ Deno.test("handleMarkAIOutputPickedUp: pluralized success message", async () => 
   const repo = fakeRepo({
     markPickedUp: (ids: string[]) => {
       marked.push(...ids);
-      return Promise.resolve({ data: null, error: null });
+      return Promise.resolve({ data: ids.length, error: null });
     },
   });
 
@@ -81,6 +81,22 @@ Deno.test("handleMarkAIOutputPickedUp: pluralized success message", async () => 
   assertEquals("message" in result, true);
   if ("message" in result) {
     assertEquals(result.message, "Marked 2 outputs as picked up.");
+    assertEquals(result.updatedCount, 2);
+  }
+});
+
+Deno.test("handleMarkAIOutputPickedUp: message counts rows actually updated, not the request", async () => {
+  // Claim-style retry: repository reports 0 rows updated for a 2-id request.
+  const repo = fakeRepo({
+    markPickedUp: () => Promise.resolve({ data: 0, error: null }),
+  });
+
+  const result = await handleMarkAIOutputPickedUp(repo, ["a", "b"]);
+
+  assertEquals("message" in result, true);
+  if ("message" in result) {
+    assertEquals(result.message, "Marked 0 outputs as picked up.");
+    assertEquals(result.updatedCount, 0);
   }
 });
 

@@ -39,8 +39,9 @@ export interface AiOutputRepository {
   ): Promise<RepoResult<{ id: string; content: string }[]>>;
 
   /** Mark outputs picked up (sets `picked_up` + `picked_up_at`). */
-  markPickedUp(ids: string[]): Promise<RepoResult<void>>;
+  /** Returns the number of rows actually updated (a retry updates 0). */
+  markPickedUp(ids: string[]): Promise<RepoResult<number>>;
 
-  /** Reject outputs (sets `rejected` + `rejected_at`). */
-  reject(ids: string[]): Promise<RepoResult<void>>;
+  /** Reject outputs (sets `rejected` + `rejected_at`); returns rows updated. */
+  reject(ids: string[]): Promise<RepoResult<number>>;
 }
